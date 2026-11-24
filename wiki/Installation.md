@@ -187,7 +187,7 @@ Installations made before the updater existed have no local `update.sh` and no u
 | `--channel stable\|nightly` | Channel to update from; default the installed one. |
 | `--version vX.Y.Z` | Exactly this release (wins over `--channel`). |
 | `--check` | Print the installed and the available version. Exit code 0: up to date, 10: an update is available, anything else: error. |
-| `-y`, `--yes` | Do not ask. Without a terminal, `--yes` is required. |
+| `-y`, `--yes` | Do not ask. When the script is piped in (`curl … \| sudo bash`) it never asks and updates right away. |
 | `--force` | Reinstall even if that version is installed. |
 | `--from-dir DIR` | Update from an unpacked release directory (offline, tests). |
 | `--status-file FILE` | Write the progress as it goes (the panel uses this). |
@@ -233,7 +233,7 @@ curl -fsSL https://raw.githubusercontent.com/danielgtmn/ownpanel/main/install.sh
 
 This stops and removes both services, the updater (`ownpanel-update.*` units and `/usr/local/lib/ownpanel`) and `/usr/local/bin/ownpaneld` and `/usr/local/bin/caddy`. It keeps `/var/lib/ownpanel` (sites, database, certificates, secret key), `/etc/ownpanel` and the users, so installing again brings everything back.
 
-To delete everything, add `--purge`. It asks for confirmation; without a terminal it needs `--yes`:
+To delete everything, add `--purge`. Run from a terminal it asks for confirmation; piped in (`curl … | sudo bash`) it needs `--yes`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/danielgtmn/ownpanel/main/install.sh | sudo bash -s -- --uninstall --purge --yes

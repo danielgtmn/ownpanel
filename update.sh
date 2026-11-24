@@ -254,9 +254,11 @@ main() {
     report succeeded "" "ownpanel $target is already installed."
     return 0
   fi
-  if [ "$opt_yes" = 0 ]; then
-    (: </dev/tty) 2>/dev/null || die "no terminal to confirm the update; add --yes"
+  if [ "$opt_yes" = 0 ] && interactive; then
     confirm "Update ownpanel $old_version to $target? Sites are offline for a few seconds." y || die "cancelled; nothing was changed"
+  elif [ "$opt_yes" = 0 ]; then
+    # Piped in (curl … | sudo bash): running the command is the confirmation.
+    say "Updating now; sites are offline for a few seconds."
   fi
 
   if [ -z "$opt_from_dir" ]; then
