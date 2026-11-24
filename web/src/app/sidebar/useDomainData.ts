@@ -9,8 +9,8 @@ export type DomainData =
   | { status: 'error'; retry: () => void }
   | { status: 'ready'; sources: DomainSources; families: Family[]; states: PointStates }
 
-export function useDomainData(isAdmin: boolean): DomainData {
-  const resource = useResource(() => loadSources(isAdmin), `domain-sources:${isAdmin}`)
+export function useDomainData(): DomainData {
+  const resource = useResource(loadSources, 'domain-sources')
   const { reload } = resource
   const sources = resource.status === 'ready' ? resource.data : null
   const [states, setStates] = useState<PointStates>({})
@@ -36,13 +36,13 @@ export function useDomainData(isAdmin: boolean): DomainData {
   useEffect(() => {
     if (!sources) return
     let current = true
-    void loadPointStates(sources, isAdmin).then((next) => {
+    void loadPointStates(sources).then((next) => {
       if (current) setStates(next)
     })
     return () => {
       current = false
     }
-  }, [sources, isAdmin])
+  }, [sources])
 
   const families = useMemo(() => (sources ? buildFamilies(sources) : []), [sources])
   if (sources) return { status: 'ready', sources, families, states }

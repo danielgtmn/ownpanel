@@ -1,7 +1,8 @@
 import type { DomainState } from '../api/index.ts'
 import { normalizeHost, registrableDomain } from './suffix.ts'
 
-export type SourceSite = { name: string; domains: string[]; live: boolean }
+// release is the live version's id, when known.
+export type SourceSite = { name: string; domains: string[]; live: boolean; release?: string }
 export type SourceZone = { connectionId: number; connectionName: string; name: string }
 export type SourceRedirect = { id: number; source: string; target: string }
 
@@ -9,12 +10,12 @@ export type DomainSources = {
   sites: SourceSite[]
   zones: SourceZone[]
   redirects: SourceRedirect[]
-  panelDomain: string | null
 }
 
 export type FamilySite = {
   name: string
   live: boolean
+  release?: string
   domains: string[]
   otherFamilies: string[]
 }
@@ -24,7 +25,6 @@ export type Family = {
   sites: FamilySite[]
   zones: SourceZone[]
   redirects: SourceRedirect[]
-  panelDomain: string | null
   servedDomains: string[]
 }
 
@@ -37,7 +37,7 @@ function familyOf(families: Map<string, Family>, host: string): Family | null {
   if (!domain) return null
   let family = families.get(domain)
   if (!family) {
-    family = { domain, sites: [], zones: [], redirects: [], panelDomain: null, servedDomains: [] }
+    family = { domain, sites: [], zones: [], redirects: [], servedDomains: [] }
     families.set(domain, family)
   }
   return family
@@ -61,6 +61,7 @@ export function buildFamilies(sources: DomainSources): Family[] {
       family.sites.push({
         name: site.name,
         live: site.live,
+        release: site.release,
         domains: own,
         otherFamilies: domains.filter((other) => other !== domain),
       })
@@ -77,15 +78,6 @@ export function buildFamilies(sources: DomainSources): Family[] {
     if (!family) continue
     family.redirects.push({ ...redirect, source })
     addServed(family, source)
-  }
-
-  if (sources.panelDomain) {
-    const host = normalizeHost(sources.panelDomain)
-    const family = familyOf(families, host)
-    if (family) {
-      family.panelDomain = host
-      addServed(family, host)
-    }
   }
 
   return [...families.values()]
@@ -129,7 +121,6 @@ export function familySummary(family: Family): string {
   const parts: string[] = []
   if (family.sites.length > 0) parts.push(plural(family.sites.length, 'site', 'sites'))
   if (family.redirects.length > 0) parts.push(plural(family.redirects.length, 'redirect', 'redirects'))
-  if (family.panelDomain) parts.push('Panel address')
   parts.push(family.zones.length > 0 ? 'DNS connected' : 'DNS not connected')
   return parts.join(' · ')
 }

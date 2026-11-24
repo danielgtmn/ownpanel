@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { buildFamilies, familyStatus, familySummary, initialsOf, type DomainSources } from './families.ts'
 import { registrableDomain } from './suffix.ts'
 
-const empty: DomainSources = { sites: [], zones: [], redirects: [], panelDomain: null }
+const empty: DomainSources = { sites: [], zones: [], redirects: [] }
 
 describe('registrableDomain', () => {
   it('groups subdomains and www under the registrable domain', () => {
@@ -32,12 +32,11 @@ describe('registrableDomain', () => {
 })
 
 describe('buildFamilies', () => {
-  it('collects sites, zones, redirects and the panel domain per registrable domain', () => {
+  it('collects sites, zones and redirects per registrable domain', () => {
     const families = buildFamilies({
       sites: [{ name: 'blog', domains: ['blog.example.com', 'www.example.com'], live: true }],
       zones: [{ connectionId: 1, connectionName: 'Hetzner', name: 'example.com' }],
       redirects: [{ id: 7, source: 'Go.Example.com', target: 'https://example.org' }],
-      panelDomain: 'panel.example.com',
     })
     expect(families).toHaveLength(1)
     const [family] = families
@@ -47,13 +46,8 @@ describe('buildFamilies', () => {
     ])
     expect(family.zones).toHaveLength(1)
     expect(family.redirects).toEqual([{ id: 7, source: 'go.example.com', target: 'https://example.org' }])
-    expect(family.panelDomain).toBe('panel.example.com')
-    expect(family.servedDomains).toEqual([
-      'blog.example.com',
-      'go.example.com',
-      'panel.example.com',
-      'www.example.com',
-    ])
+    expect(family).not.toHaveProperty('panelDomain')
+    expect(family.servedDomains).toEqual(['blog.example.com', 'go.example.com', 'www.example.com'])
   })
 
   it('lists a site that spans several families in each, marked with the others', () => {
@@ -77,10 +71,10 @@ describe('buildFamilies', () => {
     expect(family.servedDomains).toEqual([])
   })
 
-  it('gives the panel domain its own family when nothing else uses it', () => {
-    const families = buildFamilies({ ...empty, panelDomain: 'panel.hosting.io' })
-    expect(families.map((family) => family.domain)).toEqual(['hosting.io'])
-    expect(families[0].panelDomain).toBe('panel.hosting.io')
+  it('never makes a family of the panel address', () => {
+    // Older callers may still hand in the panel's address; it must not create or change a family.
+    const sources = { ...empty, panelDomain: 'panel.hosting.io' } as DomainSources
+    expect(buildFamilies(sources)).toEqual([])
   })
 
   it('returns no families without data', () => {

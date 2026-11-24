@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { modules } from '../../modules/registry.ts'
-import { buildFamilies, type DomainSources, type Family } from '../../shared/families/index.ts'
+import { buildFamilies, familySummary, type DomainSources, type Family } from '../../shared/families/index.ts'
 import { parseRoute } from '../../shared/routing/index.ts'
 import type { User } from '../../shared/session/index.ts'
 import { visibleModules } from '../modules.ts'
-import { loadSources } from './data.ts'
+import { loadPointStates, loadSources } from './data.ts'
 import { ALL, currentRow, familyRows, overviewRows, railEntries, selectTile } from './selection.ts'
 
 const admin: User = { id: 1, name: 'anna', role: 'admin', created_at: '2026-01-01T00:00:00Z' }
@@ -18,7 +18,6 @@ const sources: DomainSources = {
   ],
   zones: [{ connectionId: 3, connectionName: 'Hetzner', name: 'example.com' }],
   redirects: [{ id: 1, source: 'go.shop.de', target: 'https://shop.de' }],
-  panelDomain: null,
 }
 const families = buildFamilies(sources)
 const available = visibleModules(modules, admin)
@@ -129,6 +128,7 @@ describe('loadSources', () => {
           { id: 2, source_domain: 'blog.example.com', source_path: '/old', target: '/new' },
         ],
         '/api/settings': { panel_domain: 'panel.example.com' },
+        '/api/settings/checks': { dns: { state: 'points_here' } },
       }
       return new Response(JSON.stringify(bodies[url] ?? null), { status: url in bodies ? 200 : 404 })
     })
@@ -136,23 +136,28 @@ describe('loadSources', () => {
     return fetchMock
   }
 
-  it('reads sites, DNS domains, domain redirects and, for administrators, the panel domain', async () => {
+  it('reads sites, DNS domains and domain redirects', async () => {
     const fetchMock = stubFetch()
-    const result = await loadSources(true)
+    const result = await loadSources()
     expect(result).toEqual({
-      sites: [{ name: 'blog', domains: ['blog.example.com'], live: true }],
+      sites: [{ name: 'blog', domains: ['blog.example.com'], live: true, release: '20260101-000000' }],
       zones: [{ connectionId: 1, connectionName: 'H', name: 'example.com' }],
       redirects: [{ id: 1, source: 'go.example.com', target: 'https://x.org' }],
-      panelDomain: 'panel.example.com',
     })
-    expect(fetchMock.mock.calls.map(([url]) => url)).toContain('/api/settings')
+    expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain('/api/settings')
   })
 
-  it('does not ask for settings as a member', async () => {
+  it('leaves the panel address out: no tile, no lookups, no effect on the status', async () => {
     const fetchMock = stubFetch()
-    const result = await loadSources(false)
-    expect(result.panelDomain).toBeNull()
-    expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain('/api/settings')
+    const sources = await loadSources()
+    const states = await loadPointStates(sources)
+    const urls = fetchMock.mock.calls.map(([url]) => url)
+    expect(urls.filter((url) => url.startsWith('/api/settings'))).toEqual([])
+    const families = buildFamilies(sources)
+    expect(families.map((family) => family.domain)).toEqual(['example.com'])
+    expect(families[0].servedDomains).not.toContain('panel.example.com')
+    expect(Object.keys(states)).not.toContain('panel.example.com')
+    expect(familySummary(families[0])).not.toContain('Panel')
   })
 
   it('still shows sites when DNS domains cannot be loaded', async () => {
@@ -164,6 +169,6 @@ describe('loadSources', () => {
           : new Response(url === '/api/sites' ? '[]' : 'null', { status: 200 }),
       ),
     )
-    await expect(loadSources(false)).resolves.toEqual({ sites: [], zones: [], redirects: [], panelDomain: null })
+    await expect(loadSources()).resolves.toEqual({ sites: [], zones: [], redirects: [] })
   })
 })

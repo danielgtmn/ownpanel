@@ -1,4 +1,20 @@
-import { Menu, MenuContent, MenuItem, MenuTrigger } from '@ui-sdk/react/menu'
+import { Button } from '@ui-sdk/react/button'
+import {
+  createMenuController,
+  Menu,
+  MenuCheckboxItem,
+  MenuContent,
+  MenuContextTrigger,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuItem,
+  MenuItemIcon,
+  MenuItemIndicator,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuTrigger,
+} from '@ui-sdk/react/menu'
 import {
   NavigationMenu,
   NavigationMenuItem,
@@ -6,8 +22,9 @@ import {
   NavigationMenuLinkIcon,
   NavigationMenuList,
 } from '@ui-sdk/react/navigation-menu'
+import { useShortcut, useShortcutHint } from '@ui-sdk/react/shortcuts'
 import { createTooltipController, Tooltip, TooltipContent, TooltipTrigger } from '@ui-sdk/react/tooltip'
-import { useState, type ReactElement, type ReactNode } from 'react'
+import { useCallback, useId, useState, type ReactElement, type ReactNode } from 'react'
 import {
   hueOf,
   initialsOf,
@@ -18,11 +35,29 @@ import {
 } from '../../shared/families/index.ts'
 import { hrefWithQuery } from '../../shared/routing/index.ts'
 import { ROLE_LABEL, useSession } from '../../shared/session/index.ts'
-import { AppsIcon, MailIcon, PlusIcon, StackIcon } from '../../shared/ui/index.ts'
+import {
+  AppsIcon,
+  CopyIcon,
+  ExternalIcon,
+  MailIcon,
+  PanelCollapseIcon,
+  PanelExpandIcon,
+  PlusIcon,
+  StackIcon,
+} from '../../shared/ui/index.ts'
+import {
+  lookOf,
+  updatePrefs,
+  useRailPrefs,
+  withExpanded,
+  withInitialsForAll,
+  withTileLook,
+  type RailPrefs,
+} from './railPrefs.ts'
 import { ALL, familyHref, type RailEntry } from './selection.ts'
+import { copyDomain, iconUrl, mainSite, openSite, siteAddress } from './tiles.ts'
 
-type Tip = { title: string; detail?: string }
-
+type Tip = { title: string; detail?: string; shortcut?: string }
 
 export type SidebarProps = {
   tile: string
@@ -31,7 +66,11 @@ export type SidebarProps = {
   column: { title: string; summary: string; rows: FamilyRow[]; currentRow: string | null; placeholders: boolean }
   allHref: string
   onChangePassword: () => void
+  // The phone drawer always shows names next to the tiles.
+  inDrawer?: boolean
 }
+
+const EXPAND_SHORTCUT = '['
 
 const placeholders = [
   { key: 'mail', label: 'E-mail', icon: MailIcon },
@@ -60,12 +99,120 @@ function TipTrigger({
   )
 }
 
-function Rail({ tile, families, railEntries, allHref, onChangePassword }: SidebarProps) {
+function TileLabel({ children }: { children: ReactNode }) {
+  return (
+    <span className="tile-label" aria-hidden="true">
+      {children}
+    </span>
+  )
+}
+
+function FamilyFace({
+  domain,
+  status,
+  src,
+  onMissing,
+}: {
+  domain: string
+  status: FamilyStatus
+  src: string | null
+  onMissing: (src: string) => void
+}) {
+  const [loaded, setLoaded] = useState<string | null>(null)
+  const shown = src !== null && loaded === src
+  return (
+    <span className="tile-face" data-face={shown ? 'icon' : 'initials'} data-hue={hueOf(domain)}>
+      {src ? (
+        <img
+          key={src}
+          className="tile-icon"
+          src={src}
+          alt=""
+          hidden={!shown}
+          draggable={false}
+          decoding="async"
+          onLoad={() => setLoaded(src)}
+          onError={() => onMissing(src)}
+        />
+      ) : null}
+      {shown ? null : <span aria-hidden="true">{initialsOf(domain)}</span>}
+      <span className="tile-dot" data-status={status} aria-hidden="true" />
+    </span>
+  )
+}
+
+function TileMenu({ family, prefs, iconMissing }: { family: Family; prefs: RailPrefs; iconMissing: boolean }) {
+  const look = lookOf(prefs, family.domain)
+  const address = siteAddress(family)
+  return (
+    <>
+      <MenuGroup>
+        <MenuGroupLabel>{family.domain}</MenuGroupLabel>
+        <MenuRadioGroup
+          value={look}
+          onValueChange={(value) =>
+            updatePrefs((current) => withTileLook(current, family.domain, value === 'icon' ? 'icon' : 'initials'))
+          }
+        >
+          <MenuRadioItem value="icon" disabled={iconMissing}>
+            <MenuItemIndicator />
+            Show icon
+            {iconMissing ? <span className="tile-menu-hint">None found</span> : null}
+          </MenuRadioItem>
+          <MenuRadioItem value="initials">
+            <MenuItemIndicator />
+            Show initials
+          </MenuRadioItem>
+        </MenuRadioGroup>
+      </MenuGroup>
+      <MenuSeparator />
+      <MenuCheckboxItem
+        value="initials-for-all"
+        checked={prefs.initialsForAll}
+        onCheckedChange={(checked) => updatePrefs((current) => withInitialsForAll(current, checked))}
+      >
+        <MenuItemIndicator />
+        Show initials for all domains
+      </MenuCheckboxItem>
+      <MenuSeparator />
+      <MenuItem disabled={!address} onSelect={() => void openSite(family)}>
+        <MenuItemIcon>
+          <ExternalIcon />
+        </MenuItemIcon>
+        Open site
+      </MenuItem>
+      <MenuItem onSelect={() => void copyDomain(family)}>
+        <MenuItemIcon>
+          <CopyIcon />
+        </MenuItemIcon>
+        Copy domain
+      </MenuItem>
+    </>
+  )
+}
+
+function Rail({ tile, families, railEntries, allHref, onChangePassword, inDrawer = false }: SidebarProps) {
   const [tips] = useState(() => createTooltipController<Tip>())
+  const [tileMenu] = useState(() => createMenuController<Family>())
+  const [missing, setMissing] = useState<ReadonlySet<string>>(() => new Set())
   const { user, signOut } = useSession()
+  const prefs = useRailPrefs()
+  const railId = useId()
+  const expanded = inDrawer || prefs.expanded
+  const toggle = useCallback(() => updatePrefs((current) => withExpanded(current, !current.expanded)), [])
+  useShortcut(inDrawer ? null : EXPAND_SHORTCUT, toggle, { description: 'Show or hide names in the sidebar' })
+  const hint = useShortcutHint(EXPAND_SHORTCUT)
+  const markMissing = useCallback(
+    (src: string) => setMissing((current) => (current.has(src) ? current : new Set(current).add(src))),
+    [],
+  )
+  const iconOf = (family: Family) => {
+    const site = mainSite(family)
+    return site ? iconUrl(site) : null
+  }
 
   return (
-    <div className="rail">
+    <div className="rail" id={railId} data-expanded={expanded ? '' : undefined}>
       <NavigationMenu aria-label="Domains" orientation="vertical" className="rail-nav">
         <NavigationMenuList>
           <NavigationMenuItem>
@@ -82,32 +229,66 @@ function Rail({ tile, families, railEntries, allHref, onChangePassword }: Sideba
                 />
               }
             >
-              <StackIcon />
+              <span className="tile-face">
+                <StackIcon />
+              </span>
+              <TileLabel>All domains</TileLabel>
             </TipTrigger>
           </NavigationMenuItem>
-          {families.map(({ family, status }) => (
-            <NavigationMenuItem key={family.domain}>
-              <TipTrigger
-                tips={tips}
-                tip={{ title: family.domain, detail: capitalize(STATUS_TEXT[status]) }}
-                render={
-                  <NavigationMenuLink
-                    href={familyHref(family.domain)}
-                    current={tile === family.domain}
-                    aria-label={`${family.domain}, ${STATUS_TEXT[status]}`}
-                    className="tile"
-                    data-kind="family"
-                    data-hue={hueOf(family.domain)}
+          {families.map(({ family, status }) => {
+            const src = iconOf(family)
+            return (
+              <NavigationMenuItem key={family.domain}>
+                <TipTrigger
+                  tips={tips}
+                  tip={{ title: family.domain, detail: capitalize(STATUS_TEXT[status]) }}
+                  render={
+                    <MenuContextTrigger
+                      controller={tileMenu}
+                      payload={family}
+                      render={
+                        <NavigationMenuLink
+                          href={familyHref(family.domain)}
+                          current={tile === family.domain}
+                          aria-label={`${family.domain}, ${STATUS_TEXT[status]}`}
+                          className="tile"
+                          data-kind="family"
+                          onKeyDown={(event) => {
+                            // Browsers on macOS send no context menu event for these keys.
+                            if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+                              event.preventDefault()
+                              void tileMenu.open({ payload: family, anchor: event.currentTarget, focus: 'first' })
+                            }
+                          }}
+                        />
+                      }
+                    />
+                  }
+                >
+                  <FamilyFace
+                    domain={family.domain}
+                    status={status}
+                    src={lookOf(prefs, family.domain) === 'icon' && src && !missing.has(src) ? src : null}
+                    onMissing={markMissing}
                   />
-                }
-              >
-                <span aria-hidden="true">{initialsOf(family.domain)}</span>
-                <span className="tile-dot" data-status={status} aria-hidden="true" />
-              </TipTrigger>
-            </NavigationMenuItem>
-          ))}
+                  <TileLabel>{family.domain}</TileLabel>
+                </TipTrigger>
+              </NavigationMenuItem>
+            )
+          })}
         </NavigationMenuList>
       </NavigationMenu>
+
+      <Menu controller={tileMenu} onOpenChange={(open) => open && tips.close()}>
+        <MenuContent<Family> side="right" align="start" className="tile-menu">
+          {(state) => {
+            const family = state.payload
+            if (!family) return null
+            const src = iconOf(family)
+            return <TileMenu family={family} prefs={prefs} iconMissing={!src || missing.has(src)} />
+          }}
+        </MenuContent>
+      </Menu>
 
       <Menu>
         <TipTrigger
@@ -115,7 +296,10 @@ function Rail({ tile, families, railEntries, allHref, onChangePassword }: Sideba
           tip={{ title: 'Add', detail: 'A site, a domain or a redirect' }}
           render={<MenuTrigger className="tile" data-kind="add" aria-label="Add a site, domain or redirect" />}
         >
-          <PlusIcon />
+          <span className="tile-face">
+            <PlusIcon />
+          </span>
+          <TileLabel>Add</TileLabel>
         </TipTrigger>
         <MenuContent side="right" align="start">
           <MenuItem render={<a href={hrefWithQuery(['sites'], { new: '1' })} />}>New site</MenuItem>
@@ -143,7 +327,10 @@ function Rail({ tile, families, railEntries, allHref, onChangePassword }: Sideba
                   />
                 }
               >
-                <entry.icon />
+                <span className="tile-face">
+                  <entry.icon />
+                </span>
+                <TileLabel>{entry.label}</TileLabel>
               </TipTrigger>
             </NavigationMenuItem>
           ))}
@@ -156,7 +343,10 @@ function Rail({ tile, families, railEntries, allHref, onChangePassword }: Sideba
           tip={{ title: user.name, detail: 'Account' }}
           render={<MenuTrigger className="tile" data-kind="account" aria-label={`Account of ${user.name}`} />}
         >
-          <span aria-hidden="true">{initialsOf(user.name)}</span>
+          <span className="tile-face">
+            <span aria-hidden="true">{initialsOf(user.name)}</span>
+          </span>
+          <TileLabel>{user.name}</TileLabel>
         </TipTrigger>
         <MenuContent side="right" align="end">
           <MenuItem onSelect={onChangePassword}>Change password</MenuItem>
@@ -164,12 +354,39 @@ function Rail({ tile, families, railEntries, allHref, onChangePassword }: Sideba
         </MenuContent>
       </Menu>
 
+      {inDrawer ? null : (
+        <TipTrigger
+          tips={tips}
+          tip={{ title: expanded ? 'Hide names' : 'Show names', shortcut: hint.text }}
+          render={
+            <Button
+              className="tile"
+              data-kind="toggle"
+              aria-expanded={expanded}
+              aria-controls={railId}
+              aria-keyshortcuts={hint.ariaKeyshortcuts}
+              onClick={toggle}
+            />
+          }
+        >
+          <span className="tile-face">{expanded ? <PanelCollapseIcon /> : <PanelExpandIcon />}</span>
+          <span className="tile-label">{expanded ? 'Hide names' : 'Show names'}</span>
+        </TipTrigger>
+      )}
+
       <Tooltip controller={tips}>
         <TooltipContent<Tip> side="right" sideOffset={10} className="rail-tip">
           {(state) =>
             state.payload ? (
               <>
-                <span className="rail-tip-title">{state.payload.title}</span>
+                <span className="rail-tip-title">
+                  {state.payload.title}
+                  {state.payload.shortcut ? (
+                    <kbd className="rail-tip-key" aria-hidden="true">
+                      {state.payload.shortcut}
+                    </kbd>
+                  ) : null}
+                </span>
                 {state.payload.detail ? <span className="rail-tip-detail">{state.payload.detail}</span> : null}
               </>
             ) : null
@@ -244,7 +461,7 @@ function Column({ column }: SidebarProps) {
 
 export function Sidebar(props: SidebarProps) {
   return (
-    <div className="sidebar">
+    <div className="sidebar" data-in-drawer={props.inDrawer ? '' : undefined}>
       <Rail {...props} />
       <Column {...props} />
     </div>
