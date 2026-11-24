@@ -5,6 +5,7 @@ export {
   isNotFound,
   isSavedButNotApplied,
   isUnauthorized,
+  onDataChange,
   request,
   setUnauthorizedHandler,
   type RequestOptions,
