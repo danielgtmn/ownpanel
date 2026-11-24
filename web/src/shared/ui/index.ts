@@ -2,7 +2,25 @@ import './ui.css'
 
 export { EmptyState } from './EmptyState.tsx'
 export { ErrorState } from './ErrorState.tsx'
-export { ArrowLeftIcon, ExternalIcon, UploadIcon } from './Icons.tsx'
+export {
+  ActivityIcon,
+  AppsIcon,
+  ArrowLeftIcon,
+  ExternalIcon,
+  GlobeIcon,
+  KeyIcon,
+  MailIcon,
+  MenuIcon,
+  OverviewIcon,
+  PeopleIcon,
+  PlugIcon,
+  PlusIcon,
+  RecordsIcon,
+  RedirectIcon,
+  SettingsIcon,
+  StackIcon,
+  UploadIcon,
+} from './Icons.tsx'
 export { FormDialog } from './FormDialog.tsx'
 export { LoadingState } from './LoadingState.tsx'
 export { PasswordField } from './PasswordField.tsx'

@@ -12,15 +12,42 @@ search `node_modules/@ui-sdk/react/docs/core.md` by heading, and read
 
 ## Structure
 
-- `src/app/` is the shell: layout, navigation, routing, global styles.
+- `src/app/` is the shell: layout, sidebar navigation, routing, global styles.
 - `src/shared/` holds code every module may use: `api/` (API client, shared
   lookups), `session/` (signed-in person, `useSession()`, name and password
-  rules), `format/` (dates), `routing/`, `hooks/`, `ui/` (small UI pieces).
+  rules), `format/` (dates), `routing/`, `hooks/`, `ui/` (small UI pieces and
+  the inline icons; there is no icon library), `families/` (domain families,
+  their status and the row type of the sidebar).
 - `src/modules/<name>/` is one self-contained area of the panel (for example
   `sites`). A module exports a single `PanelModule` from its `index.ts` and is
   listed in `src/modules/registry.ts`. Modules never import from each other.
   `PanelModule.visible` hides a module (and its address) from people it
   doesn't apply to, for example administrator-only areas.
+
+## Navigation
+
+The shell (`src/app/Shell.tsx`, `src/app/sidebar/`) draws a sidebar organised
+by domain: a narrow rail with an "All" tile, one tile per domain family and
+an add menu, and a column with the rows of the selected tile. Modules hang
+into it only through optional fields on `PanelModule`:
+
+- `railEntry: { icon, label? }` adds an icon tile to the rail's bottom group
+  (Settings, People, …). It follows `visible`, so admin-only modules stay
+  hidden from members.
+- `overviewRow: { icon, label?, count }` adds a row with a count to the
+  column of the "All" tile. `count` gets everyone's `DomainSources`.
+- `familyRows(family)` returns the rows a module contributes to one domain
+  family (`FamilyRow` from `src/shared/families`): label, link, icon, an
+  optional hint, count or status dot, and `isCurrent(route)`, which decides
+  which row and which tile light up when a page is opened by its address.
+
+Row order follows `registry.ts`. A family is a registrable domain
+(`registrableDomain()` in `src/shared/families/suffix.ts`, a heuristic, see the
+comment there); `#/d/<family>` opens its overview. The sidebar reloads after
+every request that changed something (`onDataChange` in `src/shared/api`).
+Pages can be opened with a query that starts an action: `#/sites?new=1`,
+`#/redirects?new=1`, `#/dns?add=1`; `#/redirects?family=example.com` filters
+the list. Call `clearQuery()` once such a query is used up.
 
 ## Rules
 

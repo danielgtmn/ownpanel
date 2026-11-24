@@ -1,10 +1,11 @@
 import { confirm } from '@ui-sdk/react/alert-dialog'
 import { Button } from '@ui-sdk/react/button'
 import { toast } from '@ui-sdk/react/toast'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { errorMessage } from '../../shared/api/index.ts'
 import { formatDate, formatDateTime, isoTimestamp } from '../../shared/format/index.ts'
 import type { Resource } from '../../shared/hooks/index.ts'
+import { clearQuery, useQuery } from '../../shared/routing/index.ts'
 import { useSession } from '../../shared/session/index.ts'
 import { EmptyState, ErrorState, LoadingState, Section } from '../../shared/ui/index.ts'
 import { AddDomainDialog } from './AddDomainDialog.tsx'
@@ -73,6 +74,20 @@ export function ConnectionsSection({ connections, onChanged }: Props) {
   const { user } = useSession()
   const [connecting, setConnecting] = useState(false)
   const [addingTo, setAddingTo] = useState<Connection | null>(null)
+  const wantsAdd = useQuery().has('add')
+  const ready = connections.status === 'ready' ? connections.data : null
+
+  // "Add a domain" from the sidebar: with one connection of your own, open its dialog; with none, offer to connect.
+  const own = wantsAdd && ready ? ready.filter((connection) => isOwnConnection(connection, user)) : null
+  const askedToConnect = own?.length === 0
+  const askedToAdd = own?.length === 1 ? own[0] : null
+  const askedToChoose = (own?.length ?? 0) > 1
+
+  useEffect(() => {
+    if (!askedToChoose) return
+    toast.info('Choose the connection to add the domain to.')
+    clearQuery()
+  }, [askedToChoose])
 
   async function addDomain(connection: Connection, name: string): Promise<Zone> {
     const zone = await createZone(connection.id, name)
@@ -84,6 +99,7 @@ export function ConnectionsSection({ connections, onChanged }: Props) {
   async function create(connection: NewConnection) {
     const created = await createConnection(connection)
     setConnecting(false)
+    clearQuery()
     toast.success(`${created.name} is connected.`)
     await onChanged()
   }
@@ -158,11 +174,20 @@ export function ConnectionsSection({ connections, onChanged }: Props) {
           ))}
         </ul>
       ) : null}
-      <ConnectDialog open={connecting} onOpenChange={setConnecting} onSubmit={create} />
-      <AddDomainDialog
-        connection={addingTo}
+      <ConnectDialog
+        open={connecting || askedToConnect}
         onOpenChange={(open) => {
-          if (!open) setAddingTo(null)
+          setConnecting(open)
+          if (!open) clearQuery()
+        }}
+        onSubmit={create}
+      />
+      <AddDomainDialog
+        connection={addingTo ?? askedToAdd}
+        onOpenChange={(open) => {
+          if (open) return
+          setAddingTo(null)
+          clearQuery()
         }}
         onCreate={addDomain}
       />
