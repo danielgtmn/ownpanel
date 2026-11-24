@@ -13,6 +13,7 @@ ownpanel is early. This page separates what exists from what is only planned. Pl
 - **First-run setup wizard** in the browser and a Settings page for the panel's domain and the server's addresses ([[Getting Started|Getting-Started]]).
 - **Backups** with a command, and a documented restore ([[Backup and Restore|Backup-and-Restore]]).
 - **Installer** for Debian and Ubuntu with upgrade and uninstall, stable releases from the `release` branch and a nightly build of every change to `main` ([[Installation|Installation]]).
+- **Updates** from the panel (Settings → Updates, optionally automatic) or with `update.sh`, with a backup first and an automatic rollback ([[Installation|Installation#updating]]).
 
 ## Next
 
@@ -24,7 +25,7 @@ All planned work is tracked as [issues](https://github.com/danielgtmn/ownpanel/i
 
 ## Open items
 
-- **The installer has only been tested in containers,** not on a real server ([#6](https://github.com/danielgtmn/ownpanel/issues/6)). Try it on a throwaway machine first.
+- **The installer and the updater have only been tested in containers,** not on a real server ([#6](https://github.com/danielgtmn/ownpanel/issues/6)). Try it on a throwaway machine first.
 - **The panel stays reachable by IP address** after setup when no panel domain is set ([#33](https://github.com/danielgtmn/ownpanel/issues/33)).
 - **No per-site system users or quotas:** all site files belong to one user.
 - **Sign-in throttling is in memory** and resets on restart; it trusts `X-Forwarded-For` from local connections.

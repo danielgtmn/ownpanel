@@ -232,12 +232,14 @@ curl -fsSL https://raw.githubusercontent.com/danielgtmn/ownpanel/main/install.sh
 Update from the panel (Settings → Updates: one button, a backup first and an
 automatic rollback if the new version does not start, optional automatic
 updates in a nightly time window) or on the server with
-`sudo /usr/local/lib/ownpanel/update.sh` (`--check` only looks). Running the
+`sudo /usr/local/lib/ownpanel/update.sh` (`--check` only looks); installations
+made before the updater existed get it with
+`curl -fsSL https://raw.githubusercontent.com/danielgtmn/ownpanel/main/update.sh | sudo bash`. Running the
 installer again upgrades too; `--uninstall` removes ownpanel but
 keeps the data (`--purge` deletes it too). `--channel nightly` follows the
 build of `main` made after every merged pull request instead of the stable
 releases, which come from the `release` branch. Releases are built by the
-release workflow (`.github/workflows/release.yml`) with `scripts/package.sh`.
+Publish workflow (`.github/workflows/release.yml`) with `scripts/package.sh`.
 
 Manual install: download `ownpanel_<version>_linux_<arch>.tar.gz` and
 `checksums.txt` from the releases, check and unpack the archive and run
