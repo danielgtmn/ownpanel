@@ -1,6 +1,10 @@
 # Checks every change. The job names (go, web, lint, build) are used as
 # required status checks in the branch protection rules; renaming one
 # means updating the rules as well.
+#
+# On pull requests, jobs run only when files they check changed (a skipped
+# job counts as passed for the branch rules). Pushes to main, the merge
+# queue and manual runs always run everything.
 name: CI
 
 on:
@@ -18,7 +22,58 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.filter.outputs.go }}
+      web: ${{ steps.filter.outputs.web }}
+      lint: ${{ steps.filter.outputs.lint }}
+      build: ${{ steps.filter.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Decide which checks to run
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          all() { for k in go web lint build; do echo "$k=true" >> "$GITHUB_OUTPUT"; done; }
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "Not a pull request: running every check."
+            all
+            exit 0
+          fi
+          files="$(git diff --name-only "$BASE...$HEAD")"
+          echo "Changed files:"
+          echo "$files"
+          # A change to this workflow must prove itself on every job.
+          if grep -qx '.github/workflows/ci.yml' <<<"$files"; then
+            all
+            exit 0
+          fi
+          has() { grep -qE "$1" <<<"$files" && echo true || echo false; }
+          go="$(has '(\.go$|^go\.(mod|sum)$)')"
+          web="$(has '^web/')"
+          lint="$(has '(\.sh$|^deploy/|^\.github/workflows/)')"
+          build=false
+          if [ "$go" = true ] || [ "$web" = true ] || [ "$(has '^(Makefile|scripts/package\.sh)$')" = true ]; then
+            build=true
+          fi
+          {
+            echo "go=$go"
+            echo "web=$web"
+            echo "lint=$lint"
+            echo "build=$build"
+          } | tee -a "$GITHUB_OUTPUT"
+
   go:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -43,6 +98,8 @@ jobs:
         run: go test -race -count=1 ./...
 
   web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -67,6 +124,8 @@ jobs:
         run: npm run build
 
   lint:
+    needs: changes
+    if: needs.changes.outputs.lint == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -91,7 +150,14 @@ jobs:
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
 
   build:
-    needs: [go, web]
+    needs: [changes, go, web]
+    # Runs after go and web, also when one of them was skipped, never after
+    # a failure.
+    if: >-
+      !cancelled() &&
+      needs.changes.outputs.build == 'true' &&
+      needs.go.result != 'failure' &&
+      needs.web.result != 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
