@@ -180,6 +180,8 @@ sudo /usr/local/lib/ownpanel/update.sh --check    # only show installed and avai
 curl -fsSL https://raw.githubusercontent.com/danielgtmn/ownpanel/main/update.sh | sudo bash -s -- --yes
 ```
 
+Installations made before the updater existed have no local `update.sh` and no update button yet: run the `curl` line once; it updates and sets up the updater, and from then on the panel can update itself.
+
 | Option | Meaning |
 |---|---|
 | `--channel stable\|nightly` | Channel to update from; default the installed one. |
