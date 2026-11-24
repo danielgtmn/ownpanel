@@ -12,7 +12,7 @@ ownpanel is early. This page separates what exists from what is only planned. Pl
 - **Redirects:** main address with or without www, path redirects, whole-domain redirects ([[Redirects|Redirects]]).
 - **First-run setup wizard** in the browser and a Settings page for the panel's domain and the server's addresses ([[Getting Started|Getting-Started]]).
 - **Backups** with a command, and a documented restore ([[Backup and Restore|Backup-and-Restore]]).
-- **Installer** for Debian and Ubuntu with upgrade and uninstall, stable releases from tags and nightly builds of `main` ([[Installation|Installation]]).
+- **Installer** for Debian and Ubuntu with upgrade and uninstall, stable releases from the `release` branch and a nightly build of every change to `main` ([[Installation|Installation]]).
 
 ## Next
 
