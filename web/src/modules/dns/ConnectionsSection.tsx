@@ -7,9 +7,10 @@ import { formatDate, formatDateTime, isoTimestamp } from '../../shared/format/in
 import type { Resource } from '../../shared/hooks/index.ts'
 import { useSession } from '../../shared/session/index.ts'
 import { EmptyState, ErrorState, LoadingState, Section } from '../../shared/ui/index.ts'
-import { checkConnection, createConnection, deleteConnection } from './api.ts'
+import { AddDomainDialog } from './AddDomainDialog.tsx'
+import { checkConnection, createConnection, createZone, deleteConnection } from './api.ts'
 import { ConnectDialog } from './ConnectDialog.tsx'
-import type { Connection, NewConnection } from './types.ts'
+import type { Connection, NewConnection, Zone } from './types.ts'
 import { connectionHealth, isOwnConnection, providerLabel, zoneCountLabel } from './zones.ts'
 
 type RowProps = {
@@ -17,9 +18,10 @@ type RowProps = {
   own: boolean
   onCheck: (connection: Connection) => Promise<void>
   onRemove: (connection: Connection) => Promise<void>
+  onAddDomain: (connection: Connection) => void
 }
 
-function ConnectionRow({ connection, own, onCheck, onRemove }: RowProps) {
+function ConnectionRow({ connection, own, onCheck, onRemove, onAddDomain }: RowProps) {
   const health = connectionHealth(connection, formatDateTime)
   const count = zoneCountLabel(connection.zone_count)
   return (
@@ -45,6 +47,11 @@ function ConnectionRow({ connection, own, onCheck, onRemove }: RowProps) {
       </div>
       <div className="record-actions">
         {own ? (
+          <Button onClick={() => onAddDomain(connection)}>
+            Add domain<span className="visually-hidden"> to {connection.name}</span>
+          </Button>
+        ) : null}
+        {own ? (
           <Button pendingAnnouncement="Checking" onClick={() => onCheck(connection)}>
             Check again<span className="visually-hidden"> for {connection.name}</span>
           </Button>
@@ -65,6 +72,14 @@ type Props = {
 export function ConnectionsSection({ connections, onChanged }: Props) {
   const { user } = useSession()
   const [connecting, setConnecting] = useState(false)
+  const [addingTo, setAddingTo] = useState<Connection | null>(null)
+
+  async function addDomain(connection: Connection, name: string): Promise<Zone> {
+    const zone = await createZone(connection.id, name)
+    toast.success(`${zone.name} was added to ${connection.name}.`)
+    void onChanged()
+    return zone
+  }
 
   async function create(connection: NewConnection) {
     const created = await createConnection(connection)
@@ -138,11 +153,19 @@ export function ConnectionsSection({ connections, onChanged }: Props) {
               own={isOwnConnection(connection, user)}
               onCheck={check}
               onRemove={remove}
+              onAddDomain={setAddingTo}
             />
           ))}
         </ul>
       ) : null}
       <ConnectDialog open={connecting} onOpenChange={setConnecting} onSubmit={create} />
+      <AddDomainDialog
+        connection={addingTo}
+        onOpenChange={(open) => {
+          if (!open) setAddingTo(null)
+        }}
+        onCreate={addDomain}
+      />
     </Section>
   )
 }

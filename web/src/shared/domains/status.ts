@@ -1,4 +1,4 @@
-import type { ChangedRecord, DomainStatus } from '../../shared/api/index.ts'
+import type { ChangedRecord, DomainStatus } from '../api/index.ts'
 
 export type StatusTone = 'positive' | 'warning' | 'neutral'
 

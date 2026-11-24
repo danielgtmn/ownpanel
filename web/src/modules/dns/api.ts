@@ -1,5 +1,5 @@
 import { encodeSegment, request } from '../../shared/api/index.ts'
-import type { Connection, NewConnection, RecordBody, RecordSet, ZoneList } from './types.ts'
+import type { Connection, NewConnection, RecordBody, RecordSet, Zone, ZoneList } from './types.ts'
 
 const connectionPath = (id: number) => `/dns/connections/${encodeSegment(String(id))}`
 
@@ -27,7 +27,20 @@ export function deleteConnection(id: number): Promise<void> {
 
 export async function listZones(): Promise<ZoneList> {
   const result = await request<Partial<ZoneList>>('/dns/zones')
-  return { zones: result.zones ?? [], problems: result.problems ?? [] }
+  const zones = (result.zones ?? []).map((zone) => ({ ...zone, nameservers: zone.nameservers ?? [] }))
+  return { zones, problems: result.problems ?? [] }
+}
+
+export async function createZone(connectionId: number, name: string): Promise<Zone> {
+  const zone = await request<Zone>(`${connectionPath(connectionId)}/zones`, { method: 'POST', body: { name } })
+  return { ...zone, nameservers: zone.nameservers ?? [] }
+}
+
+export function deleteZone(connectionId: number, zone: string, confirm: string): Promise<void> {
+  return request<void>(`${connectionPath(connectionId)}/zones/${encodeSegment(zone)}`, {
+    method: 'DELETE',
+    body: { confirm },
+  })
 }
 
 export async function listRecords(connectionId: number, zone: string): Promise<RecordSet[]> {

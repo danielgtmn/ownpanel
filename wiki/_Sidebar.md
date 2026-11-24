@@ -13,6 +13,7 @@
 - [[Sites and Publishing|Sites-and-Publishing]]
 - [[Users and Access|Users-and-Access]]
 - [[DNS|DNS]]
+- [[Redirects|Redirects]]
 - [[MCP|MCP]]
 - [[API|API]]
 - [[Backup and Restore|Backup-and-Restore]]

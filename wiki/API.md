@@ -55,6 +55,10 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 
 **Record set:** `{"name", "type", "ttl", "values": [..], "locked"}`. `name` is `@` for the zone itself; `ttl` is `null` for the zone default; TXT values are plain text.
 
+**Redirect:** `{"id", "owner", "source_domain", "source_path", "target", "code", "keep_path", "keep_query", "created_at"}`. `source_path` is `""` for a whole-domain redirect, otherwise `/exact` or a prefix `/path/*`; `code` is `301`, `302`, `307` or `308`. See [[Redirects|Redirects]].
+
+**Zone:** `{"connection_id", "connection_name", "name", "read_only", "nameservers": [..]}`. `nameservers` are the provider's nameservers to enter at the domain's registrar.
+
 ## Routes
 
 "Anyone" means any authenticated person or token. "Write" means a token needs `write` access; limited tokens work only on their sites. "Admin" means the admin role with a password sign-in or an unrestricted `write` token. Details are in [[Users and Access|Users-and-Access]].
@@ -114,6 +118,22 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 | `DELETE` | `/api/dns/connections/{id}/zones/{zone}/records/{name}/{type}` | same | | `204`; deleting a missing record set is fine |
 | `GET` | `/api/sites/{name}/domains/status` | anyone, own site | | list of `{"domain", "state", "found": [..], "zone": null or {"connection_id", "connection_name", "zone", "record_name"}}`; `state` is `points_here`, `points_elsewhere`, `no_record` or `lookup_failed`. `409` if no `-server-ip` is set |
 | `POST` | `/api/sites/{name}/domains/{domain}/point` | write, own site | | `{"changed": [Record set, …]}` |
+| `GET` | `/api/dns/domain-status?domain=<domain>` | anyone; a domain of a site you may see or of a domain redirect you may see | | one element of the site domain status list above. `404` for other domains |
+| `POST` | `/api/dns/point` | write; same domains | `{"domain": "www.example.com"}` | `{"changed": [Record set, …]}`, like the site route |
+| `POST` | `/api/dns/connections/{id}/zones` | password sign-in or unrestricted write, your own connection | `{"name": "example.com"}` | `201` Zone. Only registrable domains (no subdomains). `409` if it exists already |
+| `DELETE` | `/api/dns/connections/{id}/zones/{zone}` | same | `{"confirm": "<zone name>"}` | `204`. `400` if `confirm` does not match; `409` while a site, redirect or the panel domain (of anyone) uses a domain in the zone, listing them, or if the zone is protected at the provider |
+
+Entries of `GET /api/dns/zones` are Zone objects, with `nameservers`.
+
+### Redirects
+
+| Method | Path | Who | Request | Response |
+|---|---|---|---|---|
+| `GET` | `/api/redirects` | anyone | | list of Redirect you may see (admins: all), sorted by domain and path |
+| `GET` | `/api/sites/{name}/redirects` | anyone, own site | | list of the path redirects on the site's domains |
+| `POST` | `/api/redirects` | write; domain redirects need a token that is not limited to sites | `{"source_domain", "source_path", "target", "code", "keep_path", "keep_query"}` | `201` Redirect |
+| `PUT` | `/api/redirects/{id}` | write; owner, admin, or (path redirects) whoever may change the site | same as `POST` | Redirect |
+| `DELETE` | `/api/redirects/{id}` | same | | `204` |
 
 For record routes, `{name}` is `@` for the zone itself, and `{type}` is for example `A` or `TXT`. See [[DNS|DNS]] for what is allowed.
 

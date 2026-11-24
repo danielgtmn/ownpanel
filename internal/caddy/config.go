@@ -8,7 +8,9 @@ package caddy
 
 import (
 	"fmt"
+	"net/netip"
 	"sort"
+	"strconv"
 )
 
 // TLS modes.
@@ -31,6 +33,17 @@ type Options struct {
 	// host:port), so the panel gets a certificate like any site.
 	PanelDomain   string
 	PanelUpstream string
+
+	// PanelIPs are the server's own addresses (IPv4/IPv6, without brackets).
+	// Requests whose Host is one of them reach the panel directly, with a
+	// certificate from Caddy's internal CA (browsers warn once): that is how
+	// a fresh install is opened before it has a domain. Clients connecting to
+	// a bare address send no SNI; Caddy then picks the certificate of the
+	// local address, and falls back to the first public IPv4 (default_sni).
+	PanelIPs []string
+	// IPRedirect makes the PanelIPs routes redirect to https://PanelDomain
+	// instead of serving the panel (once set up with a domain).
+	IPRedirect bool
 }
 
 // Site is what the web server needs to know about one site.
@@ -43,8 +56,9 @@ type Site struct {
 
 type obj = map[string]any
 
-// Build returns the full Caddy config for the given sites.
-func Build(opts Options, sites []Site) (obj, error) {
+// Build returns the full Caddy config for the given sites and redirects
+// (see Redirect; path redirects are only served for domains of a site).
+func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 	switch opts.TLSMode {
 	case TLSOff, TLSInternal, TLSACME:
 	default:
@@ -54,6 +68,19 @@ func Build(opts Options, sites []Site) (obj, error) {
 	sorted := append([]Site(nil), sites...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 
+	if len(opts.PanelIPs) > 0 && opts.PanelUpstream == "" {
+		return nil, fmt.Errorf("access by IP address needs the panel's address")
+	}
+	ips, err := canonicalIPs(opts.PanelIPs)
+	if err != nil {
+		return nil, err
+	}
+	redirect := opts.IPRedirect && opts.PanelDomain != ""
+	domainRedirects, pathRedirects, err := splitRedirects(redirects)
+	if err != nil {
+		return nil, err
+	}
+
 	routes := []obj{}
 	if opts.PanelDomain != "" {
 		if opts.PanelUpstream == "" {
@@ -62,14 +89,25 @@ func Build(opts Options, sites []Site) (obj, error) {
 		// reverse_proxy sets X-Forwarded-For/-Proto and has no body size
 		// limit; ownpaneld enforces its own (512 MB uploads).
 		routes = append(routes, obj{
-			"match": []obj{{"host": []string{opts.PanelDomain}}},
-			"handle": []obj{{
-				"handler":   "reverse_proxy",
-				"upstreams": []obj{{"dial": opts.PanelUpstream}},
-			}},
+			"match":    []obj{{"host": []string{opts.PanelDomain}}},
+			"handle":   []obj{proxyTo(opts.PanelUpstream)},
 			"terminal": true,
 		})
 	}
+	if len(ips) > 0 {
+		// Caddy's host matcher ignores the port and the brackets of IPv6
+		// addresses, so the plain address matches "[2001:db8::1]:443" too.
+		h := proxyTo(opts.PanelUpstream)
+		if redirect {
+			h = redirectTo(opts.panelURL() + "{http.request.uri}")
+		}
+		routes = append(routes, obj{
+			"match":    []obj{{"host": ips}},
+			"handle":   []obj{h},
+			"terminal": true,
+		})
+	}
+	routes = append(routes, domainRedirects...)
 	for _, s := range sorted {
 		if len(s.Domains) == 0 {
 			continue
@@ -90,7 +128,7 @@ func Build(opts Options, sites []Site) (obj, error) {
 		}
 		routes = append(routes, obj{
 			"match":    []obj{{"host": s.Domains}},
-			"handle":   []obj{{"handler": "subroute", "routes": []obj{{"handle": handlers}}}},
+			"handle":   []obj{{"handler": "subroute", "routes": append(sitePathRedirects(pathRedirects, s.Domains), obj{"handle": handlers})}},
 			"terminal": true,
 		})
 	}
@@ -100,29 +138,61 @@ func Build(opts Options, sites []Site) (obj, error) {
 	})
 
 	server := obj{"routes": routes}
+	servers := obj{"sites": server}
 	if opts.TLSMode == TLSOff {
 		server["listen"] = []string{fmt.Sprintf(":%d", opts.HTTPPort)}
 		server["automatic_https"] = obj{"disable": true}
 	} else {
 		server["listen"] = []string{fmt.Sprintf(":%d", opts.HTTPSPort)}
+		if len(ips) > 0 {
+			server["tls_connection_policies"] = []obj{{"default_sni": defaultSNI(ips)}}
+			// Caddy's automatic HTTP->HTTPS redirect drops a non-standard
+			// port and writes IPv6 addresses without brackets, so the
+			// addresses get their own redirects. Caddy still adds its
+			// redirects for domains to this server, after these routes.
+			var redirects []obj
+			for _, ip := range ips {
+				to := opts.panelURL()
+				if !redirect {
+					to = "https://" + hostPort(bracket(ip), opts.HTTPSPort, 443)
+				}
+				redirects = append(redirects, obj{
+					"match":    []obj{{"host": []string{ip}}},
+					"handle":   []obj{redirectTo(to + "{http.request.uri}")},
+					"terminal": true,
+				})
+			}
+			servers["ip_http"] = obj{"listen": []string{fmt.Sprintf(":%d", opts.HTTPPort)}, "routes": redirects}
+		}
 	}
 
 	apps := obj{
 		"http": obj{
 			"http_port":  opts.HTTPPort,
 			"https_port": opts.HTTPSPort,
-			"servers":    obj{"sites": server},
+			"servers":    servers,
 		},
+	}
+	var policies []obj
+	if len(ips) > 0 && opts.TLSMode != TLSOff {
+		// No public CA issues certificates for these addresses here; the
+		// internal CA does, whatever the mode.
+		policies = append(policies, obj{"subjects": ips, "issuers": []obj{{"module": "internal"}}})
 	}
 	switch opts.TLSMode {
 	case TLSInternal:
-		apps["tls"] = obj{"automation": obj{"policies": []obj{{"issuers": []obj{{"module": "internal"}}}}}}
-		// Never try to modify the system trust store from a daemon.
-		apps["pki"] = obj{"certificate_authorities": obj{"local": obj{"install_trust": false}}}
+		policies = append(policies, obj{"issuers": []obj{{"module": "internal"}}})
 	case TLSACME:
 		if opts.ACMEEmail != "" {
-			apps["tls"] = obj{"automation": obj{"policies": []obj{{"issuers": []obj{{"module": "acme", "email": opts.ACMEEmail}}}}}}
+			policies = append(policies, obj{"issuers": []obj{{"module": "acme", "email": opts.ACMEEmail}}})
 		}
+	}
+	if len(policies) > 0 {
+		apps["tls"] = obj{"automation": obj{"policies": policies}}
+	}
+	if opts.TLSMode == TLSInternal || (len(ips) > 0 && opts.TLSMode != TLSOff) {
+		// Never try to modify the system trust store from a daemon.
+		apps["pki"] = obj{"certificate_authorities": obj{"local": obj{"install_trust": false}}}
 	}
 
 	return obj{
@@ -130,4 +200,71 @@ func Build(opts Options, sites []Site) (obj, error) {
 		"storage": obj{"module": "file_system", "root": opts.StorageDir},
 		"apps":    apps,
 	}, nil
+}
+
+func proxyTo(upstream string) obj {
+	return obj{"handler": "reverse_proxy", "upstreams": []obj{{"dial": upstream}}}
+}
+
+func redirectTo(location string) obj {
+	return obj{"handler": "static_response", "status_code": 308, "headers": obj{"Location": []string{location}}}
+}
+
+// panelURL is the panel's address on its domain, without a trailing slash.
+func (o Options) panelURL() string {
+	if o.TLSMode == TLSOff {
+		return "http://" + hostPort(o.PanelDomain, o.HTTPPort, 80)
+	}
+	return "https://" + hostPort(o.PanelDomain, o.HTTPSPort, 443)
+}
+
+func hostPort(host string, port, standard int) string {
+	if port == standard || port == 0 {
+		return host
+	}
+	return host + ":" + strconv.Itoa(port)
+}
+
+func bracket(ip string) string {
+	if a, err := netip.ParseAddr(ip); err == nil && a.Is6() {
+		return "[" + ip + "]"
+	}
+	return ip
+}
+
+// canonicalIPs checks the addresses and returns them in canonical form,
+// sorted (IPv4 first) and without duplicates.
+func canonicalIPs(in []string) ([]string, error) {
+	var addrs []netip.Addr
+	for _, v := range in {
+		a, err := netip.ParseAddr(v)
+		if err != nil || a.Zone() != "" {
+			return nil, fmt.Errorf("%q is not an IP address", v)
+		}
+		addrs = append(addrs, a.Unmap())
+	}
+	sort.Slice(addrs, func(i, j int) bool { return addrs[i].Less(addrs[j]) })
+	var out []string
+	for i, a := range addrs {
+		if i == 0 || a != addrs[i-1] {
+			out = append(out, a.String())
+		}
+	}
+	return out, nil
+}
+
+// defaultSNI is the address whose certificate is served to clients that
+// send no SNI and reached an address Caddy has no certificate for (e.g.
+// behind NAT): the first public-looking IPv4, else the first public-looking
+// address, else the first one.
+func defaultSNI(ips []string) string {
+	for _, want4 := range []bool{true, false} {
+		for _, v := range ips {
+			a := netip.MustParseAddr(v)
+			if (!want4 || a.Is4()) && !a.IsLoopback() && !a.IsPrivate() {
+				return v
+			}
+		}
+	}
+	return ips[0]
 }

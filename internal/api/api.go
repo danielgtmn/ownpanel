@@ -46,6 +46,8 @@ var routeGroups = []func(*Server, *http.ServeMux){
 	(*Server).activityRoutes,
 	(*Server).uploadRoutes,
 	(*Server).dnsRoutes,
+	(*Server).settingsRoutes,
+	(*Server).redirectRoutes,
 }
 
 // Handler returns the API routes.

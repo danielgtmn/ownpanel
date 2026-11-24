@@ -38,6 +38,9 @@ Version ids come from `get_site`; a version id starts with a UTC timestamp. Erro
 | `create_upload_link` | `site` | Creates a one-time upload link for a `.zip` or `.tar.gz` of up to 512 MB. Returns `url`, `curl_command`, `expires_at`, `max_size_mb`. |
 | `make_version_live` | `site`, `version` (optional) | Switches to a kept version; without `version`, back to the version before the live one. Safe to repeat. |
 | `check_site_domains` | `site` | For each domain: `domain`, `state` (`points_here`, `points_elsewhere`, `no_record`, `lookup_failed`) and `found` (addresses it points to). Needs `-server-ip` to be configured; see [[DNS|DNS]]. |
+| `list_redirects` | `site` (optional) | Lists the redirects you can see, or only the path redirects of one site. Each with `id`, `owner`, `source_domain`, `source_path`, `target`, `code`, `keep_path`, `keep_query`, `created_at`. Read-only. See [[Redirects|Redirects]]. |
+| `set_redirect` | `id` (optional), `source_domain`, `source_path` (optional), `target`, `code` (optional, default 301), `keep_path`, `keep_query` (optional) | Creates a redirect, or replaces the one with `id`. Without `source_path` the whole domain redirects; with it, one path (`/old`) or a prefix (`/blog/*`) on a domain of one of your sites. Returns the redirect. |
+| `delete_redirect` | `id`, `confirm_source` | Deletes a redirect. `confirm_source` must equal its `source_domain` followed by its `source_path` (like `www.example.com` or `example.com/old`), otherwise nothing happens. |
 
 Tools that change something need a `write` token. Read-only tools are `list_sites`, `get_site` and `check_site_domains`.
 

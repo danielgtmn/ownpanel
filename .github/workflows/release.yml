@@ -1,0 +1,155 @@
+# Builds the release archives with scripts/package.sh and publishes them.
+# Two channels, one build:
+#   stable   a pushed tag v* becomes a GitHub release with that name
+#            ("latest"; tags with a hyphen such as v1.2.0-rc.1 become prereleases)
+#   nightly  every day at 03:00 UTC, if main has new commits since the last
+#            nightly: the rolling prerelease "nightly" (tag moved to the built
+#            commit, assets replaced; never "latest")
+# Run it by hand with "dry-run" to build without publishing (the archives are
+# kept as a workflow artifact), or with "nightly" to publish a nightly now.
+# install.sh downloads from these releases.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "dry-run: build only. nightly: publish the nightly prerelease (main only)."
+        type: choice
+        options: [dry-run, nightly]
+        default: dry-run
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # create releases, move the nightly tag
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Decide what to build
+        id: meta
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT: ${{ inputs.publish }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            push) mode=stable ;;
+            schedule) mode=nightly ;;
+            *) mode=${INPUT:-dry-run} ;;
+          esac
+          if [ "$mode" = stable ]; then
+            version=$REF_NAME
+          else
+            version="${mode/dry-run/dryrun}-$(date -u +%Y%m%d)-${SHA::7}"
+          fi
+          if [ "$mode" = nightly ] && [ "$REF" != refs/heads/main ]; then
+            echo "::error::Nightly builds are made from main; this run is on $REF."
+            exit 1
+          fi
+          skip=false
+          # Scheduled runs skip when the nightly tag already points at main.
+          # A manual run always builds, e.g. to repair a failed upload.
+          if [ "$EVENT" = schedule ]; then
+            last=$(gh api "repos/$GH_REPO/git/ref/tags/nightly" --jq .object.sha 2>/dev/null || true)
+            if [ "$last" = "$SHA" ]; then
+              echo "main has no new commits since the last nightly ($SHA); nothing to do."
+              skip=true
+            fi
+          fi
+          echo "Mode $mode, version $version, skip $skip"
+          {
+            echo "mode=$mode"
+            echo "version=$version"
+            echo "skip=$skip"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        if: steps.meta.outputs.skip != 'true'
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.meta.outputs.skip != 'true'
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build the archives
+        if: steps.meta.outputs.skip != 'true'
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: scripts/package.sh "$VERSION"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.meta.outputs.skip != 'true'
+        with:
+          name: ownpanel-${{ steps.meta.outputs.version }}
+          path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+          retention-days: 7
+
+      - name: Publish the stable release
+        if: steps.meta.outputs.skip != 'true' && steps.meta.outputs.mode == 'stable'
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          flags=(--verify-tag --title "$VERSION" --generate-notes)
+          case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$VERSION" dist/ownpanel_*.tar.gz dist/checksums.txt "${flags[@]}"
+
+      - name: Publish the nightly prerelease
+        if: steps.meta.outputs.skip != 'true' && steps.meta.outputs.mode == 'nightly'
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/$GH_REPO/git/ref/tags/nightly" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$SHA" -F force=true >/dev/null
+          else
+            gh api -X POST "repos/$GH_REPO/git/refs" -f ref=refs/tags/nightly -f sha="$SHA" >/dev/null
+          fi
+          notes="Automatic build of main at ${SHA} (${VERSION}). For testing, not for production.
+
+          Install or switch to it with:
+          curl -fsSL https://raw.githubusercontent.com/${GH_REPO}/main/install.sh | sudo bash -s -- --channel nightly"
+          if gh release view nightly >/dev/null 2>&1; then
+            gh release edit nightly --prerelease --latest=false --title "Nightly ${VERSION}" --notes "$notes"
+          else
+            gh release create nightly --verify-tag --prerelease --latest=false --title "Nightly ${VERSION}" --notes "$notes"
+          fi
+          old=$(gh release view nightly --json assets --jq '.assets[].name')
+          # New archives first, then checksums.txt, then the old archives go:
+          # checksums.txt never names a file that is missing.
+          gh release upload nightly dist/ownpanel_*.tar.gz --clobber
+          gh release upload nightly dist/checksums.txt --clobber
+          for asset in $old; do
+            if [ "$asset" != checksums.txt ] && [ ! -e "dist/$asset" ]; then
+              gh release delete-asset nightly "$asset" --yes
+            fi
+          done

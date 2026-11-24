@@ -30,7 +30,7 @@ With `secret.key` next to the database, anyone who has the archive can decrypt t
 
 ## Restore
 
-On a server installed with `deploy/install.sh` (see [[Installation|Installation]]). Stop both services, remove the old database files, unpack and fix the owners:
+On a server installed with `install.sh` (see [[Installation|Installation]]). Stop both services, remove the old database files, unpack and fix the owners:
 
 ```sh
 systemctl stop ownpaneld ownpanel-caddy

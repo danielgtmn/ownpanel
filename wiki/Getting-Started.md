@@ -46,10 +46,13 @@ While no user exists, ownpaneld writes a one-time **setup code** to `./data/setu
 1. Open the panel. It asks for the setup code.
 2. Choose the first admin's name (3 to 32 characters: lowercase letters, digits, dots, underscores, hyphens) and a password (10 to 200 characters).
 3. The setup code file is deleted and setup is closed for good.
+4. The setup steps follow: the panel's domain, the server's public addresses (the panel suggests the machine's own) and an optional e-mail address for certificates. A check shows whether the domain points at the server and whether a trusted certificate is in place. Finish the steps; with a domain set, the panel then moves to that domain.
 
 ```sh
 cat data/setup-code
 ```
+
+Locally, Caddy also serves the panel on `https://127.0.0.1:8443/` (self-signed certificate; `curl -k`), which is how a new server is opened by its address. After the setup is finished with a domain, that address redirects to the domain. Every setting can be changed later by an admin.
 
 ## Your first site
 

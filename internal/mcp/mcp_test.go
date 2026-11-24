@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -275,6 +276,9 @@ func TestToolsAndAnnotations(t *testing.T) {
 		"publish_files":      {},
 		"create_upload_link": {},
 		"check_site_domains": {readOnly: true, idempotent: true},
+		"list_redirects":     {readOnly: true, idempotent: true},
+		"set_redirect":       {destructive: true},
+		"delete_redirect":    {destructive: true},
 	}
 	got := map[string]bool{}
 	for _, tool := range res.Tools {
@@ -624,4 +628,33 @@ func TestCheckSiteDomains(t *testing.T) {
 		t.Fatalf("states %v, want %v", states, want)
 	}
 	refused(t, call_(t, cs, "check_site_domains", map[string]any{"site": "nope"}), "not found")
+}
+
+// A panel domain set later in the panel settings takes effect without a
+// restart.
+func TestPanelDomainFromSettings(t *testing.T) {
+	var svc atomic.Pointer[panel.Service]
+	e := newEnv(t, "", WithPanelDomainFunc(func() string {
+		if p := svc.Load(); p != nil {
+			return p.PanelDomain()
+		}
+		return ""
+	}))
+	svc.Store(e.svc)
+	cs := e.connect(t, e.write)
+	var out siteOutput
+	ok(t, call_(t, cs, "create_site", map[string]any{"name": "s", "domains": []string{}}), &out)
+	var link uploadLinkOutput
+	ok(t, call_(t, cs, "create_upload_link", map[string]any{"site": "s"}), &link)
+	if strings.HasPrefix(link.URL, "https://panel.example.com/") {
+		t.Fatalf("no panel domain yet: %q", link.URL)
+	}
+	domain := "panel.example.com"
+	if _, err := e.svc.UpdateSettings(context.Background(), e.admin, panel.SettingsUpdate{PanelDomain: &domain}); err != nil {
+		t.Fatal(err)
+	}
+	ok(t, call_(t, cs, "create_upload_link", map[string]any{"site": "s"}), &link)
+	if !strings.HasPrefix(link.URL, "https://panel.example.com/api/uploads/") {
+		t.Fatalf("the panel domain from the settings must be used: %q", link.URL)
+	}
 }

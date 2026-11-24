@@ -32,7 +32,14 @@ const instructions = "ownpanel is a hosting panel for static web sites: each sit
 	"require an explicit confirmation."
 
 type config struct {
-	panelDomain string
+	panelDomain func() string
+}
+
+func (c config) domain() string {
+	if c.panelDomain == nil {
+		return ""
+	}
+	return strings.ToLower(c.panelDomain())
 }
 
 // Option configures Handler.
@@ -43,7 +50,13 @@ type Option func(*config)
 // from the local web server are accepted despite the loopback listener, and
 // upload links are built on it.
 func WithPanelDomain(domain string) Option {
-	return func(c *config) { c.panelDomain = strings.ToLower(domain) }
+	return WithPanelDomainFunc(func() string { return domain })
+}
+
+// WithPanelDomainFunc is WithPanelDomain for a domain that can change while
+// running (set in the panel settings); "" means none.
+func WithPanelDomainFunc(domain func() string) Option {
+	return func(c *config) { c.panelDomain = domain }
 }
 
 // call is what the authentication step hands to a tool.
@@ -67,6 +80,7 @@ func Handler(p *panel.Service, version string, opts ...Option) http.Handler {
 		o(&cfg)
 	}
 	srv := newServer(p, version)
+	addRedirectTools(srv, p)
 	// Stateless: every request carries its own token, so there is no session
 	// to remember or to hijack.
 	sdkHandler := sdk.NewStreamableHTTPHandler(
@@ -125,15 +139,12 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 // that one Host the request is presented to the SDK as not coming through a
 // loopback listener; every other Host keeps the SDK's check.
 func panelHost(cfg config, next http.Handler) http.Handler {
-	if cfg.panelDomain == "" {
-		return next
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := strings.ToLower(r.Host)
 		if h, _, err := net.SplitHostPort(host); err == nil {
 			host = h
 		}
-		if host == cfg.panelDomain {
+		if d := cfg.domain(); d != "" && host == d {
 			// Documentation address (RFC 5737); only its not being loopback matters.
 			addr := &net.TCPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 443}
 			r = r.WithContext(context.WithValue(r.Context(), http.LocalAddrContextKey, net.Addr(addr)))
@@ -145,8 +156,8 @@ func panelHost(cfg config, next http.Handler) http.Handler {
 // baseURL is the address links should point to: the panel domain when it is
 // configured, else the address this request came in on.
 func baseURL(r *http.Request, cfg config) string {
-	if cfg.panelDomain != "" {
-		return "https://" + cfg.panelDomain
+	if d := cfg.domain(); d != "" {
+		return "https://" + d
 	}
 	scheme := "http"
 	if r.TLS != nil || (r.Header.Get("X-Forwarded-Proto") == "https" && peerIsLoopback(r)) {

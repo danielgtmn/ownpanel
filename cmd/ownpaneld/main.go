@@ -3,6 +3,7 @@
 //
 //	ownpaneld [serve] [flags]                    run the daemon
 //	ownpaneld backup -data <dir> -out <file>     write a backup archive
+//	ownpaneld version                            print the version
 package main
 
 import (
@@ -31,8 +32,8 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/webui"
 )
 
-// version is reported to MCP clients; release builds can set it with
-// -ldflags "-X main.version=...".
+// version is reported to MCP clients and by the version command; release
+// builds set it with -ldflags "-X main.version=..." (scripts/package.sh).
 var version = "dev"
 
 func main() {
@@ -47,8 +48,10 @@ func main() {
 		err = serve(args)
 	case "backup":
 		err = runBackup(args)
+	case "version":
+		fmt.Println(version)
 	default:
-		err = fmt.Errorf("unknown command %q (use serve or backup)", cmd)
+		err = fmt.Errorf("unknown command %q (use serve, backup or version)", cmd)
 	}
 	if err != nil {
 		slog.Error("fatal", "err", err)
@@ -80,12 +83,12 @@ func serve(args []string) error {
 		tlsMode     = fs.String("tls", caddy.TLSACME, "certificates: acme (public), internal (self-signed, for testing) or off")
 		httpPort    = fs.Int("http-port", 80, "port for HTTP")
 		httpsPort   = fs.Int("https-port", 443, "port for HTTPS")
-		acmeEmail   = fs.String("acme-email", "", "contact address given to the certificate authority (optional)")
-		panelDomain = fs.String("panel-domain", "", "serve the panel itself through Caddy on this domain (optional)")
+		acmeEmail   = fs.String("acme-email", "", "contact address given to the certificate authority (optional; overrides the panel settings)")
+		panelDomain = fs.String("panel-domain", "", "serve the panel itself through Caddy on this domain (optional; overrides the panel settings)")
 		interval    = fs.Duration("reconcile-interval", 30*time.Second, "how often the web server is re-synced in the background")
 	)
 	var serverIPFlags listFlag
-	fs.Var(&serverIPFlags, "server-ip", "public IPv4/IPv6 address of this server that domains should point at (repeatable or comma-separated)")
+	fs.Var(&serverIPFlags, "server-ip", "public IPv4/IPv6 address of this server that domains should point at (repeatable or comma-separated; overrides the panel settings)")
 	fs.Parse(args)
 
 	data, err := filepath.Abs(*dataDir)
@@ -103,13 +106,16 @@ func serve(args []string) error {
 		HTTPPort:    *httpPort,
 		HTTPSPort:   *httpsPort,
 		ACMEEmail:   *acmeEmail,
+		// The panel is always served through Caddy: on the server's IP
+		// addresses until set up, and on its domain.
+		PanelUpstream: dialAddress(*listen),
 	}
 	if *panelDomain != "" {
 		d, err := store.NormalizeDomain(*panelDomain)
 		if err != nil {
 			return fmt.Errorf("-panel-domain: %w", err)
 		}
-		opts.PanelDomain, opts.PanelUpstream = d, dialAddress(*listen)
+		opts.PanelDomain = d
 	}
 
 	serverIPs, err := panel.ParseServerIPs(serverIPFlags, *tlsMode == caddy.TLSInternal || *tlsMode == caddy.TLSOff)
@@ -159,13 +165,9 @@ func serve(args []string) error {
 	// Initial sync, then heal drift (e.g. Caddy restarted).
 	go svc.Run(ctx, *interval)
 
-	var mcpOpts []mcp.Option
-	if opts.PanelDomain != "" {
-		mcpOpts = append(mcpOpts, mcp.WithPanelDomain(opts.PanelDomain))
-	}
 	srv := &http.Server{
 		Addr:              *listen,
-		Handler:           compose((&api.Server{Panel: svc}).Handler(), webui.Handler(webui.FS()), mcp.Handler(svc, version, mcpOpts...)),
+		Handler:           compose((&api.Server{Panel: svc}).Handler(), webui.Handler(webui.FS()), mcp.Handler(svc, version, mcp.WithPanelDomainFunc(svc.PanelDomain))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -175,7 +177,7 @@ func serve(args []string) error {
 		_ = srv.Shutdown(shutdown)
 	}()
 
-	slog.Info("ownpaneld started", "listen", *listen, "data", data, "tls", *tlsMode, "panel_domain", opts.PanelDomain)
+	slog.Info("ownpaneld started", "listen", *listen, "data", data, "tls", *tlsMode, "panel_domain", svc.PanelDomain())
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

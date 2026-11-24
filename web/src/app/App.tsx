@@ -2,6 +2,8 @@ import { OverlayHost } from '@ui-sdk/react/overlays'
 import { useEffect, useSyncExternalStore } from 'react'
 import { ErrorState, LoadingState } from '../shared/ui/index.ts'
 import { getSessionState, loadSession, SessionProvider, subscribeSession } from '../shared/session/index.ts'
+import { screenFor } from './screen.ts'
+import { SetupWizard } from './setup/SetupWizard.tsx'
 import { SetupScreen } from './SetupScreen.tsx'
 import { Shell } from './Shell.tsx'
 import { SignInScreen } from './SignInScreen.tsx'
@@ -33,7 +35,7 @@ function Screen() {
     case 'signedIn':
       return (
         <SessionProvider user={state.user}>
-          <Shell />
+          {screenFor(state) === 'wizard' ? <SetupWizard /> : <Shell />}
         </SessionProvider>
       )
   }
