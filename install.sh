@@ -132,10 +132,16 @@ valid_domain() {
 
 # Questions go to the terminal, not to stdin: with "curl | bash" stdin is the
 # script itself. Only --purge asks.
+# Questions are only asked when the script reads from a terminal. When it is
+# piped in (curl … | sudo bash) its input is the script itself, and reading
+# /dev/tty instead hangs under sudo implementations that put the command on
+# a new pseudo-terminal without passing keystrokes on (sudo-rs, use_pty).
+interactive() { [ -t 0 ] && [ -t 1 ]; }
+
 ask() { # ask <prompt> -> answer on stdout
   local answer=""
-  printf '%s' "$1" >/dev/tty
-  read -r answer </dev/tty || true
+  printf '%s' "$1" >&2
+  read -r answer || true
   printf '%s' "$answer"
 }
 
@@ -705,7 +711,7 @@ do_uninstall() {
     say "This removes ownpanel and DELETES all its data: every site, the database,"
     say "certificates and the secret key in $DATA, and the settings in $ETC."
     if [ "$opt_yes" = 0 ]; then
-      (: </dev/tty) 2>/dev/null || die "--purge deletes all data; confirm with --yes when there is no terminal"
+      interactive || die "--purge deletes all data; add --yes to confirm (questions are not asked when the script is piped in)"
       confirm "Delete everything?" n || die "cancelled; nothing was changed"
     fi
   fi
