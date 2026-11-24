@@ -10,19 +10,35 @@
 # always come from GitHub and are checked against the release's checksums.txt.
 # See --help for all options. Everything runs from main() on the last line, so
 # a download that breaks off never runs half a script.
+#
+# update.sh (next to this file, and installed to /usr/local/lib/ownpanel)
+# loads this file with OWNPANEL_SOURCE_ONLY=1 to reuse the release lookup,
+# download and checks, and runs the installer of the new release to install
+# it: the file layout is only known here.
 set -euo pipefail
 
 REPO=${OWNPANEL_REPO:-danielgtmn/ownpanel}
+# Releases are looked up and downloaded through GitHub's API (tests point
+# this at a local fake).
+API=${OWNPANEL_API_URL:-https://api.github.com}
 
 BIN=/usr/local/bin
+LIB=/usr/local/lib/ownpanel
 UNITS=/etc/systemd/system
 ETC=/etc/ownpanel
 DATA=/var/lib/ownpanel
 ENV_FILE=$ETC/ownpaneld.env
 RELEASE_FILE=$ETC/release
 SETUP_CODE=$DATA/setup-code
+# Requests from the panel to the root-side updater (see ownpanel-update).
+UPDATE_DIR=$DATA/update
 DEFAULT_ARGS="-tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock"
 SERVICES=(ownpanel-caddy ownpaneld)
+UPDATE_UNITS=(ownpanel-update.service ownpanel-update.path ownpanel-update.timer)
+# Files of a release, relative to its directory.
+RELEASE_FILES=(ownpaneld caddy VERSION install.sh update.sh
+  deploy/ownpaneld.service deploy/ownpanel-caddy.service deploy/caddy-bootstrap.json
+  deploy/ownpanel-update deploy/ownpanel-update.service deploy/ownpanel-update.path deploy/ownpanel-update.timer)
 
 usage() {
   cat <<'EOF'
@@ -211,63 +227,170 @@ read_installed() {
   return 0
 }
 
-# Fetches the release into a temporary directory, or uses --from-dir. Sets src.
+# Fetches the release into a temporary directory, or uses --from-dir. Sets src
+# and new_version.
 get_release() {
   if [ -n "$opt_from_dir" ]; then
     [ -d "$opt_from_dir" ] || die "--from-dir: $opt_from_dir is not a directory"
     src=$(cd "$opt_from_dir" && pwd)
     step "Installing from $src"
   else
-    if [ -n "$opt_version" ]; then
-      tag=$opt_version
-    elif [ "$channel" = nightly ]; then
-      tag=nightly
-    else
-      tag=$(latest_stable_tag)
-    fi
-    step "Downloading ownpanel $tag ($channel) for linux/$arch"
-    local base="https://github.com/$REPO/releases/download/$tag" asset
-    curl -fsSL --retry 3 -o "$tmp/checksums.txt" "$base/checksums.txt" ||
-      die "could not download $base/checksums.txt (does the release $tag exist?)"
-    asset=$(awk -v a="$arch" '$2 ~ "^ownpanel_[A-Za-z0-9._-]+_linux_" a "\\.tar\\.gz$" { print $2 }' "$tmp/checksums.txt")
-    [ -n "$asset" ] && [ "$(printf '%s\n' "$asset" | wc -l)" -eq 1 ] ||
-      die "release $tag has no single archive for linux/$arch"
-    curl -fsSL --retry 3 -o "$tmp/$asset" "$base/$asset" || die "could not download $base/$asset"
-    (cd "$tmp" && grep -E "^[0-9a-f]{64}  $asset\$" checksums.txt | sha256sum -c --quiet -) ||
-      die "the checksum of $asset does not match checksums.txt; nothing was installed"
-    say "Checksum verified: $asset"
-    mkdir "$tmp/release"
-    tar -xzf "$tmp/$asset" -C "$tmp/release" --no-same-owner
-    src=$tmp/release/${asset%.tar.gz}
+    lookup_release "$(release_tag)"
+    fetch_release
   fi
+  check_release "${rel_version:-}"
+  if [ -n "$opt_from_dir" ]; then
+    case $new_version in nightly-*) channel=nightly ;; *) channel=stable ;; esac
+  fi
+}
 
-  local f
-  for f in ownpaneld caddy VERSION deploy/ownpaneld.service deploy/ownpanel-caddy.service deploy/caddy-bootstrap.json; do
+# release_tag: which release to look up: the --version, "nightly", or
+# "latest" (the newest stable release).
+release_tag() {
+  if [ -n "$opt_version" ]; then
+    case $opt_version in nightly*) echo nightly ;; *) echo "$opt_version" ;; esac
+  elif [ "$channel" = nightly ]; then
+    echo nightly
+  else
+    echo latest
+  fi
+}
+
+# json_flat prints every value of a JSON document on its own line as
+# "<path><TAB><value>", e.g. "assets[1].name<TAB>ownpanel_v1.2.3_linux_amd64.tar.gz".
+# Strings stay escaped. Enough for GitHub's answers, without needing jq.
+json_flat() {
+  awk '
+    { s = s $0 "\n" }
+    END {
+      n = length(s); i = 1; d = 0; ek = 0
+      while (i <= n) {
+        c = substr(s, i, 1)
+        if (c == "{" || c == "[") {
+          d++; t[d] = c; k[d] = ""; x[d] = 0; ek = (c == "{"); i++
+        } else if (c == "}" || c == "]") {
+          d--; i++
+        } else if (c == ",") {
+          if (t[d] == "[") x[d]++; else ek = 1
+          i++
+        } else if (c == ":") {
+          ek = 0; i++
+        } else if (c == "\"") {
+          j = i + 1; v = ""
+          while (j <= n) {
+            c = substr(s, j, 1)
+            if (c == "\\") { v = v substr(s, j, 2); j += 2; continue }
+            if (c == "\"") break
+            v = v c; j++
+          }
+          i = j + 1
+          if (t[d] == "{" && ek) k[d] = v; else emit(v)
+        } else if (c ~ /[ \t\r\n]/) {
+          i++
+        } else {
+          j = i
+          while (j <= n && substr(s, j, 1) !~ /[,}\] \t\r\n]/) j++
+          emit(substr(s, i, j - i)); i = j
+        }
+      }
+    }
+    function emit(v,   p, e) {
+      p = ""
+      for (e = 1; e <= d; e++) p = p (t[e] == "{" ? (e > 1 ? "." : "") k[e] : "[" x[e] "]")
+      print p "\t" v
+    }'
+}
+
+# json_get <flat> <path>: the value at path in json_flat output.
+json_get() { printf '%s\n' "$1" | awk -F '\t' -v p="$2" '$1 == p { print $2; exit }'; }
+
+# asset_id <flat> <name>: the id of the release asset called name.
+asset_id() {
+  printf '%s\n' "$1" | awk -F '\t' -v want="$2" '
+    { f = "" }
+    match($1, /^assets\[[0-9]+\]\./) { i = substr($1, 8, RLENGTH - 9); f = substr($1, RLENGTH + 1) }
+    f == "name" && $2 == want { hit[i] = 1 }
+    f == "id" { id[i] = $2 }
+    END { for (i in hit) if (id[i] ~ /^[0-9]+$/) print id[i] }' | head -n 1
+}
+
+# lookup_release <tag|latest>: asks GitHub's API about one release and sets
+# rel_tag, rel_version (the build in it), rel_archive (the archive for this
+# machine) and the ids of the archive and checksums.txt. Downloads then go
+# by asset id, so a moving tag (nightly) can never mix two builds.
+lookup_release() {
+  local what=$1 path flat name
+  if [ "$what" = latest ]; then path=releases/latest; else path=releases/tags/$what; fi
+  curl -fsSL --retry 3 --max-time 60 -H "Accept: application/vnd.github+json" \
+    -o "$tmp/release.json" "$API/repos/$REPO/$path" ||
+    if [ "$what" = latest ]; then
+      die "could not look up the latest release of $REPO (none published yet? try --channel nightly)"
+    else
+      die "could not look up the release $what of $REPO (does it exist?)"
+    fi
+  flat=$(json_flat <"$tmp/release.json")
+  rel_tag=$(json_get "$flat" tag_name)
+  [[ $rel_tag =~ ^[A-Za-z0-9._-]+$ ]] || die "could not read the release $what of $REPO"
+  if [ "$rel_tag" = nightly ]; then
+    # The nightly is one release whose title names the current build.
+    name=$(json_get "$flat" name)
+    rel_version=$(printf '%s\n' "$name" | grep -oE 'nightly-[0-9]{8}-[0-9a-f]+' | head -n 1 || true)
+    [ -n "$rel_version" ] || die "could not tell which build the nightly release holds (title: '$name')"
+    if [ -n "${opt_version:-}" ] && [ "$opt_version" != "$rel_version" ]; then
+      die "$opt_version is no longer available; the nightly release now holds $rel_version"
+    fi
+  else
+    rel_version=$rel_tag
+  fi
+  rel_archive=ownpanel_${rel_version}_linux_${arch}.tar.gz
+  rel_archive_id=$(asset_id "$flat" "$rel_archive")
+  rel_sums_id=$(asset_id "$flat" checksums.txt)
+  if [ -z "$rel_archive_id" ] || [ -z "$rel_sums_id" ]; then
+    die "the release $rel_tag ($rel_version) has no $rel_archive and checksums.txt yet; it may be being published right now, try again in a few minutes"
+  fi
+}
+
+# download_asset <id> <file>
+download_asset() {
+  curl -fsSL --retry 3 --max-time 600 -H "Accept: application/octet-stream" \
+    -o "$2" "$API/repos/$REPO/releases/assets/$1"
+}
+
+# fetch_release: downloads and checks the release found by lookup_release
+# and unpacks it. Sets src.
+fetch_release() {
+  step "Downloading ownpanel $rel_version ($channel) for linux/$arch"
+  download_asset "$rel_sums_id" "$tmp/checksums.txt" || die "could not download checksums.txt of $rel_tag"
+  grep -qE "^[0-9a-f]{64}  $rel_archive\$" "$tmp/checksums.txt" ||
+    die "checksums.txt of $rel_tag does not list $rel_archive; the release may be being published right now, try again in a few minutes"
+  download_asset "$rel_archive_id" "$tmp/$rel_archive" || die "could not download $rel_archive"
+  (cd "$tmp" && grep -E "^[0-9a-f]{64}  $rel_archive\$" checksums.txt | sha256sum -c --quiet -) ||
+    die "the checksum of $rel_archive does not match checksums.txt; nothing was installed"
+  say "Checksum verified: $rel_archive"
+  mkdir "$tmp/release"
+  tar -xzf "$tmp/$rel_archive" -C "$tmp/release" --no-same-owner
+  src=$tmp/release/${rel_archive%.tar.gz}
+}
+
+# check_release [version]: src is a complete release for this machine (and
+# holds that version). Sets new_version.
+check_release() {
+  local f want
+  for f in "${RELEASE_FILES[@]}"; do
     [ -f "$src/$f" ] || die "$src is not an ownpanel release: $f is missing"
   done
   new_version=$(tr -d '[:space:]' <"$src/VERSION")
+  if [ -n "${1:-}" ] && [ "$new_version" != "$1" ]; then
+    die "the downloaded archive holds $new_version, not $1; nothing was installed"
+  fi
   # The ELF machine field (byte 18): 3e is x86-64, b7 is AArch64. Checked
   # because a system with emulation would run the wrong build, slowly.
-  local want
   want=$([ "$arch" = amd64 ] && echo 3e || echo b7)
   for f in ownpaneld caddy; do
     [ "$(od -An -tx1 -j18 -N1 "$src/$f" | tr -d ' ')" = "$want" ] ||
       die "$src/$f is not built for linux/$arch"
   done
   "$src/ownpaneld" version >/dev/null 2>&1 || die "$src/ownpaneld does not run on this machine"
-  if [ -n "$opt_from_dir" ]; then
-    case $new_version in nightly-*) channel=nightly ;; *) channel=stable ;; esac
-  fi
-}
-
-latest_stable_tag() {
-  local json t
-  json=$(curl -fsSL --retry 3 -H "Accept: application/vnd.github+json" \
-    "https://api.github.com/repos/$REPO/releases/latest") ||
-    die "could not look up the latest release of $REPO (none published yet? try --channel nightly)"
-  t=$(printf '%s' "$json" | sed -n 's/^ *"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)
-  [[ $t =~ ^[A-Za-z0-9._-]+$ ]] || die "could not read the latest release of $REPO"
-  printf '%s' "$t"
 }
 
 # is_public_ip <addr>: roughly the rule ownpaneld applies to -server-ip. Only
@@ -385,8 +508,11 @@ plan_changes() {
     [ -n "$old_channel" ] && [ "$old_channel" != "$channel" ] && changes+=("channel $old_channel -> $channel")
     cmp -s "$src/ownpaneld" "$BIN/ownpaneld" || [ "$old_version" != "$new_version" ] || changes+=("ownpaneld binary replaced")
     cmp -s "$src/caddy" "$BIN/caddy" || changes+=("Caddy $(caddy_version "$BIN/caddy") -> $(caddy_version "$src/caddy")")
-    for f in ownpaneld.service ownpanel-caddy.service; do
+    for f in ownpaneld.service ownpanel-caddy.service "${UPDATE_UNITS[@]}"; do
       cmp -s "$src/deploy/$f" "$UNITS/$f" || changes+=("unit file $f updated")
+    done
+    for f in install.sh update.sh deploy/ownpanel-update; do
+      cmp -s "$src/$f" "$LIB/${f#deploy/}" || changes+=("$LIB/${f#deploy/} updated")
     done
     cmp -s "$src/deploy/caddy-bootstrap.json" "$ETC/caddy-bootstrap.json" || changes+=("Caddy bootstrap file updated")
     [ "$old_args" != "$new_args" ] && changes+=("settings: OWNPANELD_ARGS=$old_args" "       -> OWNPANELD_ARGS=$new_args")
@@ -408,9 +534,23 @@ install_files() {
 
   install -m 0755 "$src/ownpaneld" "$src/caddy" "$BIN/"
   install -m 0644 "$src/deploy/ownpaneld.service" "$src/deploy/ownpanel-caddy.service" "$UNITS/"
+  # The updater: update.sh, the installer it loads, and the root-side worker
+  # that carries out update requests from the panel. install replaces files
+  # by unlinking them first, so an update.sh running this installer is not
+  # affected.
+  install -d -m 0755 "$LIB"
+  install -m 0755 "$src/install.sh" "$src/update.sh" "$src/deploy/ownpanel-update" "$LIB/"
+  local u
+  for u in "${UPDATE_UNITS[@]}"; do
+    install -m 0644 "$src/deploy/$u" "$UNITS/"
+  done
 
   install -d -m 0755 -o ownpanel -g ownpanel "$DATA"
   install -d -m 0700 -o caddy -g caddy "$DATA/caddy" "$DATA/caddy-home"
+  # The panel (group ownpanel) may create files here: requests for an update
+  # and the automatic update setting. The sticky bit keeps it from replacing
+  # or deleting the status file root writes into it.
+  install -d -m 1770 -o root -g ownpanel "$UPDATE_DIR"
   install -d -m 0755 "$ETC"
   install -m 0644 "$src/deploy/caddy-bootstrap.json" "$ETC/caddy-bootstrap.json"
   # The files hold flags and the version, no secrets.
@@ -426,6 +566,7 @@ install_files() {
 
   systemctl daemon-reload
   systemctl enable --now "${SERVICES[@]}" 2>&1 | grep -v '^Created symlink' || true
+  systemctl enable --now ownpanel-update.path ownpanel-update.timer 2>&1 | grep -v '^Created symlink' || true
 }
 
 open_firewall() {
@@ -452,15 +593,23 @@ listen_addr() {
   printf '%s' "$l"
 }
 
-wait_ready() {
+# panel_ready <seconds>: whether the panel answers within that time.
+panel_ready() {
   local addr i
   addr=$(listen_addr)
-  for ((i = 0; i < 60; i++)); do
+  for ((i = 0; i < $1; i++)); do
     if curl -fsS -o /dev/null --max-time 2 "http://$addr/api/session" 2>/dev/null; then
       return 0
     fi
     sleep 1
   done
+  return 1
+}
+
+wait_ready() {
+  local addr
+  addr=$(listen_addr)
+  panel_ready 60 && return 0
   systemctl --no-pager --lines=0 status "${SERVICES[@]}" >&2 || true
   journalctl --no-pager -u ownpaneld -n 20 >&2 || true
   die "the panel did not answer on http://$addr within 60 seconds (see the log above: journalctl -u ownpaneld)"
@@ -563,6 +712,13 @@ do_uninstall() {
 
   step "Removing ownpanel"
   local s
+  for s in ownpanel-update.path ownpanel-update.timer ownpanel-update.service; do
+    if [ -f "$UNITS/$s" ]; then
+      systemctl disable --now "$s" 2>&1 | grep -v '^Removed' || true
+      rm -f "$UNITS/$s"
+      say "Removed $s"
+    fi
+  done
   for s in ownpaneld ownpanel-caddy; do
     if [ -f "$UNITS/$s.service" ]; then
       systemctl disable --now "$s" 2>&1 | grep -v '^Removed' || true
@@ -577,9 +733,13 @@ do_uninstall() {
       say "Removed $BIN/$s"
     fi
   done
+  if [ -d "$LIB" ]; then
+    rm -rf "$LIB"
+    say "Removed $LIB"
+  fi
 
   if [ "$opt_purge" = 1 ]; then
-    rm -rf "$DATA" "$ETC"
+    rm -rf "$DATA" "$ETC" /var/lib/ownpanel-update
     say "Deleted $DATA and $ETC"
     if id -u ownpanel >/dev/null 2>&1; then userdel ownpanel && say "Removed user ownpanel"; fi
     # The caddy user may belong to a Caddy package; only remove ours.
@@ -603,4 +763,8 @@ main() {
   fi
 }
 
-main "$@"
+# update.sh loads this file for its functions only.
+if [ "${OWNPANEL_SOURCE_ONLY:-0}" != 1 ]; then
+  main "$@"
+  exit $?
+fi

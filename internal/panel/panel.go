@@ -67,6 +67,9 @@ type Config struct {
 	// unlike a recursive resolver that caches "no such domain" for an hour),
 	// falling back to the system resolver.
 	Resolver dns.Resolver
+	// Updates says where new releases come from and where the root-side
+	// updater picks up requests. Without Dir, updates are not offered.
+	Updates UpdatesConfig
 }
 
 // Service owns every use case of the panel.
@@ -101,6 +104,8 @@ type Service struct {
 	interfaces    func() ([]netip.Addr, error)
 	certRoots     *x509.CertPool
 	certAddr      string
+
+	updates *updater
 }
 
 // New returns a Service. It rejects invalid web server options up front, and
@@ -126,6 +131,7 @@ func New(cfg Config) (*Service, error) {
 		interfaces:     cfg.Interfaces,
 		certRoots:      cfg.CertRoots,
 		certAddr:       cfg.CertCheckAddr,
+		updates:        newUpdater(cfg.Updates),
 	}
 	if s.interfaces == nil {
 		s.interfaces = DetectAddresses

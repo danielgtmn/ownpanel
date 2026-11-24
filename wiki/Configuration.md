@@ -25,6 +25,7 @@ On a server installed with `install.sh`, flags live in `/etc/ownpanel/ownpaneld.
 | `-acme-email` | empty | Contact address given to the certificate authority. Optional; only used with `-tls acme`. Overrides the panel settings (see below). |
 | `-panel-domain` | empty | Serve the panel itself through Caddy on this domain, with a certificate like any site. The domain cannot also be used by a site. Also makes `/mcp` reachable on that domain and builds upload links on it. Overrides the panel settings (see below). |
 | `-reconcile-interval` | `30s` | How often the web server is re-synced in the background (a Go duration such as `30s` or `1m`). |
+| `-releases-api` | `https://api.github.com` | Where the panel looks for new releases ([[Installation|Installation#updating]]). Only change it for testing. |
 | `-server-ip` | none | Public IPv4/IPv6 address of this server that domains should point at. Repeat the flag or separate values with commas. Must be a public address unless `-tls` is `internal` or `off`. Overrides the panel settings (see below). Without addresses (here or in the settings) the domain status and "point to this server" are unavailable. |
 
 `-listen` with a wildcard host (`:8600`, `0.0.0.0:8600`) is reached by Caddy through `127.0.0.1`. The daemon does not terminate TLS itself; Caddy serves the panel over HTTPS on the panel domain and, during setup, on the server's addresses (see [[Security|Security]]).

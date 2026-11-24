@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# The root side of updates from the panel, run by ownpanel-update.service.
+#
+# The panel (user ownpanel) cannot update itself: it may only leave a request
+# in /var/lib/ownpanel/update. This worker
+#   1. takes request.json away from the panel (moves it into a root-only
+#      directory) and accepts exactly {"id","channel"} or {"id","version"}
+#      with the few values allowed; anything else is refused and reported,
+#   2. runs update.sh with only those values,
+#   3. without a request (the timer): reads auto.json the same way and, when
+#      automatic updates are on and the time is inside the window, updates
+#      once a day if a newer version of the installed channel exists.
+# Progress and the result go to status.json, which the panel reads.
+set -euo pipefail
+
+LIB=${OWNPANEL_LIB:-/usr/local/lib/ownpanel}
+DIR=${OWNPANEL_UPDATE_DIR:-/var/lib/ownpanel/update}
+RELEASE_FILE=${OWNPANEL_RELEASE_FILE:-/etc/ownpanel/release}
+STATE=${STATE_DIRECTORY:-/var/lib/ownpanel-update}
+# Requests are moved here to be read: root-only, and usually on the same file
+# system, so the move is a rename.
+WORK=$STATE/incoming
+STATUS=$DIR/status.json
+MAX_BYTES=512
+
+log() { printf '%s\n' "$*" >&2; }
+
+# write_status <state> <message>: a finished status without an update run.
+write_status() {
+  local now tmpf
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  tmpf=$(mktemp "$DIR/.status.XXXXXX")
+  printf '{"id":"%s","state":"%s","step":"","message":"%s","started_at":"%s","finished_at":"%s","from":"","to":""}\n' \
+    "${req_id:-}" "$1" "$2" "$now" "$now" >"$tmpf"
+  chmod 0640 "$tmpf"
+  chgrp ownpanel "$tmpf" 2>/dev/null || true
+  mv -f "$tmpf" "$STATUS"
+}
+
+# take <name>: moves DIR/<name> into the private work directory and prints
+# its content with whitespace removed. Fails for anything but a small regular
+# file owned by the panel's user. The move comes first, so the panel cannot
+# swap the file for a link to something else after it was checked.
+take() {
+  local f=$DIR/$1 copy owner size
+  [ -e "$f" ] || [ -L "$f" ] || return 2
+  if [ ! -L "$f" ] && [ "$(stat -c %s "$f")" -gt "$MAX_BYTES" ]; then rm -f "$f"; return 1; fi
+  copy=$(mktemp "$WORK/$1.XXXXXX")
+  rm -f "$copy"
+  mv -f -- "$f" "$copy" || return 1
+  if [ -L "$copy" ] || [ ! -f "$copy" ]; then
+    rm -f "$copy"
+    return 1
+  fi
+  owner=$(stat -c %U "$copy")
+  size=$(stat -c %s "$copy")
+  if [ "$owner" != ownpanel ] && [ "$owner" != root ]; then rm -f "$copy"; return 1; fi
+  if [ "$size" -gt "$MAX_BYTES" ]; then rm -f "$copy"; return 1; fi
+  tr -d ' \t\r\n' <"$copy"
+  rm -f "$copy"
+}
+
+# read_auto: sets auto_mode, auto_from and auto_to (minutes since midnight)
+# from auto.json; off if it is missing or not valid. The panel keeps its own
+# copy, so the file is read in place, but through the same checks.
+read_auto() {
+  auto_mode=off
+  local f=$DIR/auto.json body re
+  [ -f "$f" ] && [ ! -L "$f" ] || return 0
+  [ "$(stat -c %s "$f")" -le "$MAX_BYTES" ] || { log "auto.json is too large; ignored"; return 0; }
+  body=$(head -c "$MAX_BYTES" "$f" | tr -d ' \t\r\n')
+  re='^\{"mode":"(off|stable|nightly)","window":"([01][0-9]|2[0-3]):([0-5][0-9])-([01][0-9]|2[0-3]):([0-5][0-9])"\}$'
+  if ! [[ $body =~ $re ]]; then
+    log "auto.json is not valid; automatic updates stay off"
+    return 0
+  fi
+  auto_mode=${BASH_REMATCH[1]}
+  auto_from=$((10#${BASH_REMATCH[2]} * 60 + 10#${BASH_REMATCH[3]}))
+  auto_to=$((10#${BASH_REMATCH[4]} * 60 + 10#${BASH_REMATCH[5]}))
+}
+
+installed_channel() { sed -n 's/^channel=//p' "$RELEASE_FILE" | tail -n 1; }
+
+run_request() {
+  local body re_channel re_version rc=0
+  req_id=""
+  body=$(take request.json) || rc=$?
+  [ "$rc" = 2 ] && return 1
+  re_channel='^\{"id":"([0-9a-f]{32})","channel":"(stable|nightly)"\}$'
+  re_version='^\{"id":"([0-9a-f]{32})","version":"(v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4})"\}$'
+  if [ "$rc" = 0 ] && [[ $body =~ $re_channel ]]; then
+    req_id=${BASH_REMATCH[1]}
+    set -- --channel "${BASH_REMATCH[2]}"
+  elif [ "$rc" = 0 ] && [[ $body =~ $re_version ]]; then
+    req_id=${BASH_REMATCH[1]}
+    set -- --version "${BASH_REMATCH[2]}"
+  else
+    # The content is never echoed: it may be anything.
+    log "refused an update request that is not valid"
+    write_status failed "The update request was not valid and was ignored."
+    return 0
+  fi
+  log "update requested from the panel: $*"
+  "$LIB/update.sh" --yes --status-file "$STATUS" --request-id "$req_id" "$@" || log "update.sh failed (exit $?)"
+  return 0
+}
+
+run_auto() {
+  local now channel today rc=0
+  read_auto
+  [ "$auto_mode" != off ] || return 0
+  channel=$(installed_channel)
+  if [ "$auto_mode" != "$channel" ]; then
+    log "automatic updates follow $auto_mode, but $channel is installed; nothing to do"
+    return 0
+  fi
+  now=$((10#$(date +%H) * 60 + 10#$(date +%M)))
+  if [ "$auto_from" -le "$auto_to" ]; then
+    [ "$now" -ge "$auto_from" ] && [ "$now" -lt "$auto_to" ] || return 0
+  else
+    [ "$now" -ge "$auto_from" ] || [ "$now" -lt "$auto_to" ] || return 0
+  fi
+  today=$(date +%F)
+  [ "$(cat "$STATE/auto-last" 2>/dev/null || true)" != "$today" ] || return 0
+  echo "$today" >"$STATE/auto-last"
+  "$LIB/update.sh" --check --channel "$channel" >&2 || rc=$?
+  case $rc in
+    0) log "automatic update: already up to date" ;;
+    10)
+      log "automatic update: a newer version is available"
+      req_id=auto
+      "$LIB/update.sh" --yes --channel "$channel" --status-file "$STATUS" --request-id auto ||
+        log "update.sh failed (exit $?)" ;;
+    *) log "automatic update: could not check for updates (exit $rc)" ;;
+  esac
+}
+
+main() {
+  [ "$(id -u)" = 0 ] || { log "must run as root"; exit 1; }
+  install -d -m 0700 "$STATE" "$WORK"
+  local handled=0
+  # A new request may arrive while one runs; the panel refuses that, but take
+  # whatever is there.
+  while run_request; do handled=1; done
+  [ "$handled" = 1 ] || run_auto
+}
+
+main "$@"
+exit $?

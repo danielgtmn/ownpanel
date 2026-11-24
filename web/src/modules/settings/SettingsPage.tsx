@@ -17,6 +17,7 @@ import {
 } from '../../shared/settings/index.ts'
 import { ErrorState, LoadingState, PageHeader, Section } from '../../shared/ui/index.ts'
 import { ipAccessNotice } from './rules.ts'
+import { UpdatesSection } from './UpdatesSection.tsx'
 
 function AddressesSection({ settings, onSaved }: { settings: PanelSettings; onSaved: (next: PanelSettings) => void }) {
   const [selected, setSelected] = useState(() => initialAddressSelection(settings))
@@ -87,6 +88,7 @@ function Loaded({ initial }: { initial: PanelSettings }) {
       <Section title="Certificate notices">
         <CertificateEmailForm settings={settings} onSaved={setSettings} />
       </Section>
+      <UpdatesSection />
     </>
   )
 }
