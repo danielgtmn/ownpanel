@@ -1,20 +1,25 @@
 # Builds the release archives with scripts/package.sh and publishes them.
 # Two channels, one build:
-#   stable   a pushed tag v* becomes a GitHub release with that name
-#            ("latest"; tags with a hyphen such as v1.2.0-rc.1 become prereleases)
-#   nightly  every day at 03:00 UTC, if main has new commits since the last
-#            nightly: the rolling prerelease "nightly" (tag moved to the built
-#            commit, assets replaced; never "latest")
+#   nightly  every push to main (every merged pull request): the rolling
+#            prerelease "nightly" (tag moved to the built commit, assets
+#            replaced; never "latest"). Skipped if the nightly tag already
+#            points at that commit.
+#   stable   every push to the branch release (a merged pull request
+#            main -> release): the tag job computes the next version from the
+#            Conventional Commits since the last v* tag (fix: patch, feat:
+#            minor, feat!: or BREAKING CHANGE: major) and pushes the tag
+#            v<version>; the release job publishes it as "latest". A push
+#            without such commits releases nothing.
 # Run it by hand with "dry-run" to build without publishing (the archives are
 # kept as a workflow artifact), or with "nightly" to publish a nightly now.
-# install.sh downloads from these releases.
+# If a stable release fails after its tag was pushed, use "Re-run failed
+# jobs": re-running the tag job finds the tag already there and releases
+# nothing. install.sh downloads from these releases.
 name: Release
 
 on:
   push:
-    tags: ["v*"]
-  schedule:
-    - cron: "0 3 * * *"
+    branches: [main, release]
   workflow_dispatch:
     inputs:
       publish:
@@ -31,7 +36,51 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  tag:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # push the tag v<version>
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      previous-version: ${{ steps.version.outputs.previous-version }}
+      tag-created: ${{ steps.version.outputs.tag-created }}
+    steps:
+      # The full history and all tags to find the last release; the action
+      # pushes the new tag with the credentials checkout leaves behind.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: wemogy/get-release-version-action@ce83cb81cc4a9b120ff773b0f6c7be0d6ce0f9cf # v4.3.7
+        id: version
+        with:
+          prefix: v
+          git-username: github-actions[bot]
+          git-email: 41898282+github-actions[bot]@users.noreply.github.com
+
+      - name: Report
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PREVIOUS: ${{ steps.version.outputs.previous-version }}
+          CREATED: ${{ steps.version.outputs.tag-created }}
+        run: |
+          if [ "$CREATED" = true ]; then
+            echo "Releasing v$VERSION (previous: ${PREVIOUS:+v}${PREVIOUS:-none})." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No feat: or fix: commits since ${PREVIOUS:+v}${PREVIOUS:-the start}; nothing to release." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
   release:
+    needs: tag
+    # After the tag job only if it pushed a tag; without it (main, manual
+    # runs) always.
+    if: >-
+      !cancelled() &&
+      (needs.tag.result == 'skipped' ||
+       (needs.tag.result == 'success' && needs.tag.outputs.tag-created == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -51,16 +100,18 @@ jobs:
           EVENT: ${{ github.event_name }}
           INPUT: ${{ inputs.publish }}
           REF: ${{ github.ref }}
-          REF_NAME: ${{ github.ref_name }}
+          TAG_VERSION: ${{ needs.tag.outputs.version }}
         run: |
           set -euo pipefail
-          case "$EVENT" in
-            push) mode=stable ;;
-            schedule) mode=nightly ;;
+          case "$EVENT/$REF" in
+            push/refs/heads/main) mode=nightly ;;
+            push/refs/heads/release) mode=stable ;;
+            push/*) echo "::error::Unexpected push to $REF."; exit 1 ;;
             *) mode=${INPUT:-dry-run} ;;
           esac
           if [ "$mode" = stable ]; then
-            version=$REF_NAME
+            [ -n "$TAG_VERSION" ] || { echo "::error::The tag job reported no version."; exit 1; }
+            version=v$TAG_VERSION
           else
             version="${mode/dry-run/dryrun}-$(date -u +%Y%m%d)-${SHA::7}"
           fi
@@ -69,12 +120,12 @@ jobs:
             exit 1
           fi
           skip=false
-          # Scheduled runs skip when the nightly tag already points at main.
+          # A push to main skips when the nightly tag already points at it.
           # A manual run always builds, e.g. to repair a failed upload.
-          if [ "$EVENT" = schedule ]; then
+          if [ "$mode" = nightly ] && [ "$EVENT" = push ]; then
             last=$(gh api "repos/$GH_REPO/git/ref/tags/nightly" --jq .object.sha 2>/dev/null || true)
             if [ "$last" = "$SHA" ]; then
-              echo "main has no new commits since the last nightly ($SHA); nothing to do."
+              echo "The nightly is already built from $SHA; nothing to do."
               skip=true
             fi
           fi
@@ -117,10 +168,25 @@ jobs:
         if: steps.meta.outputs.skip != 'true' && steps.meta.outputs.mode == 'stable'
         env:
           VERSION: ${{ steps.meta.outputs.version }}
+          PREVIOUS: ${{ needs.tag.outputs.previous-version }}
         run: |
           set -euo pipefail
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            # A re-run: same tag, same archive names; replace them.
+            echo "Release $VERSION exists; uploading the archives again."
+            gh release upload "$VERSION" dist/ownpanel_*.tar.gz --clobber
+            gh release upload "$VERSION" dist/checksums.txt --clobber
+            exit 0
+          fi
+          # Notes list the pull requests merged since the previous release.
           flags=(--verify-tag --title "$VERSION" --generate-notes)
-          case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
+          if [ -n "$PREVIOUS" ] && [ "v$PREVIOUS" != "$VERSION" ]; then
+            flags+=(--notes-start-tag "v$PREVIOUS")
+          fi
+          case "$VERSION" in
+            *-*) flags+=(--prerelease --latest=false) ;;
+            *) flags+=(--latest) ;;
+          esac
           gh release create "$VERSION" dist/ownpanel_*.tar.gz dist/checksums.txt "${flags[@]}"
 
       - name: Publish the nightly prerelease

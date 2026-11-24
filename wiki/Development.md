@@ -33,6 +33,7 @@ cd web && npm test -- --run    # once
 cd web && npm run lint         # oxlint
 cd web && npm run build        # type check, then bundle
 INSECURE=1 scripts/smoke.sh    # end-to-end against a running scripts/dev.sh
+scripts/commit-type_test.sh    # the commit message check
 ```
 
 `scripts/smoke.sh` signs in (or does the first-run setup), creates a site, deploys, redeploys, rolls back, checks that a malicious archive and a cookie request without the header are refused, then deletes the site. Its options (`API`, `DOMAIN`, `WEB`, `HTTP_PORT`, `HTTPS_PORT`, `SITE`, `CERT_WAIT`, `SETUP_CODE_FILE`, `ADMIN_NAME`, `ADMIN_PASSWORD`, `OWNPANEL_TOKEN`, `KEEP`, `INSECURE`) are documented at the top of the script.
@@ -56,3 +57,13 @@ Two tests talk to real services and are behind the `live` build tag, so `go test
 - **Error messages** from `internal/panel` are meant to be shown to people as they are; internal errors are logged, never sent to clients.
 - **Database changes** are new numbered files in `internal/store/migrations/`; they are applied at start.
 - Release builds can set the reported version: `-ldflags "-X main.version=…"`.
+- **Commit messages and pull request titles** follow [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <description>`, scope optional, types `feat`, `fix`, `perf`, `docs`, `chore`, `ci`, `refactor`, `test`, `build`, e.g. `feat(dns): add Hetzner zones`. The version of a stable release is computed from them (see [Releases](#releases)). Pull requests are merged with a merge commit, so the version comes from the individual commits, not from the title: write every commit that lands on `main` in this format. The required check `commits` checks the title and every commit of a pull request into `main`; reword commits that fail with `git rebase -i`. Pull requests into `release` only warn about older commits and show which release the merge will make.
+
+## Releases
+
+Two channels, both built by `.github/workflows/release.yml` with `scripts/package.sh` (see [[Installation|Installation#release-channels]]):
+
+- **Nightly:** every push to `main`, that is every merged pull request, rebuilds the prerelease `nightly`: the tag `nightly` moves to the new commit, the archives are replaced, the version is `nightly-YYYYMMDD-<commit>`. Never marked "latest".
+- **Stable:** releases are made from the long-lived branch `release`. To release, open a pull request `main → release` and merge it with a merge commit. The push to `release` starts the workflow: its `tag` job reads the commits since the last `v*` tag and computes the next version, `fix:`/`perf:` the patch, `feat:` the minor and `feat!:` (or a `BREAKING CHANGE:` line) the major version, and pushes the tag `v<version>`. The `release` job then builds and publishes it as the "latest" release, with notes listing the pull requests merged since the previous tag. A push without `feat:`, `fix:` or `perf:` commits releases nothing. The `commits` check on that pull request shows which release it will make.
+
+Pull requests and pushes to `release` run CI like `main`. If a stable release fails after its tag was pushed, use "Re-run failed jobs" on the run (re-running the `tag` job finds the tag and releases nothing). The workflow can also be started by hand: `dry-run` builds the archives without publishing (kept as a workflow artifact for 7 days), `nightly` publishes a nightly from `main` now.
