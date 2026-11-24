@@ -12,14 +12,29 @@
 #            without such commits releases nothing.
 # Run it by hand with "dry-run" to build without publishing (the archives are
 # kept as a workflow artifact), or with "nightly" to publish a nightly now.
+# Pushes that only touch documentation, the wiki or other workflows publish
+# nothing: only changes to what ends up in the archives trigger a build.
 # If a stable release fails after its tag was pushed, use "Re-run failed
 # jobs": re-running the tag job finds the tag already there and releases
 # nothing. install.sh downloads from these releases.
-name: Release
+name: Publish
 
 on:
   push:
     branches: [main, release]
+    # Only what is built into the archives or decides how they are built.
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "web/**"
+      - "!web/**/*.md"
+      - "go.mod"
+      - "go.sum"
+      - "install.sh"
+      - "deploy/**"
+      - "scripts/package.sh"
+      - "Makefile"
+      - ".github/workflows/release.yml"
   workflow_dispatch:
     inputs:
       publish:
@@ -74,6 +89,7 @@ jobs:
           fi
 
   release:
+    name: ${{ github.ref == 'refs/heads/release' && 'stable release' || (github.event_name == 'push' && 'nightly' || 'manual build') }}
     needs: tag
     # After the tag job only if it pushed a tag; without it (main, manual
     # runs) always.
