@@ -13,6 +13,7 @@
 | `make web` | Builds the web app into `internal/webui/dist` (installs dependencies if needed) |
 | `make build` | `make web`, then `go build -tags webui -o bin/ownpaneld ./cmd/ownpaneld`: a binary with the web interface embedded |
 | `make build-linux` | `make web`, then the same for Linux, amd64, `CGO_ENABLED=0`: `bin/linux-amd64/ownpaneld` |
+| `make package VERSION=v1.2.3` | `scripts/package.sh`: release archives for linux/amd64 and linux/arm64 plus `checksums.txt` in `dist/`, exactly as the release workflow builds them (Caddy is downloaded from its official release and checked against a pinned SHA-512) |
 | `make test` | `go vet ./... && go test ./...` |
 | `make dev` | `scripts/dev.sh`: Caddy and ownpaneld locally on ports 8080/8443 with self-signed certificates |
 

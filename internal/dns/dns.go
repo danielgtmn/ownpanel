@@ -13,6 +13,9 @@ type Zone struct {
 	ID       string // provider id
 	Name     string // "example.com", lower case, no trailing dot
 	ReadOnly bool   // e.g. a secondary zone: records cannot be changed here
+	// Nameservers are the provider's nameservers assigned to the zone, which
+	// the domain's registrar must delegate to; without trailing dots.
+	Nameservers []string
 }
 
 // RecordSet is all records of one name and type.
@@ -34,6 +37,12 @@ type Provider interface {
 	SetRecordSet(ctx context.Context, zone string, rs RecordSet) error
 	// DeleteRecordSet removes a record set. It returns nil if it did not exist.
 	DeleteRecordSet(ctx context.Context, zone, name, typ string) error
+	// CreateZone creates a primary zone for a registrable domain (no
+	// subdomains) and returns it when the provider has created it.
+	CreateZone(ctx context.Context, name string) (Zone, error)
+	// DeleteZone removes a zone with all its records. A zone the provider
+	// protects against deletion gives ErrLocked.
+	DeleteZone(ctx context.Context, name string) error
 }
 
 // Sentinel errors. Providers wrap them with %w and keep a message that can be
@@ -46,4 +55,5 @@ var (
 	ErrLocked       = errors.New("dns: the record set is protected by the provider")
 	ErrRateLimited  = errors.New("dns: too many requests, try again later")
 	ErrInvalid      = errors.New("dns: the provider rejected the input")
+	ErrExists       = errors.New("dns: it already exists")
 )

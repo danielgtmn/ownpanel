@@ -6,7 +6,7 @@ export type SessionState =
   | { status: 'unreachable'; message: string }
   | { status: 'setup' }
   | { status: 'signedOut'; notice: string | null }
-  | { status: 'signedIn'; user: User }
+  | { status: 'signedIn'; user: User; setupComplete: boolean }
 
 export const SIGNED_OUT_NOTICE = 'You were signed out. Sign in again to continue where you left off.'
 
@@ -30,7 +30,7 @@ export function subscribeSession(listener: () => void) {
 }
 
 export function toSessionState(info: SessionInfo, notice: string | null = null): SessionState {
-  if (info.user) return { status: 'signedIn', user: info.user }
+  if (info.user) return { status: 'signedIn', user: info.user, setupComplete: info.setup_complete !== false }
   if (info.setup_required) return { status: 'setup' }
   return { status: 'signedOut', notice }
 }
@@ -48,7 +48,7 @@ export async function loadSession(notice: string | null = null): Promise<void> {
 
 export async function signIn(name: string, password: string): Promise<void> {
   const user = await request<User>('/login', { method: 'POST', body: { name, password }, silentUnauthorized: true })
-  update({ status: 'signedIn', user })
+  update({ status: 'signedIn', user, setupComplete: await readSetupComplete() })
 }
 
 export async function completeSetup(setupCode: string, name: string, password: string): Promise<void> {
@@ -57,7 +57,21 @@ export async function completeSetup(setupCode: string, name: string, password: s
     body: { setup_code: setupCode, name, password },
     silentUnauthorized: true,
   })
-  update({ status: 'signedIn', user })
+  update({ status: 'signedIn', user, setupComplete: false })
+}
+
+async function readSetupComplete(): Promise<boolean> {
+  try {
+    const info = await request<SessionInfo>('/session', { silentUnauthorized: true })
+    return info.setup_complete !== false
+  } catch {
+    // Unknown: open the panel itself; an administrator can finish the setup under Settings.
+    return true
+  }
+}
+
+export function markSetupComplete() {
+  if (state.status === 'signedIn' && !state.setupComplete) update({ ...state, setupComplete: true })
 }
 
 export async function signOutNow(): Promise<void> {

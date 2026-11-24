@@ -9,6 +9,7 @@ export type User = {
 
 export type SessionInfo = {
   setup_required: boolean
+  setup_complete?: boolean
   user: User | null
   via: 'session' | 'token' | null
 }

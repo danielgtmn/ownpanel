@@ -46,12 +46,17 @@ type RRSet struct {
 }
 
 type zone struct {
-	id   int
-	name string
-	mode string
-	ttl  int
-	sets map[string]*RRSet // key: name/type
+	id        int
+	name      string
+	mode      string
+	ttl       int
+	protected bool              // protection.delete
+	sets      map[string]*RRSet // key: name/type
 }
+
+// Nameservers are the authoritative nameservers the fake assigns to every
+// zone, as Hetzner writes them (with a trailing dot).
+var Nameservers = []string{"hydrogen.ns.hetzner.com.", "oxygen.ns.hetzner.com.", "helium.ns.hetzner.de."}
 
 type action struct {
 	id        int
@@ -82,6 +87,7 @@ type Server struct {
 
 	mu      sync.Mutex
 	zones   []*zone
+	nextZID int
 	actions map[int]*action
 	nextID  int
 	calls   []string
@@ -90,7 +96,7 @@ type Server struct {
 
 // New starts a fake that accepts token. It is closed when the test ends.
 func New(t testing.TB, token string) *Server {
-	s := &Server{Token: token, actions: map[int]*action{}, nextID: 1}
+	s := &Server{Token: token, actions: map[int]*action{}, nextID: 1, nextZID: 1001}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.Server.Close)
 	return s
@@ -103,9 +109,32 @@ func (s *Server) BaseURL() string { return s.URL + "/v1" }
 func (s *Server) AddZone(name, mode string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	z := &zone{id: 1000 + len(s.zones) + 1, name: name, mode: mode, ttl: 3600, sets: map[string]*RRSet{}}
+	return s.addZone(name, mode, 3600).id
+}
+
+func (s *Server) addZone(name, mode string, ttl int) *zone {
+	z := &zone{id: s.nextZID, name: name, mode: mode, ttl: ttl, sets: map[string]*RRSet{}}
+	s.nextZID++
 	s.zones = append(s.zones, z)
-	return z.id
+	return z
+}
+
+// ProtectZone sets the zone's delete protection (protection.delete).
+func (s *Server) ProtectZone(name string, protected bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	z := s.findZone(name)
+	if z == nil {
+		panic("hetznertest: unknown zone " + name)
+	}
+	z.protected = protected
+}
+
+// HasZone reports whether a zone exists.
+func (s *Server) HasZone(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.findZone(name) != nil
 }
 
 // AddRRSet stores a record set directly (no call is recorded). records are
@@ -252,6 +281,24 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == "GET" && len(seg) == 1 && seg[0] == "zones":
 		s.listZones(w, r)
+	case r.Method == "POST" && len(seg) == 1 && seg[0] == "zones":
+		s.createZone(w, r)
+	case (r.Method == "GET" || r.Method == "DELETE") && len(seg) == 2 && seg[0] == "zones":
+		z := s.findZone(seg[1])
+		if z == nil {
+			notFound(w)
+			return
+		}
+		if r.Method == "GET" {
+			writeJSON(w, 200, map[string]any{"zone": zoneJSON(z)})
+			return
+		}
+		if z.protected {
+			writeErr(w, Error{Status: 423, Code: "protected", Message: "zone is protected"})
+			return
+		}
+		s.zones = slicesDelete(s.zones, z)
+		s.newAction(w, "delete_zone")
 	case r.Method == "GET" && len(seg) == 2 && seg[0] == "actions":
 		s.getAction(w, seg[1])
 	case len(seg) >= 3 && seg[0] == "zones" && seg[2] == "rrsets":
@@ -312,9 +359,77 @@ func (s *Server) listZones(w http.ResponseWriter, r *http.Request) {
 	}
 	out := []map[string]any{}
 	for _, z := range s.zones[lo:hi] {
-		out = append(out, map[string]any{"id": z.id, "name": z.name, "mode": z.mode, "ttl": z.ttl, "status": "ok"})
+		out = append(out, zoneJSON(z))
 	}
 	writeJSON(w, 200, map[string]any{"zones": out, "meta": meta})
+}
+
+// zoneJSON is a zone like Hetzner's Zone schema (the fields ownpanel reads
+// and a few more).
+func zoneJSON(z *zone) map[string]any {
+	ns := []string{}
+	if z.mode == "primary" {
+		ns = append(ns, Nameservers...)
+	}
+	return map[string]any{
+		"id": z.id, "name": z.name, "mode": z.mode, "ttl": z.ttl, "status": "ok",
+		"record_count": len(z.sets), "labels": map[string]string{}, "registrar": "other",
+		"protection": map[string]any{"delete": z.protected},
+		"authoritative_nameservers": map[string]any{
+			"assigned": ns, "delegated": []string{}, "delegation_last_check": nil, "delegation_status": "unknown",
+		},
+	}
+}
+
+// createZone accepts what Hetzner documents: a lower-case name without a
+// trailing dot, mode, optional ttl; an existing name is a uniqueness_error.
+func (s *Server) createZone(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+		Mode string `json:"mode"`
+		TTL  *int   `json:"ttl"`
+	}
+	if err := decode(r, &body); err != nil {
+		invalid(w, "body", "invalid JSON")
+		return
+	}
+	if body.Name == "" || body.Name != strings.ToLower(body.Name) || strings.HasSuffix(body.Name, ".") || !strings.Contains(body.Name, ".") {
+		invalid(w, "name", "invalid zone name")
+		return
+	}
+	if body.Mode != "primary" && body.Mode != "secondary" {
+		invalid(w, "mode", "must be primary or secondary")
+		return
+	}
+	ttl := 3600
+	if body.TTL != nil {
+		if *body.TTL < 60 {
+			invalid(w, "ttl", "must be at least 60")
+			return
+		}
+		ttl = *body.TTL
+	}
+	if s.findZone(body.Name) != nil {
+		writeErr(w, Error{Status: 409, Code: "uniqueness_error", Message: "zone with this name already exists"})
+		return
+	}
+	z := s.addZone(body.Name, body.Mode, ttl)
+	z.sets["@/SOA"] = &RRSet{Name: "@", Type: "SOA", Records: []string{"hydrogen.ns.hetzner.com. dns.hetzner.com. 1 86400 10800 3600000 3600"}}
+	z.sets["@/NS"] = &RRSet{Name: "@", Type: "NS", Records: append([]string(nil), Nameservers...)}
+	a := &action{id: s.nextID, command: "create_zone", remaining: s.ActionPolls, err: s.ActionFailure}
+	s.nextID++
+	s.actions[a.id] = a
+	writeJSON(w, 201, map[string]any{"zone": zoneJSON(z), "action": s.actionJSON(a, a.remaining > 0)})
+}
+
+func slicesDelete(zones []*zone, z *zone) []*zone {
+	out := zones[:0]
+	for _, x := range zones {
+		if x != z {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 func rrsetJSON(z *zone, rs *RRSet) map[string]any {

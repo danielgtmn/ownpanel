@@ -6,6 +6,7 @@ package panel
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -34,16 +35,30 @@ type Config struct {
 	Store   *store.Store
 	Deploys *deploy.Manager
 	Web     WebServer
-	Caddy   caddy.Options
+	// Caddy are the web server options. PanelDomain and ACMEEmail, when set,
+	// come from the startup flags: they override (and lock) the settings.
+	// PanelUpstream should always be set: without it the panel is not
+	// served through the web server at all.
+	Caddy caddy.Options
 	// SetupCodeFile holds the one-time code for creating the first admin.
 	SetupCodeFile string
 
 	// Secrets encrypts the tokens of DNS connections. Without it no DNS
 	// connection can be added or used.
 	Secrets *secrets.Box
-	// ServerIPs are the server's public addresses, which domains should
-	// point at (see ParseServerIPs).
+	// ServerIPs are the server's public addresses from -server-ip, which
+	// domains should point at (see ParseServerIPs). Set, they override (and
+	// lock) the addresses from the settings.
 	ServerIPs []netip.Addr
+	// Interfaces lists the machine's addresses, offered as suggestions and
+	// served for the panel before setup; nil means DetectAddresses.
+	Interfaces func() ([]netip.Addr, error)
+	// CertRoots verify the panel domain's certificate in the readiness
+	// check; nil means the system roots. Tests pass their own CA.
+	CertRoots *x509.CertPool
+	// CertCheckAddr is where that check connects; "" means
+	// 127.0.0.1:<HTTPSPort>.
+	CertCheckAddr string
 	// NewDNSProvider returns a client for a DNS provider account; nil means
 	// DefaultDNSProvider. Tests pass a fake.
 	NewDNSProvider func(provider, token string) (dns.Provider, error)
@@ -78,6 +93,14 @@ type Service struct {
 	newProvider func(provider, token string) (dns.Provider, error)
 	resolver    dns.Resolver
 	dnsCache    *dnsCache
+
+	// settingsMu guards settings; settingsWrite serializes changes to them.
+	settingsMu    sync.RWMutex
+	settings      settingsState
+	settingsWrite sync.Mutex
+	interfaces    func() ([]netip.Addr, error)
+	certRoots     *x509.CertPool
+	certAddr      string
 }
 
 // New returns a Service. It rejects invalid web server options up front, and
@@ -100,6 +123,12 @@ func New(cfg Config) (*Service, error) {
 		newProvider:    cfg.NewDNSProvider,
 		resolver:       cfg.Resolver,
 		dnsCache:       newDNSCache(),
+		interfaces:     cfg.Interfaces,
+		certRoots:      cfg.CertRoots,
+		certAddr:       cfg.CertCheckAddr,
+	}
+	if s.interfaces == nil {
+		s.interfaces = DetectAddresses
 	}
 	s.limiter.now = func() time.Time { return s.now() }
 	if s.newProvider == nil {
@@ -117,6 +146,11 @@ func New(cfg Config) (*Service, error) {
 			if slices.Contains(site.Domains, d) {
 				return nil, fmt.Errorf("panel domain %s is already used by site %q", d, site.Name)
 			}
+		}
+	}
+	if s.store != nil {
+		if err := s.loadSettings(context.Background()); err != nil {
+			return nil, err
 		}
 	}
 	return s, nil
@@ -202,7 +236,7 @@ func (s *Service) SaveSite(ctx context.Context, a Actor, name string, domains []
 	if err != nil {
 		return Site{}, storeError(err)
 	}
-	if d := s.opts.PanelDomain; d != "" && slices.Contains(clean, d) {
+	if d := s.PanelDomain(); d != "" && slices.Contains(clean, d) {
 		return Site{}, errorf(Invalid, "domain %q is the address of the panel itself", d)
 	}
 
@@ -356,7 +390,11 @@ func (s *Service) sync(ctx context.Context) error {
 			Live:    s.deploys.Current(site.Name) != "",
 		})
 	}
-	cfg, err := caddy.Build(s.opts, sites)
+	redirects, err := s.caddyRedirects(ctx)
+	if err != nil {
+		return err
+	}
+	cfg, err := caddy.Build(s.caddyOptions(), sites, redirects...)
 	if err != nil {
 		return err
 	}

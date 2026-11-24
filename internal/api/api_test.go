@@ -96,6 +96,7 @@ type req struct {
 	headers            map[string]string
 	remote             string
 	tls                bool
+	host               string // Host header; "" means example.com
 }
 
 func (e *env) do(r req) *httptest.ResponseRecorder {
@@ -115,6 +116,9 @@ func (e *env) do(r req) *httptest.ResponseRecorder {
 	}
 	if r.remote != "" {
 		hr.RemoteAddr = r.remote
+	}
+	if r.host != "" {
+		hr.Host = r.host
 	}
 	if r.tls {
 		hr.TLS = &tls.ConnectionState{}
@@ -251,7 +255,7 @@ func TestAuthenticationAndCSRF(t *testing.T) {
 func TestSessionLifecycleOverHTTP(t *testing.T) {
 	e := newEmptyEnv(t)
 	rec := e.do(req{method: "GET", path: "/api/session"})
-	if rec.Body.String() != `{"setup_required":true,"user":null,"via":null}`+"\n" {
+	if rec.Body.String() != `{"setup_required":true,"setup_complete":false,"user":null,"via":null}`+"\n" {
 		t.Fatalf("before setup: %s", rec.Body)
 	}
 	rec = e.do(req{method: "POST", path: "/api/setup", body: `{"setup_code":"WRONG","name":"root","password":"root-password-1"}`})

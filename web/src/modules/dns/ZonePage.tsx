@@ -4,9 +4,11 @@ import { toast } from '@ui-sdk/react/toast'
 import { useState } from 'react'
 import { errorMessage, isNotFound } from '../../shared/api/index.ts'
 import { usePageTitle, useResource } from '../../shared/hooks/index.ts'
-import { hrefFor } from '../../shared/routing/index.ts'
+import { hrefFor, navigate } from '../../shared/routing/index.ts'
 import { ArrowLeftIcon, EmptyState, ErrorState, LoadingState, PageHeader, Section } from '../../shared/ui/index.ts'
-import { deleteRecord, listRecords, listZones, saveRecord } from './api.ts'
+import { deleteRecord, deleteZone, listRecords, listZones, saveRecord } from './api.ts'
+import { DeleteDomainDialog } from './DeleteDomainDialog.tsx'
+import { Nameservers } from './Nameservers.tsx'
 import { RecordDialog, type RecordSubmit } from './RecordDialog.tsx'
 import { fullName, isEditableRecordSet, isProviderManaged, setKey, sortRecordSets, ttlLabel } from './records.ts'
 import type { RecordSet, Zone } from './types.ts'
@@ -84,8 +86,16 @@ type LoadedProps = {
 function Loaded({ connectionId, zoneInfo, records, reload }: LoadedProps) {
   const zone = zoneInfo.name
   const [dialog, setDialog] = useState<{ open: boolean; existing: RecordSet | null }>({ open: false, existing: null })
+  const [deleting, setDeleting] = useState(false)
   const editable = !zoneInfo.read_only
   usePageTitle(zone)
+
+  async function removeDomain(confirmName: string) {
+    await deleteZone(connectionId, zone, confirmName)
+    setDeleting(false)
+    toast.success(`${zone} was deleted.`)
+    navigate('dns')
+  }
 
   const save: RecordSubmit = async (name, type, body) => {
     await saveRecord(connectionId, zone, name, type, body)
@@ -151,6 +161,28 @@ function Loaded({ connectionId, zoneInfo, records, reload }: LoadedProps) {
           </ul>
         )}
       </Section>
+      <Section
+        title="Nameservers"
+        description={`Enter these where you registered ${zone}. The records here only work once the registrar uses them.`}
+      >
+        <Nameservers nameservers={zoneInfo.nameservers} domain={zone} />
+      </Section>
+      <Section
+        title="Delete domain"
+        description="Removes the domain and all its records from the DNS provider."
+        tone="danger"
+      >
+        <Button data-variant="destructive" onClick={() => setDeleting(true)}>
+          Delete domain
+        </Button>
+      </Section>
+      <DeleteDomainDialog
+        open={deleting}
+        onOpenChange={setDeleting}
+        zone={zone}
+        connectionName={zoneInfo.connection_name}
+        onDelete={removeDomain}
+      />
       <RecordDialog
         open={dialog.open}
         onOpenChange={(open) => setDialog((current) => ({ ...current, open }))}

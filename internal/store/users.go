@@ -163,6 +163,9 @@ func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 		if sites > 0 {
 			return conflictf("%s still owns sites; delete them first", u.Name)
 		}
+		if err := ownsNoDomainRedirects(tx, id, u.Name); err != nil {
+			return err
+		}
 		_, err = tx.Exec(`DELETE FROM users WHERE id = ?`, id)
 		return err
 	})

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getDomainStatuses, getServerAddresses, pointDomain, type DomainStatus } from '../../shared/api/index.ts'
-import { needsServerAddresses, pointedMessage, statusAction, statusText, statusTone } from './domainStatus.ts'
+import { getDomainStatuses, getServerAddresses, pointDomain, type DomainStatus } from '../api/index.ts'
+import { needsServerAddresses, pointedMessage, statusAction, statusText, statusTone } from './status.ts'
 
 const zone = { connection_id: 3, connection_name: 'Main', zone: 'example.com', record_name: '@' }
 

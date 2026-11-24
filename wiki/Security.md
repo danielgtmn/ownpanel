@@ -56,6 +56,6 @@ One-time links are valid for 15 minutes, for one site, and work once. They are r
 - **Upload links are kept in memory**, so a restart invalidates them (safe, but surprising).
 - **No second factor** for sign-in, and no list of a person's sessions to end them one by one; changing the password ends the others.
 - **Access tokens do not expire.** Revoke them when they are no longer needed.
-- **Not tested on a real server yet:** the install script and the hardening of the systemd units have not been verified in production ([[Roadmap|Roadmap]]).
+- **Not tested on a real server yet:** the installer and the hardening of the systemd units have not been verified in production ([[Roadmap|Roadmap]]).
 
 To report a problem, open an issue at <https://github.com/danielgtmn/ownpanel>.

@@ -23,11 +23,17 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, err)
 		return
 	}
+	complete, err := s.Panel.SetupComplete(r.Context())
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
 	body := struct {
 		SetupRequired bool        `json:"setup_required"`
+		SetupComplete bool        `json:"setup_complete"`
 		User          *panel.User `json:"user"`
 		Via           *string     `json:"via"`
-	}{SetupRequired: setup}
+	}{SetupRequired: setup, SetupComplete: complete}
 	if a := actorOf(r); a.Via != "" {
 		u, err := s.Panel.Me(r.Context(), a)
 		if err != nil {

@@ -29,8 +29,9 @@ internal/mcp       MCP server (/mcp): the same operations as tools for AI assist
 internal/backup    backup archives
 internal/webui     serves the web interface (embedded with `-tags webui`)
 web/               web interface (React, built with Vite)
-deploy/            systemd units and installer for a Linux server
-scripts/           local dev runner and end-to-end check
+deploy/            systemd units and Caddy bootstrap for a Linux server
+install.sh         server installer (install, upgrade, uninstall)
+scripts/           local dev runner, end-to-end check, release packaging
 ```
 
 ## Try it locally
@@ -50,6 +51,14 @@ While no user exists, ownpaneld writes a one-time **setup code** to
 `<data>/setup-code` (readable only by the daemon's user) and logs where it
 is. Open the panel, enter the code and choose the first admin's name and
 password. The file is deleted afterwards and setup is closed for good.
+
+Then the setup steps ask for the panel's domain, the server's public
+addresses and an optional certificate e-mail; they are stored in the panel
+and applied at once. Until then the panel is also served on
+`https://<server address>/` with a self-signed certificate; once the setup is
+finished with a domain, that address redirects to the domain. The flags
+`-panel-domain`, `-server-ip` and `-acme-email` still work and win (shown as
+locked in the panel).
 
 ## Users, roles and access tokens
 
@@ -81,7 +90,7 @@ made with the cookie must send `X-Ownpanel-Request: 1`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/session` | setup needed? who is signed in? |
+| `GET` | `/api/session` | setup needed? setup steps done (`setup_complete`)? who is signed in? |
 | `POST` | `/api/setup` | first admin, body `{"setup_code", "name", "password"}` |
 | `POST` | `/api/login`, `/api/logout` | sign in (body `{"name", "password"}`) and out |
 | `PUT` | `/api/account/password` | body `{"current", "new"}`; ends your other sessions |
@@ -96,7 +105,10 @@ made with the cookie must send `X-Ownpanel-Request: 1`.
 | `GET` `POST` | `/api/users` | admins: list, create with `{"name", "password", "role"}` |
 | `PUT` `DELETE` | `/api/users/{id}` | admins: change `{"role"}` and/or `{"password"}`, delete |
 | `GET` | `/api/activity?limit=50` | admins: newest activity first |
-| `GET` | `/api/server` | `{"ips": [..]}`: the addresses given with `-server-ip` |
+| `GET` | `/api/server` | `{"ips": [..]}`: the server's addresses (`-server-ip`, else the panel settings) |
+| `GET` `PUT` | `/api/settings` | admins: panel domain, server addresses, certificate e-mail (with `*_locked` when set by flag), detected addresses, `setup_complete`, `ip_access`; change with any of `{"panel_domain", "server_ips", "acme_email"}` |
+| `GET` | `/api/settings/checks` | admins: does the panel domain point here (`dns`), is a trusted certificate served (`certificate`)? |
+| `POST` | `/api/settings/complete` | admins: finish the setup steps |
 | `GET` `POST` | `/api/dns/connections` | DNS connections (yours; admins see all); add with `{"provider": "hetzner", "name", "token"}` |
 | `POST` | `/api/dns/connections/{id}/check` | list the zones again; the outcome is in `last_error` |
 | `DELETE` | `/api/dns/connections/{id}` | remove a connection (admins: anyone's) |
@@ -108,10 +120,10 @@ made with the cookie must send `X-Ownpanel-Request: 1`.
 
 Tokens and passwords can only be managed when signed in with a password.
 
-The daemon listens on `127.0.0.1:8600`. To reach the panel over HTTPS, start
-it with `-panel-domain panel.example.com` and point that domain at the
-server: Caddy then serves the panel on it with an automatic certificate, like
-any site.
+The daemon listens on `127.0.0.1:8600`. To reach the panel over HTTPS, set
+the panel domain in the setup steps (or start it with `-panel-domain
+panel.example.com`) and point that domain at the server: Caddy then serves
+the panel on it with an automatic certificate, like any site.
 
 ## MCP
 
@@ -196,13 +208,35 @@ tokens cannot be used; connections then have to be added again.
 
 ## Install on a server
 
-Build `ownpaneld` and `caddy` for Linux, copy them together with `deploy/*` to
-the server and run `install.sh` as root (it can be run again to upgrade).
-Then read the setup code with `sudo cat /var/lib/ownpanel/setup-code` and
-create the first admin. Options go into `/etc/ownpanel/ownpaneld.env`
-(`OWNPANELD_ARGS`), e.g. `-server-ip` with the server's public addresses (see
-DNS). Point a domain at the server, then create a site for it; the
-certificate is requested automatically.
+On a fresh Debian 12+ or Ubuntu 22.04+ server (amd64 or arm64), as root:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/danielgtmn/ownpanel/main/install.sh | sudo bash
+```
+
+It downloads the latest release, checks its SHA-256, installs `ownpaneld` and
+Caddy as systemd services and prints the address to open
+(`https://<server address>/`, with a one-time certificate warning) and the
+one-time setup code. Enter the code, create the first admin and follow the
+setup steps. Options for unattended installs:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/danielgtmn/ownpanel/main/install.sh \
+  | sudo bash -s -- --panel-domain panel.example.com --server-ip 203.0.113.5
+```
+
+Run the same command again to upgrade; `--uninstall` removes ownpanel but
+keeps the data (`--purge` deletes it too). `--channel nightly` follows an
+automatic build of `main` instead of the tagged releases. Releases are built
+by the release workflow (`.github/workflows/release.yml`) with
+`scripts/package.sh`.
+
+Manual install: download `ownpanel_<version>_linux_<arch>.tar.gz` and
+`checksums.txt` from the releases, check and unpack the archive and run
+`sudo ./install.sh --from-dir .` inside it. `make package` builds the same
+archives locally. Flags go into `/etc/ownpanel/ownpaneld.env`
+(`OWNPANELD_ARGS`). All options, channels, firewall and DNS:
+[Installation](https://github.com/danielgtmn/ownpanel/wiki/Installation).
 
 ## Backup and restore
 

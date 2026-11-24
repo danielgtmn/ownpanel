@@ -39,6 +39,15 @@ export async function pointDomain(site: string, domain: string): Promise<Changed
   return result.changed ?? []
 }
 
+export function getDomainStatus(domain: string): Promise<DomainStatus> {
+  return request<DomainStatus>(`/dns/domain-status?domain=${encodeURIComponent(domain)}`)
+}
+
+export async function pointAnyDomain(domain: string): Promise<ChangedRecord[]> {
+  const result = await request<{ changed: ChangedRecord[] | null }>('/dns/point', { method: 'POST', body: { domain } })
+  return result.changed ?? []
+}
+
 export async function getServerAddresses(): Promise<string[]> {
   const result = await request<{ ips: string[] | null }>('/server')
   return result.ips ?? []

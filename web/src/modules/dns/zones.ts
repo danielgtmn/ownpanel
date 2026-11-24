@@ -68,3 +68,60 @@ export function validateConnection(name: string, token: string): { name?: string
   if (!token.trim()) errors.token = 'Paste the API token from Hetzner.'
   return errors
 }
+
+export function normalizeZoneName(value: string): string {
+  return value.trim().replace(/\.$/, '').toLowerCase()
+}
+
+export function canConfirmDelete(typed: string, zone: string): boolean {
+  const name = normalizeZoneName(zone)
+  return name !== '' && normalizeZoneName(typed) === name
+}
+
+export function nameserverList(nameservers: string[] | null | undefined): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of nameservers ?? []) {
+    const name = normalizeZoneName(raw)
+    if (name && !seen.has(name)) {
+      seen.add(name)
+      out.push(name)
+    }
+  }
+  return out
+}
+
+function splitTopLevel(text: string): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let start = 0
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index]
+    if (char === '(') depth++
+    else if (char === ')') depth = Math.max(0, depth - 1)
+    else if (char === ',' && depth === 0) {
+      parts.push(text.slice(start, index))
+      start = index + 1
+    }
+  }
+  parts.push(text.slice(start))
+  return parts.map((part) => part.trim()).filter(Boolean)
+}
+
+export function usesFromMessage(message: string): string[] {
+  const match = /still in use by (.+?);\s*remove those first/i.exec(message)
+  if (!match) return []
+  return splitTopLevel(match[1]).map((use) => use.charAt(0).toUpperCase() + use.slice(1))
+}
+
+export function validateZoneName(value: string): string | null {
+  const name = normalizeZoneName(value)
+  if (!name) return 'Enter the domain, like example.com.'
+  if (/^[a-z]+:\/\//i.test(name) || name.includes('/')) return 'Enter just the domain, like example.com, without https:// or a path.'
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(name) || name.includes(':')) return 'Enter a domain like example.com, not an IP address.'
+  if (/[^ -~]/.test(name)) return 'This domain has special characters. Enter it in its xn-- form.'
+  if (!/^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(name)) {
+    return `"${value.trim()}" isn't a valid domain. Enter one like example.com.`
+  }
+  return null
+}

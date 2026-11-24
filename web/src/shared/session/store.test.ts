@@ -6,6 +6,7 @@ import {
   completeSetup,
   getSessionState,
   loadSession,
+  markSetupComplete,
   signIn,
   signOutNow,
   SIGNED_OUT_NOTICE,
@@ -45,6 +46,7 @@ describe('toSessionState', () => {
     expect(toSessionState({ setup_required: false, user: anna, via: 'session' })).toEqual({
       status: 'signedIn',
       user: anna,
+      setupComplete: true,
     })
   })
 })
@@ -71,7 +73,7 @@ describe('session bootstrap', () => {
   it('signs in when the server knows the person', async () => {
     mockFetch(json({ setup_required: false, user: anna, via: 'session' }))
     await loadSession()
-    expect(getSessionState()).toEqual({ status: 'signedIn', user: anna })
+    expect(getSessionState()).toEqual({ status: 'signedIn', user: anna, setupComplete: true })
   })
 
   it('keeps a notice for the sign-in screen', async () => {
@@ -90,7 +92,7 @@ describe('signing in and out', () => {
     expect(init.method).toBe('POST')
     expect(init.body).toBe('{"name":"anna","password":"correct horse battery"}')
     expect((init.headers as Record<string, string>)['X-Ownpanel-Request']).toBe('1')
-    expect(getSessionState()).toEqual({ status: 'signedIn', user: anna })
+    expect(getSessionState()).toEqual({ status: 'signedIn', user: anna, setupComplete: true })
   })
 
   it('explains wrong credentials in plain words', async () => {
@@ -110,7 +112,7 @@ describe('signing in and out', () => {
     await completeSetup('abc-123', 'anna', 'correct horse battery')
     expect(call(fetchMock, 0)[0]).toBe('/api/setup')
     expect(call(fetchMock, 0)[1].body).toBe('{"setup_code":"abc-123","name":"anna","password":"correct horse battery"}')
-    expect(getSessionState()).toEqual({ status: 'signedIn', user: anna })
+    expect(getSessionState()).toEqual({ status: 'signedIn', user: anna, setupComplete: false })
   })
 
   it('signs out', async () => {
@@ -156,7 +158,7 @@ describe('changePassword', () => {
     await signIn('anna', 'correct horse battery')
     mockFetch(json({ error: 'current password is wrong' }, 401), json({ setup_required: false, user: anna, via: 'session' }))
     await expect(changePassword('wrong', 'new password 2')).rejects.toThrow('current password is wrong')
-    expect(getSessionState()).toEqual({ status: 'signedIn', user: anna })
+    expect(getSessionState()).toEqual({ status: 'signedIn', user: anna, setupComplete: true })
   })
 
   it('signs out when a 401 really means the login ended', async () => {
@@ -165,5 +167,32 @@ describe('changePassword', () => {
     mockFetch(json({ error: 'sign in first' }, 401), json({ setup_required: false, user: null, via: null }))
     await expect(changePassword('x', 'new password 2')).rejects.toThrow()
     expect(getSessionState()).toEqual({ status: 'signedOut', notice: SIGNED_OUT_NOTICE })
+  })
+})
+
+describe('setup progress', () => {
+  it('reads whether the first-run setup is finished', () => {
+    expect(toSessionState({ setup_required: false, setup_complete: false, user: anna, via: 'session' })).toEqual({
+      status: 'signedIn',
+      user: anna,
+      setupComplete: false,
+    })
+    expect(toSessionState({ setup_required: false, setup_complete: true, user: anna, via: 'session' })).toMatchObject({
+      setupComplete: true,
+    })
+  })
+
+  it('asks the server after signing in whether the setup is finished', async () => {
+    const fetchMock = mockFetch(json(anna), json({ setup_required: false, setup_complete: false, user: anna, via: 'session' }))
+    await signIn('anna', 'correct horse battery')
+    expect(call(fetchMock, 1)[0]).toBe('/api/session')
+    expect(getSessionState()).toEqual({ status: 'signedIn', user: anna, setupComplete: false })
+  })
+
+  it('marks the setup as finished', async () => {
+    mockFetch(json(anna, 201))
+    await completeSetup('abc-123', 'anna', 'correct horse battery')
+    markSetupComplete()
+    expect(getSessionState()).toEqual({ status: 'signedIn', user: anna, setupComplete: true })
   })
 })

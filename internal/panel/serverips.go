@@ -69,22 +69,18 @@ func ParseServerIPs(values []string, allowNonPublic bool) ([]netip.Addr, error) 
 	return out, nil
 }
 
-// ServerIPs returns the server's public addresses as configured with
-// -server-ip; empty if none are.
+// ServerIPs returns the server's public addresses (-server-ip, else the
+// panel settings); empty if none are configured.
 func (s *Service) ServerIPs(ctx context.Context, a Actor) ([]string, error) {
 	if err := needAuth(a); err != nil {
 		return nil, err
 	}
-	out := make([]string, 0, len(s.serverIPs))
-	for _, ip := range s.serverIPs {
-		out = append(out, ip.String())
-	}
-	return out, nil
+	return ipStrings(s.effectiveServerIPs()), nil
 }
 
 func (s *Service) needServerIPs() error {
-	if len(s.serverIPs) == 0 {
-		return errorf(Conflict, "The server's public address is not configured (start ownpaneld with -server-ip)")
+	if len(s.effectiveServerIPs()) == 0 {
+		return errorf(Conflict, "The server's public address is not configured (an admin can enter it in the panel settings)")
 	}
 	return nil
 }

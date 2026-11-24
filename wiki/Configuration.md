@@ -5,11 +5,12 @@ ownpaneld has two commands:
 ```
 ownpaneld [serve] [flags]                    run the daemon
 ownpaneld backup -data <dir> -out <file>     write a backup archive
+ownpaneld version                            print the version
 ```
 
-`serve` is the default: if the first argument starts with `-` (or there is none), the daemon runs. Any other unknown command is an error ("use serve or backup"). Flags use Go's syntax: `-name value` or `-name=value`.
+`serve` is the default: if the first argument starts with `-` (or there is none), the daemon runs. Any other unknown command is an error ("use serve, backup or version"). Flags use Go's syntax: `-name value` or `-name=value`.
 
-On a server installed with `deploy/install.sh`, flags live in `/etc/ownpanel/ownpaneld.env` (see [[Installation|Installation]]).
+On a server installed with `install.sh`, flags live in `/etc/ownpanel/ownpaneld.env` (see [[Installation|Installation]]).
 
 ## `ownpaneld serve`
 
@@ -21,12 +22,22 @@ On a server installed with `deploy/install.sh`, flags live in `/etc/ownpanel/own
 | `-tls` | `acme` | Certificates: `acme` (public certificates), `internal` (Caddy's own CA, self-signed, for testing) or `off` (plain HTTP only, no automatic HTTPS). |
 | `-http-port` | `80` | Port for HTTP. With `-tls off` the sites are served on this port. |
 | `-https-port` | `443` | Port for HTTPS. |
-| `-acme-email` | empty | Contact address given to the certificate authority. Optional; only used with `-tls acme`. |
-| `-panel-domain` | empty | Serve the panel itself through Caddy on this domain, with a certificate like any site. The domain cannot also be used by a site. Also makes `/mcp` reachable on that domain and builds upload links on it. |
+| `-acme-email` | empty | Contact address given to the certificate authority. Optional; only used with `-tls acme`. Overrides the panel settings (see below). |
+| `-panel-domain` | empty | Serve the panel itself through Caddy on this domain, with a certificate like any site. The domain cannot also be used by a site. Also makes `/mcp` reachable on that domain and builds upload links on it. Overrides the panel settings (see below). |
 | `-reconcile-interval` | `30s` | How often the web server is re-synced in the background (a Go duration such as `30s` or `1m`). |
-| `-server-ip` | none | Public IPv4/IPv6 address of this server that domains should point at. Repeat the flag or separate values with commas. Must be a public address unless `-tls` is `internal` or `off`. Without it the domain status and "point to this server" are unavailable. |
+| `-server-ip` | none | Public IPv4/IPv6 address of this server that domains should point at. Repeat the flag or separate values with commas. Must be a public address unless `-tls` is `internal` or `off`. Overrides the panel settings (see below). Without addresses (here or in the settings) the domain status and "point to this server" are unavailable. |
 
-`-listen` with a wildcard host (`:8600`, `0.0.0.0:8600`) is reached by Caddy through `127.0.0.1`. The daemon does not terminate TLS itself; use `-panel-domain` for HTTPS (see [[Security|Security]]).
+`-listen` with a wildcard host (`:8600`, `0.0.0.0:8600`) is reached by Caddy through `127.0.0.1`. The daemon does not terminate TLS itself; Caddy serves the panel over HTTPS on the panel domain and, during setup, on the server's addresses (see [[Security|Security]]).
+
+## Panel settings
+
+The panel domain, the server's public addresses and the certificate e-mail are normally entered in the panel: in the first-run wizard right after the first admin is created, and later by admins under the panel settings (`GET`/`PUT /api/settings`). They are stored in the database (`settings` table) and applied at once, without a restart.
+
+The flags `-panel-domain`, `-server-ip` and `-acme-email` still work and **win** over the stored values. A value set by flag is shown as locked ("set in the server configuration") and cannot be changed in the panel; remove the flag and restart to manage it in the panel again. Installs that pass these flags behave as before.
+
+Rules for the settings: the panel domain is a plain host name with at least one dot, not an IP address and not a domain of any site. Server addresses follow the rules of `-server-ip`. The e-mail must be a plain address (`you@example.com`). The panel suggests the machine's own addresses (it reads its network interfaces; no outside service is asked).
+
+**Access by IP address.** Caddy also serves the panel on `https://<server address>/` (all configured addresses, the detected public ones, and `127.0.0.1`/`::1`) with a certificate from Caddy's internal CA, so a new install can be opened before it has a domain (the browser warns once). Plain HTTP on those addresses redirects to HTTPS. Once the wizard is **completed with a panel domain set**, those addresses redirect to `https://<panel domain>/` instead. If the wizard is completed without a domain, the panel stays reachable by address. Databases from before the wizard count as set up already.
 
 Examples:
 
@@ -50,7 +61,7 @@ See [[Backup and Restore|Backup-and-Restore]].
 
 ## Version
 
-The daemon reports a version to MCP clients. It is `dev` unless a build sets it with `-ldflags "-X main.version=…"`.
+`ownpaneld version` prints the version, which is also reported to MCP clients. It is `dev` unless a build sets it with `-ldflags "-X main.version=…"`; release builds (`scripts/package.sh`) set the release name, e.g. `v1.2.3` or `nightly-20260131-ab12cd3`.
 
 ## Data directory layout
 

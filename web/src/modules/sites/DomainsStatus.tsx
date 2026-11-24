@@ -1,56 +1,16 @@
 import { Button } from '@ui-sdk/react/button'
 import { toast } from '@ui-sdk/react/toast'
+import { errorMessage, getDomainStatuses, pointDomain, type DomainStatus } from '../../shared/api/index.ts'
 import {
-  errorMessage,
-  getDomainStatuses,
-  getServerAddresses,
-  pointDomain,
-  type DomainStatus,
-} from '../../shared/api/index.ts'
+  needsServerAddresses,
+  pointedMessage,
+  ServerAddresses,
+  statusAction,
+  statusText,
+  statusTone,
+} from '../../shared/domains/index.ts'
 import { useResource } from '../../shared/hooks/index.ts'
 import { StatusBadge } from '../../shared/ui/index.ts'
-import { needsServerAddresses, pointedMessage, statusAction, statusText, statusTone } from './domainStatus.ts'
-
-async function copy(text: string) {
-  try {
-    await navigator.clipboard.writeText(text)
-    toast.success('Copied.')
-  } catch {
-    toast.error("Couldn't copy. Select the address and copy it yourself.")
-  }
-}
-
-function ServerAddresses() {
-  const addresses = useResource(getServerAddresses, 'server-addresses')
-  if (addresses.status === 'loading') return <p className="muted">Looking up this server's addresses…</p>
-  if (addresses.status === 'error') {
-    return (
-      <p className="muted">
-        Couldn't look up this server's addresses. {errorMessage(addresses.error)}{' '}
-        <Button onClick={addresses.retry}>Try again</Button>
-      </p>
-    )
-  }
-  if (addresses.data.length === 0) {
-    return (
-      <p className="notice">
-        This server's public address isn't set up yet. Ask an administrator to set it before you point a domain here.
-      </p>
-    )
-  }
-  return (
-    <ul className="address-list" aria-label="This server's addresses">
-      {addresses.data.map((ip) => (
-        <li key={ip}>
-          <code>{ip}</code>
-          <Button onClick={() => copy(ip)}>
-            Copy<span className="visually-hidden"> {ip}</span>
-          </Button>
-        </li>
-      ))}
-    </ul>
-  )
-}
 
 type RowProps = {
   siteName: string

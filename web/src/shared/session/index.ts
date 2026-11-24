@@ -6,6 +6,7 @@ export {
   completeSetup,
   getSessionState,
   loadSession,
+  markSetupComplete,
   signIn,
   subscribeSession,
   type SessionState,

@@ -2,7 +2,13 @@ import { confirm } from '@ui-sdk/react/alert-dialog'
 import { Button } from '@ui-sdk/react/button'
 import { toast } from '@ui-sdk/react/toast'
 import { useState } from 'react'
-import { errorMessage, isNotFound, isSavedButNotApplied } from '../../shared/api/index.ts'
+import {
+  errorMessage,
+  isNotFound,
+  isSavedButNotApplied,
+  listRedirects,
+  listSiteRedirects,
+} from '../../shared/api/index.ts'
 import { usePageTitle, useResource } from '../../shared/hooks/index.ts'
 import { hrefFor, navigate } from '../../shared/routing/index.ts'
 import { useSession } from '../../shared/session/index.ts'
@@ -18,6 +24,8 @@ import {
 } from '../../shared/ui/index.ts'
 import { deleteSite, getSite, saveSite } from './api.ts'
 import { DomainsStatus } from './DomainsStatus.tsx'
+import { MainAddressSection } from './MainAddressSection.tsx'
+import { PathRedirectsSection } from './PathRedirectsSection.tsx'
 import { PublishSection } from './PublishSection.tsx'
 import { formatReleaseDate, hasContent } from './releases.ts'
 import { SiteFormDialog } from './SiteFormDialog.tsx'
@@ -52,6 +60,17 @@ function Loaded({ site, reload }: { site: Site; reload: () => Promise<void> }) {
   const [editing, setEditing] = useState(false)
   const { isAdmin } = useSession()
   const live = hasContent(site)
+  const domainKey = site.domains.join(',')
+  const redirects = useResource(listRedirects, `redirects:${site.name}:${domainKey}`)
+  const pathRedirects = useResource(() => listSiteRedirects(site.name), `site-redirects:${site.name}:${domainKey}`)
+
+  async function redirectsChanged() {
+    await Promise.all([redirects.reload(), pathRedirects.reload()])
+  }
+
+  async function mainAddressChanged() {
+    await Promise.all([reload(), redirectsChanged()])
+  }
 
   async function saveDomains(_name: string, domains: string[]) {
     try {
@@ -62,7 +81,7 @@ function Loaded({ site, reload }: { site: Site; reload: () => Promise<void> }) {
       toast.warning(errorMessage(error))
     }
     setEditing(false)
-    await reload()
+    await Promise.all([reload(), redirectsChanged()])
   }
 
   async function remove() {
@@ -113,6 +132,13 @@ function Loaded({ site, reload }: { site: Site; reload: () => Promise<void> }) {
           <p className="muted">No domains yet. Add one so visitors can find your site.</p>
         )}
       </Section>
+      <MainAddressSection
+        site={site}
+        redirects={redirects}
+        pathRedirects={pathRedirects.status === 'ready' ? pathRedirects.data : []}
+        onChanged={mainAddressChanged}
+      />
+      <PathRedirectsSection site={site} redirects={pathRedirects} onChanged={redirectsChanged} />
       <PublishSection name={site.name} onPublished={reload} />
       <VersionsSection site={site} onChanged={reload} />
       <Section

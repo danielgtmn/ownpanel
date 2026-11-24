@@ -144,6 +144,9 @@ func replaceDomains(tx *sql.Tx, name string, domains []string) error {
 		if !noRows(err) {
 			return err
 		}
+		if err := domainRedirects(tx, d); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(`DELETE FROM site_domains WHERE site_name = ?`, name); err != nil {
 		return err
@@ -153,7 +156,7 @@ func replaceDomains(tx *sql.Tx, name string, domains []string) error {
 			return err
 		}
 	}
-	return nil
+	return dropStrayPathRedirects(tx, name)
 }
 
 // DeleteSite removes a site and its domains, and drops it from the site

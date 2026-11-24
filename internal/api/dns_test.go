@@ -237,7 +237,8 @@ func TestDNSRoutesJSONShapes(t *testing.T) {
 	wantKeys(t, rec.Body.Bytes(), "id", "provider", "name", "owner", "created_at", "last_checked_at", "last_error", "can_write", "zone_count")
 
 	rec = d.root("GET", "/api/dns/zones", "")
-	if rec.Code != 200 || rec.Body.String() != `{"zones":[{"connection_id":`+id+`,"connection_name":"main","name":"example.com","read_only":false}],"problems":[]}`+"\n" {
+	if rec.Code != 200 || rec.Body.String() != `{"zones":[{"connection_id":`+id+`,"connection_name":"main","name":"example.com","read_only":false,`+
+		`"nameservers":["hydrogen.ns.hetzner.com","oxygen.ns.hetzner.com","helium.ns.hetzner.de"]}],"problems":[]}`+"\n" {
 		t.Fatalf("zones: %d %s", rec.Code, rec.Body)
 	}
 
@@ -354,7 +355,7 @@ func TestDNSRoutesWithoutServerIP(t *testing.T) {
 	}
 	d.connect(d.root, "main", hzToken)
 	wantStatus(t, d.root("PUT", "/api/sites/blog", `{"domains":["blog.example.com"]}`), 200, "")
-	msg := "The server's public address is not configured (start ownpaneld with -server-ip)"
+	msg := "The server's public address is not configured (an admin can enter it in the panel settings)"
 	wantStatus(t, d.root("GET", "/api/sites/blog/domains/status", ""), 409, msg)
 	wantStatus(t, d.root("POST", "/api/sites/blog/domains/blog.example.com/point", ""), 409, msg)
 }

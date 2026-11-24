@@ -19,11 +19,9 @@ ownpanel is early. This page separates what exists from what is only planned. Pl
 
 ## Open items
 
-- **The install script has not been tested on a real server.** Try it on a throwaway machine first.
+- **The installer has only been tested in containers,** not on a real server. Try it on a throwaway machine first.
 - **No per-site system users or quotas:** all site files belong to one user.
 - **Sign-in throttling is in memory** and resets on restart; it trusts `X-Forwarded-For` from local connections.
 - **No Content Security Policy** for the web interface.
 - **Only Hetzner** is supported as a DNS provider.
-- **Linux amd64 only** in the `make build-linux` target; other architectures need a manual build.
-- **No uninstall script;** see [[Installation|Installation]] for the manual steps.
 - Details on known gaps: [[Security|Security]].

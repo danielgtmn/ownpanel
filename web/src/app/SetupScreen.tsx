@@ -12,6 +12,8 @@ import {
   validateUserName,
 } from '../shared/session/index.ts'
 import { PasswordField } from '../shared/ui/index.ts'
+import { StepIndicator } from './setup/StepIndicator.tsx'
+import './setup/setup.css'
 
 type Errors = { code?: string; name?: string; password?: string; repeat?: string; form?: string }
 
@@ -64,6 +66,7 @@ export function SetupScreen() {
             the panel started says where. Enter it here and create the first administrator account.
           </p>
         </div>
+        <StepIndicator current="account" />
         <Field name="setup-code" invalid={errors.code ? true : undefined}>
           <FieldLabel>Setup code</FieldLabel>
           <Input

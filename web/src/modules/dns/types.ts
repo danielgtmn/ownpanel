@@ -21,6 +21,7 @@ export type Zone = {
   connection_name: string
   name: string
   read_only: boolean
+  nameservers: string[]
 }
 
 export type ZoneProblem = {

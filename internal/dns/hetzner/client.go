@@ -87,9 +87,30 @@ func New(token string, opts ...Option) *Client {
 // ---- wire types ----
 
 type apiZone struct {
-	ID   json.Number `json:"id"`
-	Name string      `json:"name"`
-	Mode string      `json:"mode"`
+	ID         json.Number `json:"id"`
+	Name       string      `json:"name"`
+	Mode       string      `json:"mode"`
+	Protection struct {
+		Delete bool `json:"delete"`
+	} `json:"protection"`
+	AuthoritativeNameservers struct {
+		Assigned []string `json:"assigned"`
+	} `json:"authoritative_nameservers"`
+}
+
+func (z apiZone) zone() dns.Zone {
+	ns := []string{}
+	for _, n := range z.AuthoritativeNameservers.Assigned {
+		if n = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(n), ".")); n != "" {
+			ns = append(ns, n)
+		}
+	}
+	return dns.Zone{
+		ID:          z.ID.String(),
+		Name:        strings.ToLower(strings.TrimSuffix(z.Name, ".")),
+		ReadOnly:    z.Mode != "primary",
+		Nameservers: ns,
+	}
 }
 
 type apiRecord struct {
@@ -150,11 +171,7 @@ func (c *Client) Zones(ctx context.Context) ([]dns.Zone, error) {
 			return err
 		}
 		for _, z := range page.Zones {
-			out = append(out, dns.Zone{
-				ID:       z.ID.String(),
-				Name:     strings.ToLower(strings.TrimSuffix(z.Name, ".")),
-				ReadOnly: z.Mode != "primary",
-			})
+			out = append(out, z.zone())
 		}
 		return nil
 	})
@@ -264,6 +281,64 @@ func (c *Client) DeleteRecordSet(ctx context.Context, zone, name, typ string) er
 		return nil
 	}
 	return err
+}
+
+// zoneTTL is the default TTL of zones created here (Hetzner's default).
+const zoneTTL = 3600
+
+// CreateZone creates a primary zone and waits until Hetzner has created it.
+// Hetzner adds the SOA record and NS records of its assigned nameservers.
+// Only registrable domains are accepted, as by Hetzner.
+func (c *Client) CreateZone(ctx context.Context, name string) (dns.Zone, error) {
+	name = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), "."))
+	if !dns.IsRegistrable(name) {
+		return dns.Zone{}, invalidf("%q is not a domain that can be registered (like example.com); subdomains cannot be separate zones here", name)
+	}
+	var resp struct {
+		Zone   apiZone    `json:"zone"`
+		Action *apiAction `json:"action"`
+	}
+	body := map[string]any{"name": name, "mode": "primary", "ttl": zoneTTL}
+	if err := c.do(ctx, http.MethodPost, "/zones", nil, body, &resp); err != nil {
+		return dns.Zone{}, err
+	}
+	if resp.Action != nil {
+		if err := c.waitAction(ctx, *resp.Action); err != nil {
+			return dns.Zone{}, err
+		}
+	}
+	z := resp.Zone.zone()
+	if len(z.Nameservers) == 0 {
+		// Assigned with the zone; read it back in case the answer had none yet.
+		var cur struct {
+			Zone apiZone `json:"zone"`
+		}
+		if err := c.do(ctx, http.MethodGet, "/zones/"+url.PathEscape(name), nil, nil, &cur); err != nil {
+			return dns.Zone{}, err
+		}
+		z = cur.Zone.zone()
+	}
+	return z, nil
+}
+
+// DeleteZone deletes a zone and waits until Hetzner has deleted it. A zone
+// protected against deletion gives dns.ErrLocked without trying.
+func (c *Client) DeleteZone(ctx context.Context, name string) error {
+	name = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), "."))
+	if name == "" || strings.ContainsAny(name, "/ \t") {
+		return invalidf("the zone name %q is invalid", name)
+	}
+	p := "/zones/" + url.PathEscape(name)
+	var cur struct {
+		Zone apiZone `json:"zone"`
+	}
+	if err := c.do(ctx, http.MethodGet, p, nil, nil, &cur); err != nil {
+		return err
+	}
+	if cur.Zone.Protection.Delete {
+		return fmt.Errorf("%w: the zone %s is protected against deletion", dns.ErrLocked, name)
+	}
+	return c.write(ctx, http.MethodDelete, p, nil)
 }
 
 // ---- conversion helpers ----
@@ -543,7 +618,7 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, body
 		code, msg := eb.Error.Code, eb.Error.Message
 		status := resp.StatusCode
 
-		retryable := (status == http.StatusLocked && code == "locked") || status == http.StatusConflict
+		retryable := (status == http.StatusLocked && code == "locked") || (status == http.StatusConflict && code != "uniqueness_error")
 		if retryable && retries < maxRetries {
 			if err := sleep(ctx, c.retryDelay<<retries); err != nil {
 				return err
@@ -597,8 +672,12 @@ func mapError(status int, code, msg string, eb apiErrorBody) error {
 	switch {
 	case status == http.StatusUnauthorized:
 		return fmt.Errorf("%w (%s)", dns.ErrUnauthorized, detail)
+	case status == http.StatusForbidden && code == "resource_limit_exceeded":
+		return fmt.Errorf("%w: %s", dns.ErrInvalid, detail)
 	case status == http.StatusForbidden:
 		return fmt.Errorf("%w (%s)", dns.ErrForbidden, detail)
+	case status == http.StatusConflict && code == "uniqueness_error":
+		return fmt.Errorf("%w (%s)", dns.ErrExists, detail)
 	case status == http.StatusNotFound:
 		return fmt.Errorf("%w (%s)", dns.ErrNotFound, detail)
 	case status == http.StatusUnprocessableEntity && code == "incorrect_zone_mode":

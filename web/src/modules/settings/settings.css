@@ -1,0 +1,14 @@
+.settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.settings-notice {
+  margin: 0 0 1.5rem;
+}

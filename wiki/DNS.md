@@ -2,8 +2,9 @@
 
 ownpanel can
 
-- show whether the domains of a site point at the server,
+- show whether the domains of a site or of a domain redirect point at the server,
 - set them up with one click ("point to this server"),
+- add and delete whole domains (zones) at **Hetzner**, showing the nameservers to enter at the registrar,
 - edit the DNS records of zones hosted at **Hetzner**.
 
 Only Hetzner is supported. It uses the DNS part of the Hetzner Cloud API (`api.hetzner.cloud`), the DNS in the Hetzner Console. The old `dns.hetzner.com` API was shut down in May 2026 and is not supported; zones that still live only there are not visible.
@@ -45,6 +46,21 @@ Adding, checking and removing connections needs a password sign-in or an access 
 - Access tokens limited to some sites cannot use DNS connections, zones or records. They can see the domain status of their sites and use "point to this server" for them.
 - `read` tokens can list zones and records.
 
+## Adding and deleting domains
+
+A domain (zone) can be created in one of your connections: `POST /api/dns/connections/{id}/zones` with `{"name": "example.com"}`.
+
+- Only registrable domains are accepted, like `example.com` or `example.co.uk`; a subdomain such as `www.example.com` is part of its domain's zone. Non-ASCII names must be given in punycode (`xn--…`).
+- Hetzner creates it as a primary zone with a default TTL of 3600 seconds, adds the SOA record and NS records of its nameservers, and assigns three nameservers. They are returned in `nameservers` (and listed with every zone): **enter them at the domain's registrar**, otherwise the records here are not used.
+- A domain that already exists at Hetzner, in this or another project, is refused.
+
+Deleting a domain removes the zone with all its records: `DELETE /api/dns/connections/{id}/zones/{zone}` with `{"confirm": "<zone name>"}`; the name must be repeated exactly.
+
+- It is refused while any site, redirect or the panel itself uses the domain or a name below it, whoever they belong to. The answer lists what uses it (things of other people without their names). Remove those first.
+- A zone that is protected against deletion at Hetzner is refused; remove the protection in the Hetzner Console first.
+
+Both work only through **your own** connections, with a password sign-in or an access token with `write` access to all sites.
+
 ## Managing records
 
 Open a zone to see its record sets (all records of one name and type), with `@` (the zone itself) first. You can create, replace and delete record sets.
@@ -76,7 +92,9 @@ Zones that are not primary zones at Hetzner (for example secondary zones) are ma
 
 ## Domain status
 
-For each domain of a site, the status is one of:
+Domain status works for every domain you control: the domains of sites you may see and the domains of your domain redirects ([[Redirects|Redirects]]). `GET /api/sites/{name}/domains/status` lists those of a site; `GET /api/dns/domain-status?domain=…` gives the same object for one domain.
+
+For each domain, the status is one of:
 
 | State | Meaning |
 |---|---|
@@ -91,7 +109,7 @@ If the zone of a domain is found among your connections, the status also tells w
 
 ## Point to this server
 
-"Point to this server" (`POST /api/sites/{name}/domains/{domain}/point`) writes the records for one domain of a site:
+"Point to this server" (`POST /api/sites/{name}/domains/{domain}/point`, or `POST /api/dns/point` with `{"domain": "…"}` for any domain you control, including a domain redirect's) writes the records for one domain:
 
 - It finds the zone among **your own** connections: the most specific zone wins. If the same zone is in two of your connections, it refuses until you remove one.
 - It writes an `A` record set with the IPv4 server addresses and an `AAAA` record set with the IPv6 ones, TTL 300. A record set that is already right is left alone, including its TTL.
@@ -100,12 +118,12 @@ If the zone of a domain is found among your connections, the status also tells w
 - It refuses read-only zones, and when none of your connections has a zone for the domain.
 - It returns what it changed (`{"changed": [...]}`; a removed record set has no values).
 
-It needs `write` access to the site, and the server addresses to be configured.
+It needs `write` access to the site (or to be allowed to change the domain redirect), and the server addresses to be configured.
 
 ## Activity log
 
-`dns.connect`, `dns.disconnect`, `dns.record.set`, `dns.record.delete` and `dns.point` are recorded. Tokens never are, and TXT values longer than 60 characters are left out.
+`dns.connect`, `dns.disconnect`, `dns.record.set`, `dns.record.delete`, `dns.point`, `dns.zone.create` and `dns.zone.delete` are recorded. Tokens never are, and TXT values longer than 60 characters are left out.
 
 ## Not available through MCP
 
-The MCP tools only check domains (`check_site_domains`); managing DNS connections and records is done in the web interface or the API ([[API|API]]).
+The MCP tools only check domains (`check_site_domains`); managing DNS connections, domains and records is done in the web interface or the API ([[API|API]]).

@@ -122,6 +122,13 @@ func (c *dnsCache) dropCheck(domain string) {
 	delete(c.checks, domain)
 }
 
+// dropAllChecks forgets every lookup, e.g. when the server's addresses change.
+func (c *dnsCache) dropAllChecks() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	clear(c.checks)
+}
+
 // ---- views ----
 
 // DNSConnection is what callers see of a connection; never its token.
@@ -150,6 +157,17 @@ type DNSZone struct {
 	ConnectionName string `json:"connection_name"`
 	Name           string `json:"name"`
 	ReadOnly       bool   `json:"read_only"`
+	// Nameservers are the provider's nameservers for the zone, to be set
+	// at the domain's registrar.
+	Nameservers []string `json:"nameservers"`
+}
+
+func zoneView(c store.DNSConnection, z dns.Zone) DNSZone {
+	ns := slices.Clone(z.Nameservers)
+	if ns == nil {
+		ns = []string{}
+	}
+	return DNSZone{ConnectionID: c.ID, ConnectionName: c.Name, Name: z.Name, ReadOnly: z.ReadOnly, Nameservers: ns}
 }
 
 // DNSProblem says why the zones of a connection could not be listed.
@@ -445,6 +463,8 @@ func dnsError(provider, connName, token string, err error) error {
 		return e(Conflict, "this zone is not a primary zone at %s, so its records cannot be read or changed here", label)
 	case errors.Is(err, dns.ErrLocked):
 		return e(Conflict, "the records are protected at %s; remove the protection there first", label)
+	case errors.Is(err, dns.ErrExists):
+		return e(Conflict, "it already exists at %s, possibly in another project or account", label)
 	case errors.Is(err, dns.ErrRateLimited):
 		return e(Throttled, "%s's request limit is reached; try again in a few minutes", label)
 	case errors.Is(err, dns.ErrInvalid):
@@ -579,7 +599,7 @@ func (s *Service) DNSZones(ctx context.Context, a Actor) (DNSZones, error) {
 			continue
 		}
 		for _, z := range zones {
-			out.Zones = append(out.Zones, DNSZone{ConnectionID: c.ID, ConnectionName: c.Name, Name: z.Name, ReadOnly: z.ReadOnly})
+			out.Zones = append(out.Zones, zoneView(c, z))
 		}
 	}
 	slices.SortStableFunc(out.Zones, func(x, y DNSZone) int {
@@ -763,7 +783,7 @@ func (s *Service) checkDomain(ctx context.Context, domain string) dns.Check {
 	}
 	lctx, cancel := context.WithTimeout(ctx, lookupTimeout)
 	defer cancel()
-	c := dns.CheckDomain(lctx, s.resolver, domain, s.serverIPs)
+	c := dns.CheckDomain(lctx, s.resolver, domain, s.effectiveServerIPs())
 	if ctx.Err() == nil {
 		s.dnsCache.putCheck(domain, c, s.now())
 	}
@@ -792,9 +812,72 @@ func (s *Service) DomainStatuses(ctx context.Context, a Actor, siteName string) 
 	if err := s.needServerIPs(); err != nil {
 		return nil, err
 	}
-	out := make([]DomainStatus, len(site.Domains))
+	return s.domainStatuses(ctx, a, site.Domains)
+}
+
+// controlledDomain normalizes domain and checks that it is a domain the
+// actor controls: a domain of a site it may see, or the domain of a domain
+// redirect it may see.
+func (s *Service) controlledDomain(ctx context.Context, a Actor, domain string) (string, error) {
+	if err := needAuth(a); err != nil {
+		return "", err
+	}
+	d, err := store.NormalizeDomain(domain)
+	if err != nil {
+		return "", errorf(NotFound, "you have no site or redirect with the domain %q", strings.TrimSpace(domain))
+	}
+	sites, err := s.store.Sites(ctx)
+	if err != nil {
+		return "", storeError(err)
+	}
+	for _, site := range sites {
+		if slices.Contains(site.Domains, d) && a.canSee(site) {
+			return d, nil
+		}
+	}
+	if ok, err := s.visibleDomainRedirect(ctx, a, d); err != nil || ok {
+		return d, err
+	}
+	return "", errorf(NotFound, "you have no site or redirect with the domain %q", d)
+}
+
+// DomainStatusOf tells where one domain the actor controls (of a site or a
+// domain redirect) points, like one element of DomainStatuses.
+func (s *Service) DomainStatusOf(ctx context.Context, a Actor, domain string) (DomainStatus, error) {
+	d, err := s.controlledDomain(ctx, a, domain)
+	if err != nil {
+		return DomainStatus{}, err
+	}
+	if err := s.needServerIPs(); err != nil {
+		return DomainStatus{}, err
+	}
+	out, err := s.domainStatuses(ctx, a, []string{d})
+	if err != nil {
+		return DomainStatus{}, err
+	}
+	return out[0], nil
+}
+
+// PointDomainOf is PointDomain for any domain the actor controls (of a site
+// or a domain redirect).
+func (s *Service) PointDomainOf(ctx context.Context, a Actor, domain string) (PointResult, error) {
+	d, err := s.controlledDomain(ctx, a, domain)
+	if err != nil {
+		return PointResult{}, err
+	}
+	if err := needWrite(a); err != nil {
+		return PointResult{}, err
+	}
+	if err := s.needServerIPs(); err != nil {
+		return PointResult{}, err
+	}
+	return s.pointDomain(ctx, a, d)
+}
+
+func (s *Service) domainStatuses(ctx context.Context, a Actor, domains []string) ([]DomainStatus, error) {
+	out := make([]DomainStatus, len(domains))
 	var wg sync.WaitGroup
-	for i, d := range site.Domains {
+	for i, d := range domains {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -811,8 +894,8 @@ func (s *Service) DomainStatuses(ctx context.Context, a Actor, siteName string) 
 		wg.Wait()
 		return nil, err
 	}
-	matches := make([][]zoneMatch, len(site.Domains))
-	for i, d := range site.Domains {
+	matches := make([][]zoneMatch, len(domains))
+	for i, d := range domains {
 		matches[i], _ = s.zoneMatches(ctx, conns, d)
 	}
 	wg.Wait()
@@ -862,6 +945,11 @@ func (s *Service) PointDomain(ctx context.Context, a Actor, siteName, domain str
 	if err := s.needServerIPs(); err != nil {
 		return PointResult{}, err
 	}
+	return s.pointDomain(ctx, a, d)
+}
+
+// pointDomain does PointDomain for a domain whose permissions are checked.
+func (s *Service) pointDomain(ctx context.Context, a Actor, d string) (PointResult, error) {
 	conns, err := s.ownConnections(ctx, a)
 	if err != nil {
 		return PointResult{}, err
@@ -902,7 +990,7 @@ func (s *Service) PointDomain(ctx context.Context, a Actor, siteName, domain str
 		return PointResult{}, errorf(Conflict, "%s has a CNAME record; remove it first", d)
 	}
 
-	desired := dns.AddressRecords(m.name, s.serverIPs, pointTTL)
+	desired := dns.AddressRecords(m.name, s.effectiveServerIPs(), pointTTL)
 	changed := []RecordSet{}
 	var types []string
 	finish := func(err error) (PointResult, error) {

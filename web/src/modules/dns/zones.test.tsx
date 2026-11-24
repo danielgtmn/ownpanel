@@ -1,21 +1,29 @@
+import { Dialog } from '@ui-sdk/react/dialog'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { recordPath, recordsPath, deleteRecord, listRecords, listZones, saveRecord } from './api.ts'
+import { createZone, deleteZone, recordPath, recordsPath, deleteRecord, listRecords, listZones, saveRecord } from './api.ts'
+import { DeleteDomainForm } from './DeleteDomainDialog.tsx'
+import { Nameservers } from './Nameservers.tsx'
 import type { Connection, ZoneList } from './types.ts'
 import {
+  canConfirmDelete,
   connectionHealth,
   describeZones,
   findZone,
   isOwnConnection,
+  nameserverList,
   parseConnectionId,
   problemMessage,
+  usesFromMessage,
   validateConnection,
+  validateZoneName,
   zoneCountLabel,
 } from './zones.ts'
 
 const list: ZoneList = {
   zones: [
-    { connection_id: 2, connection_name: 'B', name: 'zeta.org', read_only: false },
-    { connection_id: 1, connection_name: 'A', name: 'alpha.com', read_only: true },
+    { connection_id: 2, connection_name: 'B', name: 'zeta.org', read_only: false, nameservers: [] },
+    { connection_id: 1, connection_name: 'A', name: 'alpha.com', read_only: true, nameservers: [] },
   ],
   problems: [{ connection_id: 3, connection_name: 'Old', error: 'The API token was rejected.' }],
 }
@@ -150,5 +158,90 @@ describe('record requests', () => {
       status: 429,
       message: 'Hetzner is busy. Try again soon.',
     })
+  })
+})
+
+describe('adding and deleting domains', () => {
+  it('enables Delete only when the typed name matches', () => {
+    expect(canConfirmDelete('', 'example.com')).toBe(false)
+    expect(canConfirmDelete('example.co', 'example.com')).toBe(false)
+    expect(canConfirmDelete('www.example.com', 'example.com')).toBe(false)
+    expect(canConfirmDelete('example.com', 'example.com')).toBe(true)
+    expect(canConfirmDelete(' Example.COM. ', 'example.com')).toBe(true)
+  })
+
+  it('renders the Delete button disabled until the name is typed', () => {
+    const html = renderToStaticMarkup(
+      <Dialog>
+        <DeleteDomainForm zone="example.com" onDelete={async () => undefined} />
+      </Dialog>,
+    )
+    expect(html).toContain('Type example.com to confirm')
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>Delete domain<\/button>/)
+  })
+
+  it('lists what still uses a domain', () => {
+    const message =
+      'The domain example.com is still in use by the site blog (example.com, www.example.com), the redirect of go.example.com, a site of another person (shop.example.com), the panel itself (panel.example.com); remove those first'
+    expect(usesFromMessage(message)).toEqual([
+      'The site blog (example.com, www.example.com)',
+      'The redirect of go.example.com',
+      'A site of another person (shop.example.com)',
+      'The panel itself (panel.example.com)',
+    ])
+    expect(usesFromMessage('Not deleted: type the domain name example.com exactly to confirm')).toEqual([])
+  })
+
+  it('shows nameservers without trailing dots or repeats', () => {
+    expect(nameserverList(['hydrogen.ns.hetzner.com.', 'oxygen.ns.hetzner.com', 'Hydrogen.ns.hetzner.com', ' '])).toEqual([
+      'hydrogen.ns.hetzner.com',
+      'oxygen.ns.hetzner.com',
+    ])
+    expect(nameserverList(null)).toEqual([])
+  })
+
+  it('renders each nameserver with a copy button', () => {
+    const html = renderToStaticMarkup(<Nameservers nameservers={['a.ns.example.net.', 'b.ns.example.net']} domain="example.com" />)
+    expect(html).toContain('<code>a.ns.example.net</code>')
+    expect(html).toContain('Copy<span class="visually-hidden"> b.ns.example.net</span>')
+    expect(renderToStaticMarkup(<Nameservers nameservers={[]} domain="example.com" />)).toContain('didn&#x27;t report')
+  })
+
+  it('checks the domain name before asking the provider', () => {
+    expect(validateZoneName('example.com')).toBeNull()
+    expect(validateZoneName('Example.co.uk.')).toBeNull()
+    expect(validateZoneName('')).toMatch(/enter the domain/i)
+    expect(validateZoneName('https://example.com')).toMatch(/without https/)
+    expect(validateZoneName('203.0.113.5')).toMatch(/IP address/)
+    expect(validateZoneName('bücher.de')).toMatch(/xn--/)
+    expect(validateZoneName('example')).toMatch(/isn't a valid domain/)
+  })
+
+  it('creates and deletes a domain through the connection', async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
+      init?.method === 'DELETE'
+        ? new Response(null, { status: 204 })
+        : new Response(
+            JSON.stringify({ name: 'example.com', connection_id: 4, connection_name: 'Main', read_only: false, nameservers: null }),
+            { status: 201, headers: { 'Content-Type': 'application/json' } },
+          ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const zone = await createZone(4, 'example.com')
+    expect(zone.nameservers).toEqual([])
+    await deleteZone(4, 'example.com', 'example.com')
+    expect(fetchMock.mock.calls.map(([url, init]) => `${init?.method} ${url} ${String(init?.body)}`)).toEqual([
+      'POST /api/dns/connections/4/zones {"name":"example.com"}',
+      'DELETE /api/dns/connections/4/zones/example.com {"confirm":"example.com"}',
+    ])
+  })
+
+  it('shows the provider’s refusal as the reason', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ error: 'The domain example.com is still in use by the site blog (example.com); remove those first' }), { status: 409 })),
+    )
+    const error = await deleteZone(4, 'example.com', 'example.com').catch((caught: unknown) => caught)
+    expect(usesFromMessage((error as Error).message)).toEqual(['The site blog (example.com)'])
   })
 })

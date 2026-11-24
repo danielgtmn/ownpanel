@@ -703,7 +703,7 @@ func TestPointHere(t *testing.T) {
 		d.svc.serverIPs = nil
 		_, err := d.svc.PointDomain(ctx, bob, "bobsite", "bobsite.example.com")
 		wantKind(t, err, Conflict)
-		if err.Error() != "The server's public address is not configured (start ownpaneld with -server-ip)" {
+		if err.Error() != "The server's public address is not configured (an admin can enter it in the panel settings)" {
 			t.Fatalf("message %q", err)
 		}
 		_, err = d.svc.DomainStatuses(ctx, bob, "bobsite")
