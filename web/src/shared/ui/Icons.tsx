@@ -156,3 +156,30 @@ export function MenuIcon() {
     </svg>
   )
 }
+
+export function PanelExpandIcon() {
+  return (
+    <svg {...common}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M9 4v16M13 10l2 2-2 2" />
+    </svg>
+  )
+}
+
+export function PanelCollapseIcon() {
+  return (
+    <svg {...common}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M9 4v16M15 10l-2 2 2 2" />
+    </svg>
+  )
+}
+
+export function CopyIcon() {
+  return (
+    <svg {...common}>
+      <rect x="8" y="8" width="13" height="13" rx="2" />
+      <path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" />
+    </svg>
+  )
+}

@@ -102,6 +102,7 @@ made with the cookie must send `X-Ownpanel-Request: 1`.
 | `POST` | `/api/sites/{name}/deployments` | upload a `.zip` or `tar.gz` (max 512 MB); its root becomes the web root (a single top-level folder is unwrapped) |
 | `POST` | `/api/uploads/{id}` | upload a `.zip` or `tar.gz` through a one-time upload link (the link is the credential; see MCP) |
 | `POST` | `/api/sites/{name}/rollback` | previous release, or body `{"release": "<id>"}` |
+| `GET` | `/api/sites/{name}/icon` | the site's icon from its live release (`<link rel="icon">` in `index.html`, else `favicon.svg`/`.png`/`.ico`, `apple-touch-icon.png`); `404` if none |
 | `GET` `POST` | `/api/users` | admins: list, create with `{"name", "password", "role"}` |
 | `PUT` `DELETE` | `/api/users/{id}` | admins: change `{"role"}` and/or `{"password"}`, delete |
 | `GET` | `/api/activity?limit=50` | admins: newest activity first |

@@ -86,6 +86,9 @@ func (m *Manager) releasesDir(site string) string { return filepath.Join(m.Base,
 // Root is the path the web server serves for a site.
 func (m *Manager) Root(site string) string { return filepath.Join(m.Base, site, "current") }
 
+// ReleaseDir is the directory of one release, whether it is active or not.
+func (m *Manager) ReleaseDir(site, id string) string { return filepath.Join(m.releasesDir(site), id) }
+
 // Current returns the active release ID, or "" if nothing is deployed.
 func (m *Manager) Current(site string) string {
 	target, err := os.Readlink(m.Root(site))

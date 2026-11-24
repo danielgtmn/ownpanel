@@ -31,9 +31,9 @@ import { useDomainData } from './sidebar/useDomainData.ts'
 export function Shell() {
   const route = useRoute()
   const { segments } = route
-  const { user, isAdmin } = useSession()
+  const { user } = useSession()
   const available = useMemo(() => visibleModules(modules, user), [user])
-  const data = useDomainData(isAdmin)
+  const data = useDomainData()
   const phone = useMediaQuery('(max-width: 760px)')
   const [menuOpen, setMenuOpen] = useState(false)
   const [changingPassword, setChangingPassword] = useState(false)
@@ -123,7 +123,7 @@ export function Shell() {
             <DrawerBackdrop className="nav-drawer-backdrop" />
             <DrawerContent className="nav-drawer">
               <DrawerTitle className="visually-hidden">Navigation</DrawerTitle>
-              <Sidebar {...sidebar} />
+              <Sidebar {...sidebar} inDrawer />
             </DrawerContent>
           </Drawer>
           <a className="brand" href={allHref}>

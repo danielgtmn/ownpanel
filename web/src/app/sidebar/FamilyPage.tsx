@@ -9,7 +9,6 @@ import {
 } from '../../shared/families/index.ts'
 import { usePageTitle } from '../../shared/hooks/index.ts'
 import { hrefFor, hrefWithQuery } from '../../shared/routing/index.ts'
-import { useSession } from '../../shared/session/index.ts'
 import { EmptyState, ErrorState, LoadingState, PageHeader, Section, StatusBadge } from '../../shared/ui/index.ts'
 import type { DomainData } from './useDomainData.ts'
 
@@ -40,7 +39,6 @@ function DomainList({ domains, states, label }: { domains: string[]; states: Poi
 }
 
 function FamilyContent({ family, states }: { family: Family; states: PointStates }) {
-  const { isAdmin } = useSession()
   const status = familyStatus(family, states)
   const tone = status === 'ok' ? 'positive' : status === 'attention' ? 'warning' : 'neutral'
   return (
@@ -117,16 +115,6 @@ function FamilyContent({ family, states }: { family: Family; states: PointStates
           </ul>
         )}
       </Section>
-      {family.panelDomain ? (
-        <Section title="Panel address" description={`This panel opens on a domain under ${family.domain}.`}>
-          <DomainList domains={[family.panelDomain]} states={states} label="Panel address" />
-          {isAdmin ? (
-            <p>
-              <a href={hrefFor('settings')}>Change in Settings</a>
-            </p>
-          ) : null}
-        </Section>
-      ) : null}
     </>
   )
 }

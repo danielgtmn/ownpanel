@@ -28,22 +28,43 @@
   }
 }
 
+/* Every rail item is a row: a square face, then a name that shows while the rail is expanded.
+   Collapsed, the rail is exactly one face wide and clips the names. */
 .rail {
+  --rail-pad: 0.875rem;
+
   display: flex;
   flex: none;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   gap: 0.625rem;
   width: 4.25rem;
-  padding: 0.875rem 0 0.75rem;
-  overflow-y: auto;
+  padding: 0.875rem var(--rail-pad) 0.75rem;
+  overflow: hidden auto;
   background: var(--side-rail);
   scrollbar-width: none;
+  transition: width 180ms ease-out;
+}
+
+.rail[data-expanded] {
+  width: 14rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail,
+  .tile-label {
+    transition: none;
+  }
 }
 
 .rail-nav [data-slot='navigation-menu-list'] {
-  align-items: center;
+  align-items: stretch;
   gap: 0.625rem;
+}
+
+.rail-nav [data-slot='navigation-menu-item'] {
+  width: 100%;
+  min-width: 0;
 }
 
 .rail-grow {
@@ -53,11 +74,11 @@
 
 .sidebar .tile {
   position: relative;
-  display: inline-flex;
+  display: flex;
   flex: none;
   align-items: center;
-  justify-content: center;
-  width: 2.5rem;
+  justify-content: flex-start;
+  width: 100%;
   height: 2.5rem;
   min-width: 0;
   padding: 0;
@@ -66,15 +87,50 @@
   background: transparent;
   box-shadow: none;
   color: var(--side-muted);
-  font: 700 0.875rem/1 var(--ui-font-sans);
-  letter-spacing: 0.01em;
+  font: 600 0.875rem/1 var(--ui-font-sans);
+  text-align: start;
   text-decoration: none;
   cursor: pointer;
 }
 
-.sidebar .tile svg {
+.sidebar .tile::before,
+.sidebar .tile::after {
+  content: none;
+}
+
+.tile-face {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.75rem;
+  font: 700 0.875rem/1 var(--ui-font-sans);
+  letter-spacing: 0.01em;
+}
+
+.tile-face svg {
   width: 1.25rem;
   height: 1.25rem;
+}
+
+.tile-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  padding-inline: 0.75rem 0.5rem;
+  color: var(--side-text);
+  font-weight: 550;
+  opacity: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: opacity 120ms ease-out;
+}
+
+.rail[data-expanded] .tile-label {
+  opacity: 1;
 }
 
 .sidebar .tile:hover {
@@ -82,59 +138,68 @@
   color: var(--side-text);
 }
 
-.sidebar .tile[data-kind='all'] {
+.sidebar .tile[data-kind='all'] .tile-face {
   background: var(--side-fill);
   color: var(--side-text);
 }
 
-.sidebar .tile[data-kind='family'] {
+.tile[data-kind='family'] .tile-face {
   --tile-hue: 70;
 
   background: oklch(0.84 0.09 var(--tile-hue));
   color: oklch(0.27 0.06 var(--tile-hue));
 }
 
-.sidebar .tile[data-kind='family']:hover {
+.tile[data-kind='family']:hover .tile-face {
   background: oklch(0.9 0.07 var(--tile-hue));
-  color: oklch(0.27 0.06 var(--tile-hue));
 }
 
-.sidebar .tile[data-hue='1'] {
+.tile-face[data-hue='1'] {
   --tile-hue: 25;
 }
-.sidebar .tile[data-hue='2'] {
+.tile-face[data-hue='2'] {
   --tile-hue: 305;
 }
-.sidebar .tile[data-hue='3'] {
+.tile-face[data-hue='3'] {
   --tile-hue: 160;
 }
-.sidebar .tile[data-hue='4'] {
+.tile-face[data-hue='4'] {
   --tile-hue: 235;
 }
-.sidebar .tile[data-hue='5'] {
+.tile-face[data-hue='5'] {
   --tile-hue: 120;
 }
 
-.sidebar .tile[data-kind='add'] {
+/* Site icons are drawn for light browser tabs, so they sit on a light face in both themes. */
+.tile[data-kind='family'] .tile-face[data-face='icon'],
+.tile[data-kind='family']:hover .tile-face[data-face='icon'] {
+  background: oklch(0.97 0.006 264);
+}
+
+.tile-icon {
+  width: 1.625rem;
+  height: 1.625rem;
+  object-fit: contain;
+  border-radius: 0.25rem;
+}
+
+.tile-icon[hidden] {
+  display: none;
+}
+
+.sidebar .tile[data-kind='add'] .tile-face,
+.sidebar .tile[data-kind='account'] .tile-face {
   width: 2.25rem;
   height: 2.25rem;
+  margin-inline: 0.125rem;
+}
+
+.sidebar .tile[data-kind='add'] .tile-face {
   border: 1.5px dashed var(--side-line);
   border-radius: 0.625rem;
 }
 
-.sidebar .tile[data-kind='add']::before,
-.sidebar .tile[data-kind='add']::after {
-  content: none;
-}
-
-.sidebar .tile[data-kind='entry'][data-current] {
-  background: var(--side-fill);
-  color: var(--side-text);
-}
-
-.sidebar .tile[data-kind='account'] {
-  width: 2.25rem;
-  height: 2.25rem;
+.sidebar .tile[data-kind='account'] .tile-face {
   border: 1.5px solid var(--side-line);
   border-radius: 50%;
   background: var(--side-hover);
@@ -142,10 +207,38 @@
   font-size: 0.8125rem;
 }
 
-.sidebar .tile[data-kind='all'][data-current],
-.sidebar .tile[data-kind='family'][data-current] {
+.sidebar .tile[data-kind='entry'][data-current] {
+  background: var(--side-fill);
+  color: var(--side-text);
+}
+
+.sidebar .tile[data-kind='toggle'] {
+  height: 2.25rem;
+}
+
+.sidebar .tile[data-kind='toggle'] .tile-face {
+  height: 2.25rem;
+}
+
+.sidebar .tile[data-kind='toggle'] .tile-label {
+  color: var(--side-muted);
+  font-weight: 500;
+}
+
+.sidebar .tile[data-kind='all'][data-current] .tile-face,
+.sidebar .tile[data-kind='family'][data-current] .tile-face {
   outline: 2px solid var(--side-text);
   outline-offset: 2px;
+}
+
+.rail[data-expanded] .tile[data-kind='all'][data-current],
+.rail[data-expanded] .tile[data-kind='family'][data-current] {
+  background: var(--side-fill);
+}
+
+.rail[data-expanded] .tile[data-kind='all'][data-current] .tile-face,
+.rail[data-expanded] .tile[data-kind='family'][data-current] .tile-face {
+  outline-color: transparent;
 }
 
 .sidebar .tile:focus-visible {
@@ -154,14 +247,24 @@
 }
 
 .tile-dot {
+  --dot-ring: var(--side-rail);
+
   position: absolute;
   top: -0.25rem;
   right: -0.25rem;
   width: 0.75rem;
   height: 0.75rem;
-  border: 2px solid var(--side-rail);
+  border: 2px solid var(--dot-ring);
   border-radius: 50%;
   background: var(--side-muted);
+}
+
+.rail[data-expanded] .tile:hover .tile-dot {
+  --dot-ring: var(--side-hover);
+}
+
+.rail[data-expanded] .tile[data-current] .tile-dot {
+  --dot-ring: var(--side-fill);
 }
 
 .tile-dot[data-status='ok'] {
@@ -173,12 +276,19 @@
 }
 
 .tile-dot[data-status='pending'] {
-  background: var(--side-rail);
+  background: var(--dot-ring);
   box-shadow: inset 0 0 0 1.5px var(--side-muted);
 }
 
 .tile-dot[data-status='idle'] {
   display: none;
+}
+
+.tile-menu-hint {
+  margin-inline-start: auto;
+  padding-inline-start: 1rem;
+  color: var(--ui-muted-foreground);
+  font-size: 0.75rem;
 }
 
 .rail-tip {
@@ -199,6 +309,15 @@
 
 .rail-tip-detail {
   color: var(--side-muted);
+}
+
+.rail-tip-key {
+  margin-inline-start: 0.5rem;
+  padding: 0 0.3125rem;
+  border: 1px solid var(--side-line);
+  border-radius: 0.25rem;
+  color: var(--side-muted);
+  font: 600 0.75rem/1.4 var(--ui-font-mono);
 }
 
 .column {
@@ -399,7 +518,8 @@
 }
 
 .nav-drawer[data-slot='drawer-content'] {
-  width: min(20rem, 88vw);
+  width: min(30rem, 96vw);
+  max-width: none;
   height: 100dvh;
   max-height: none;
   padding: 0;
@@ -414,6 +534,19 @@
 .nav-drawer .column {
   flex: 1;
   width: auto;
+}
+
+.nav-drawer .rail[data-expanded] {
+  width: min(11rem, 44vw);
+}
+
+/* No tooltips on touch screens, so long names wrap instead of being cut off. */
+.nav-drawer .tile-label {
+  padding-inline: 0.625rem 0.25rem;
+  font-size: 0.8125rem;
+  line-height: 1.2;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .nav-drawer-backdrop {
