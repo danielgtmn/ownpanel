@@ -1,9 +1,14 @@
+# Pull request titles must follow Conventional Commits (the required check
+# "commits", see .github/workflows/commits.yml), so updates are "chore(deps): ...".
+# chore does not make a release by itself.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
     groups:
       actions:
         patterns: ["*"]
@@ -12,6 +17,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
     groups:
       go-modules:
         patterns: ["*"]
@@ -20,6 +27,9 @@ updates:
     directory: /web
     schedule:
       interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
     groups:
       web-dependencies:
         patterns: ["*"]

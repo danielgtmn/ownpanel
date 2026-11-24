@@ -52,10 +52,10 @@ The installer never asks questions, except to confirm `--uninstall --purge`.
 
 | Channel | What it is |
 |---|---|
-| `stable` | Tagged releases (`v1.2.3`). The default. |
-| `nightly` | An automatic build of `main`, made every night when `main` has changed. For testing, not for production. |
+| `stable` | Versioned releases (`v1.2.3`), made when `main` is merged into the `release` branch. The default. |
+| `nightly` | An automatic build of `main`, made after every merged pull request. For testing, not for production. |
 
-Both are built by the release workflow (`.github/workflows/release.yml`) with `scripts/package.sh` and published as GitHub releases: stable releases under their tag, the nightly as the prerelease `nightly`, which is replaced by every new build. Each release has an archive per architecture, `ownpanel_<version>_linux_<arch>.tar.gz`, and `checksums.txt`. The installer refuses an archive whose SHA-256 does not match `checksums.txt`.
+Both are built by the release workflow (`.github/workflows/release.yml`) with `scripts/package.sh` and published as GitHub releases: stable releases under their tag, the newest one marked "latest", the nightly as the prerelease `nightly`, which is replaced by every new build. Each release has an archive per architecture, `ownpanel_<version>_linux_<arch>.tar.gz`, and `checksums.txt`. The installer refuses an archive whose SHA-256 does not match `checksums.txt`. How releases are made: [[Development|Development#releases]].
 
 Switch channels by running the installer with the other `--channel`; it is stored in `/etc/ownpanel/release`.
 

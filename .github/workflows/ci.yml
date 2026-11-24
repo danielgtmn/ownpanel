@@ -3,14 +3,16 @@
 # means updating the rules as well.
 #
 # On pull requests, jobs run only when files they check changed (a skipped
-# job counts as passed for the branch rules). Pushes to main, the merge
-# queue and manual runs always run everything.
+# job counts as passed for the branch rules). Pushes to main and release,
+# the merge queue and manual runs always run everything. Pull requests into
+# release are checked like any other. The pull request title check
+# ("commits") is in commits.yml.
 name: CI
 
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, release]
   merge_group:
   workflow_dispatch:
 
@@ -145,6 +147,13 @@ jobs:
           fi
           shellcheck --version
           shellcheck "${scripts[@]}"
+      - name: Script tests
+        run: |
+          for t in scripts/*_test.sh; do
+            echo "::group::$t"
+            "$t"
+            echo "::endgroup::"
+          done
       - name: actionlint
         # The preinstalled shellcheck is picked up for the run: blocks.
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color

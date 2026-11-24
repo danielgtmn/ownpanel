@@ -226,10 +226,10 @@ curl -fsSL https://raw.githubusercontent.com/danielgtmn/ownpanel/main/install.sh
 ```
 
 Run the same command again to upgrade; `--uninstall` removes ownpanel but
-keeps the data (`--purge` deletes it too). `--channel nightly` follows an
-automatic build of `main` instead of the tagged releases. Releases are built
-by the release workflow (`.github/workflows/release.yml`) with
-`scripts/package.sh`.
+keeps the data (`--purge` deletes it too). `--channel nightly` follows the
+build of `main` made after every merged pull request instead of the stable
+releases, which come from the `release` branch. Releases are built by the
+release workflow (`.github/workflows/release.yml`) with `scripts/package.sh`.
 
 Manual install: download `ownpanel_<version>_linux_<arch>.tar.gz` and
 `checksums.txt` from the releases, check and unpack the archive and run
