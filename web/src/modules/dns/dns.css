@@ -1,0 +1,67 @@
+.connection-health {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.connection-health[data-tone='problem'] {
+  color: var(--ui-destructive);
+}
+
+.connection-health[data-tone='ok'],
+.connection-health[data-tone='unknown'] {
+  color: var(--ui-muted-foreground);
+}
+
+.connection-note {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.notice-problem {
+  margin: 0 0 0.75rem;
+  border: 1px solid color-mix(in oklab, var(--ui-destructive) 40%, var(--ui-background));
+}
+
+.notice-spaced {
+  margin: 0 0 1.5rem;
+}
+
+.record-name {
+  overflow-wrap: anywhere;
+}
+
+.record-type {
+  display: inline-block;
+  margin-left: 0.625rem;
+  padding: 0.0625rem 0.5rem;
+  border-radius: calc(var(--ui-radius) / 1.5);
+  background: var(--ui-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+.record-values {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  margin: 0;
+  padding: 0;
+  font-family: var(--ui-font-mono, ui-monospace, monospace);
+  font-size: 0.875rem;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+.record-ttl {
+  margin: 0;
+  font-size: 0.8125rem;
+}
+
+.record-preview {
+  overflow-wrap: anywhere;
+}
+
+[data-slot='number-input'] {
+  max-width: 14rem;
+}

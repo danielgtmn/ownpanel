@@ -1,0 +1,24 @@
+.activity-sentence,
+.activity-detail {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.activity-detail {
+  font-size: 0.875rem;
+}
+
+.activity-time {
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 1rem;
+}
+
+.activity-more p {
+  margin: 0;
+}

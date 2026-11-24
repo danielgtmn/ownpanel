@@ -1,0 +1,365 @@
+package panel
+
+import (
+	"context"
+	"errors"
+	"io/fs"
+	"os"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestPasswordHashing(t *testing.T) {
+	h, err := hashPassword("correct horse battery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`^\$argon2id\$v=19\$m=65536,t=2,p=2\$[A-Za-z0-9+/]{22}\$[A-Za-z0-9+/]{43}$`).MatchString(h) {
+		t.Fatalf("encoding %q", h)
+	}
+	h2, _ := hashPassword("correct horse battery")
+	if h == h2 {
+		t.Fatal("salt must differ per hash")
+	}
+	for _, tc := range []struct {
+		name, hash, pw string
+		want           bool
+	}{
+		{"right", h, "correct horse battery", true},
+		{"wrong", h, "correct horse batterY", false},
+		{"empty", h, "", false},
+		{"garbage hash", "nope", "correct horse battery", false},
+		{"other algorithm", strings.Replace(h, "argon2id", "argon2i", 1), "correct horse battery", false},
+		{"absurd memory", strings.Replace(h, "m=65536", "m=99999999", 1), "correct horse battery", false},
+		{"truncated key", h[:len(h)-30], "correct horse battery", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := verifyPassword(tc.hash, tc.pw); got != tc.want {
+				t.Fatalf("got %v", got)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		pw string
+		ok bool
+	}{{"short", false}, {strings.Repeat("a", 10), true}, {strings.Repeat("ä", 200), true}, {strings.Repeat("a", 201), false}} {
+		if err := validatePassword(tc.pw); (err == nil) != tc.ok {
+			t.Errorf("password of %d chars: %v", len(tc.pw), err)
+		}
+	}
+}
+
+func TestUserNames(t *testing.T) {
+	for _, tc := range []struct {
+		in string
+		ok bool
+	}{{"Alice", true}, {"a.b_c-d", true}, {"ab", false}, {strings.Repeat("a", 33), false}, {"al ice", false}, {"älice", false}} {
+		if err := validateUserName(normalizeUserName(tc.in)); (err == nil) != tc.ok {
+			t.Errorf("%q: %v", tc.in, err)
+		}
+	}
+}
+
+// clock is a settable time source for the service.
+type clock struct{ t time.Time }
+
+func (c *clock) now() time.Time          { return c.t }
+func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
+
+func withClock(svc *Service) *clock {
+	c := &clock{t: time.Unix(1_800_000_000, 0)}
+	svc.now = c.now
+	svc.store.Now = c.now
+	return c
+}
+
+func TestLoginSessionsAndPasswordChange(t *testing.T) {
+	svc, _, _ := newService(t)
+	clk := withClock(svc)
+	ctx := context.Background()
+	if _, err := svc.CreateUser(ctx, admin, "Alice", "alice-password-1", "member"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := svc.Login(ctx, Credentials{Name: "alice", Password: "wrong-password", ClientIP: "1.2.3.4"})
+	wantKind(t, err, Unauthenticated)
+	if err.Error() != "Wrong name or password." {
+		t.Fatalf("message %q", err)
+	}
+	_, _, err = svc.Login(ctx, Credentials{Name: "ghost", Password: "whatever-pass", ClientIP: "1.2.3.4"})
+	if KindOf(err) != Unauthenticated || err.Error() != "Wrong name or password." {
+		t.Fatalf("unknown user must look like a wrong password: %v", err)
+	}
+
+	u, first, err := svc.Login(ctx, Credentials{Name: " ALICE ", Password: "alice-password-1", ClientIP: "1.2.3.4"})
+	if err != nil || u.Name != "alice" || u.Role != "member" {
+		t.Fatalf("%+v %v", u, err)
+	}
+	_, second, _ := svc.Login(ctx, Credentials{Name: "alice", Password: "alice-password-1", ClientIP: "5.6.7.8"})
+	a, err := svc.SessionActor(ctx, first)
+	if err != nil || a.Name != "alice" || a.Via != ViaSession || a.Admin {
+		t.Fatalf("%+v %v", a, err)
+	}
+
+	err = svc.ChangePassword(ctx, a, "not-the-current", "alice-password-2", "1.2.3.4")
+	wantKind(t, err, Invalid)
+	err = svc.ChangePassword(ctx, a, "alice-password-1", "short", "1.2.3.4")
+	wantKind(t, err, Invalid)
+	if err := svc.ChangePassword(ctx, a, "alice-password-1", "alice-password-2", "1.2.3.4"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SessionActor(ctx, first); err != nil {
+		t.Fatal("the session that changed the password stays")
+	}
+	_, err = svc.SessionActor(ctx, second)
+	wantKind(t, err, Unauthenticated)
+	if _, _, err := svc.Login(ctx, Credentials{Name: "alice", Password: "alice-password-2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	clk.advance(SessionLifetime + time.Second)
+	_, err = svc.SessionActor(ctx, first)
+	wantKind(t, err, Unauthenticated)
+
+	_, third, _ := svc.Login(ctx, Credentials{Name: "alice", Password: "alice-password-2"})
+	if err := svc.Logout(ctx, third); err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.SessionActor(ctx, third)
+	wantKind(t, err, Unauthenticated)
+	if err := svc.Logout(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAdminPasswordResetEndsSessions(t *testing.T) {
+	svc, _, _ := newService(t)
+	ctx := context.Background()
+	u, _ := svc.CreateUser(ctx, admin, "alice", "alice-password-1", "member")
+	_, secret, _ := svc.Login(ctx, Credentials{Name: "alice", Password: "alice-password-1"})
+	pw := "alice-password-9"
+	if _, err := svc.UpdateUser(ctx, admin, u.ID, nil, &pw); err != nil {
+		t.Fatal(err)
+	}
+	_, err := svc.SessionActor(ctx, secret)
+	wantKind(t, err, Unauthenticated)
+}
+
+func TestLastAdminProtection(t *testing.T) {
+	svc, _, _ := newService(t)
+	ctx := context.Background()
+	member := "member"
+	_, err := svc.UpdateUser(ctx, admin, admin.UserID, &member, nil)
+	wantKind(t, err, Conflict)
+	wantKind(t, svc.DeleteUser(ctx, admin, admin.UserID), Conflict)
+
+	second, _ := svc.CreateUser(ctx, admin, "second", "second-password", "admin")
+	if _, err := svc.UpdateUser(ctx, admin, admin.UserID, &member, nil); err != nil {
+		t.Fatal(err)
+	}
+	other := Actor{UserID: second.ID, Name: "second", Admin: true, Via: ViaSession}
+	wantKind(t, svc.DeleteUser(ctx, other, second.ID), Conflict)
+	bad := "owner"
+	_, err = svc.UpdateUser(ctx, other, admin.UserID, &bad, nil)
+	wantKind(t, err, Invalid)
+	_, err = svc.UpdateUser(ctx, other, 999, &member, nil)
+	wantKind(t, err, NotFound)
+}
+
+func TestLoginThrottling(t *testing.T) {
+	svc, _, _ := newService(t)
+	clk := withClock(svc)
+	ctx := context.Background()
+	svc.CreateUser(ctx, admin, "alice", "alice-password-1", "member")
+	bad := Credentials{Name: "alice", Password: "wrong-password", ClientIP: "1.2.3.4"}
+	good := Credentials{Name: "alice", Password: "alice-password-1", ClientIP: "1.2.3.4"}
+
+	for i := 0; i < 5; i++ {
+		_, _, err := svc.Login(ctx, bad)
+		wantKind(t, err, Unauthenticated)
+		clk.advance(time.Minute)
+	}
+	_, _, err := svc.Login(ctx, good)
+	wantKind(t, err, Throttled)
+	if !strings.Contains(err.Error(), "try again in 10 minutes") {
+		t.Fatalf("message %q", err)
+	}
+	// Other addresses and other names are not affected.
+	if _, _, err := svc.Login(ctx, Credentials{Name: "alice", Password: "alice-password-1", ClientIP: "9.9.9.9"}); err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(9 * time.Minute)
+	_, _, err = svc.Login(ctx, good)
+	wantKind(t, err, Throttled)
+	clk.advance(time.Minute + time.Second) // the first failure leaves the window
+	if _, _, err := svc.Login(ctx, good); err != nil {
+		t.Fatal(err)
+	}
+	// Success resets the count.
+	for i := 0; i < 4; i++ {
+		svc.Login(ctx, bad)
+	}
+	if _, _, err := svc.Login(ctx, good); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLimiter(t *testing.T) {
+	now := time.Unix(0, 0)
+	l := newLimiter(2, time.Minute)
+	l.now = func() time.Time { return now }
+	for _, tc := range []struct {
+		advance time.Duration
+		key     string
+		blocked bool
+	}{
+		{0, "a", false}, {0, "a", false}, {0, "a", true}, {0, "b", false},
+		{59 * time.Second, "a", true}, {time.Second, "a", false},
+	} {
+		now = now.Add(tc.advance)
+		if got := l.attempt(tc.key) > 0; got != tc.blocked {
+			t.Fatalf("%+v: blocked=%v", tc, got)
+		}
+	}
+	now = now.Add(time.Hour)
+	l.attempt("c")
+	if _, ok := l.fails["b"]; ok {
+		t.Fatal("stale keys must be swept")
+	}
+}
+
+func TestSetupFlow(t *testing.T) {
+	svc, _, _ := newEmptyService(t)
+	ctx := context.Background()
+
+	needed, err := svc.EnsureSetupCode(ctx)
+	if err != nil || !needed {
+		t.Fatalf("%v %v", needed, err)
+	}
+	b, err := os.ReadFile(svc.setupCodeFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := strings.TrimSpace(string(b))
+	if !regexp.MustCompile(`^[A-HJ-NP-Z2-9]{4}(-[A-HJ-NP-Z2-9]{4}){5}$`).MatchString(code) {
+		t.Fatalf("code %q", code)
+	}
+	if fi, _ := os.Stat(svc.setupCodeFile); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v", fi.Mode().Perm())
+	}
+	if again, _ := svc.EnsureSetupCode(ctx); !again {
+		t.Fatal("still needed")
+	}
+	if b2, _ := os.ReadFile(svc.setupCodeFile); string(b2) != string(b) {
+		t.Fatal("an existing code must be kept across restarts")
+	}
+
+	creds := Credentials{Name: "Root", Password: "root-password-1", ClientIP: "1.2.3.4"}
+	_, _, err = svc.Setup(ctx, "WRONG-CODE", creds)
+	wantKind(t, err, Invalid)
+	_, _, err = svc.Setup(ctx, code, Credentials{Name: "root", Password: "short", ClientIP: "1.2.3.4"})
+	wantKind(t, err, Invalid)
+
+	u, secret, err := svc.Setup(ctx, strings.ToLower(code), creds)
+	if err != nil || u.Name != "root" || u.Role != "admin" || secret == "" {
+		t.Fatalf("%+v %v", u, err)
+	}
+	if _, err := os.Stat(svc.setupCodeFile); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal("setup code file must be removed")
+	}
+	if a, err := svc.SessionActor(ctx, secret); err != nil || !a.Admin {
+		t.Fatalf("%+v %v", a, err)
+	}
+	_, _, err = svc.Setup(ctx, code, creds)
+	wantKind(t, err, Conflict)
+	if needed, _ := svc.EnsureSetupCode(ctx); needed {
+		t.Fatal("no setup after the first admin")
+	}
+
+	// Throttling on a fresh install.
+	svc, _, _ = newEmptyService(t)
+	svc.EnsureSetupCode(ctx)
+	for i := 0; i < 5; i++ {
+		_, _, err := svc.Setup(ctx, "nope", creds)
+		wantKind(t, err, Invalid)
+	}
+	b, _ = os.ReadFile(svc.setupCodeFile)
+	_, _, err = svc.Setup(ctx, string(b), creds)
+	wantKind(t, err, Throttled)
+}
+
+func TestTokenLifecycle(t *testing.T) {
+	svc, _, _ := newService(t)
+	clk := withClock(svc)
+	ctx := context.Background()
+	if _, err := svc.SaveSite(ctx, admin, "blog", nil); err != nil {
+		t.Fatal(err)
+	}
+	nt, err := svc.CreateToken(ctx, admin, "deploy", "read", []string{"blog"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(nt.Secret, "op_") || len(nt.Secret) != 3+43 {
+		t.Fatalf("secret %q", nt.Secret)
+	}
+	a, err := svc.TokenActor(ctx, nt.Secret)
+	if err != nil || a.Via != ViaToken || !a.ReadOnly || len(a.Sites) != 1 || !a.Admin {
+		t.Fatalf("%+v %v", a, err)
+	}
+	list, _ := svc.Tokens(ctx, admin)
+	if len(list) != 1 || list[0].LastUsedAt == nil || !list[0].LastUsedAt.Equal(clk.t) {
+		t.Fatalf("last use not recorded: %+v", list)
+	}
+	for _, bad := range []string{"", "op_", "op_nope", strings.TrimPrefix(nt.Secret, "op_"), nt.Secret + "x"} {
+		_, err := svc.TokenActor(ctx, bad)
+		wantKind(t, err, Unauthenticated)
+	}
+
+	// A token follows its user's current role.
+	second, _ := svc.CreateUser(ctx, admin, "second", "second-password", "admin")
+	secondSession := Actor{UserID: second.ID, Name: "second", Admin: true, Via: ViaSession}
+	st, _ := svc.CreateToken(ctx, secondSession, "ci", "write", nil)
+	member := "member"
+	svc.UpdateUser(ctx, admin, second.ID, &member, nil)
+	if a, _ := svc.TokenActor(ctx, st.Secret); a.Admin {
+		t.Fatal("token kept admin rights after demotion")
+	}
+
+	wantKind(t, svc.DeleteToken(ctx, secondSession, nt.ID), NotFound) // not theirs
+	if err := svc.DeleteToken(ctx, admin, nt.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.TokenActor(ctx, nt.Secret)
+	wantKind(t, err, Unauthenticated)
+}
+
+func TestActivityLog(t *testing.T) {
+	svc, _, _ := newService(t)
+	ctx := context.Background()
+	nt, _ := svc.CreateToken(ctx, admin, "ci", "write", nil)
+	tok, _ := svc.TokenActor(ctx, nt.Secret)
+	svc.SaveSite(ctx, tok, "blog", []string{"blog.example.com"})
+	svc.CreateUser(ctx, admin, "alice", "alice-secret-pw", "member")
+	list, err := svc.Activities(ctx, admin, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var all []string
+	for _, a := range list {
+		all = append(all, a.Actor+"|"+a.Action+"|"+a.Target+"|"+a.Detail)
+	}
+	joined := strings.Join(all, "\n")
+	for _, want := range []string{"root|user.create|alice|role member", "root via token ci|site.create|blog|blog.example.com", "root|token.create|ci|write access, all sites"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q in\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, nt.Secret) || strings.Contains(joined, "alice-secret-pw") {
+		t.Fatal("secrets in the activity log")
+	}
+	if !strings.HasPrefix(all[0], "root|user.create") {
+		t.Fatalf("newest first: %s", all[0])
+	}
+}

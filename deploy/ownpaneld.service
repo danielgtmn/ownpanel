@@ -1,0 +1,21 @@
+[Unit]
+Description=ownpanel daemon
+After=network-online.target ownpanel-caddy.service
+Wants=network-online.target ownpanel-caddy.service
+
+[Service]
+User=ownpanel
+Group=ownpanel
+# OWNPANELD_ARGS (install.sh writes the default):
+#   -tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock
+# Add -panel-domain panel.example.com to reach the panel over HTTPS.
+EnvironmentFile=-/etc/ownpanel/ownpaneld.env
+ExecStart=/usr/local/bin/ownpaneld -data /var/lib/ownpanel $OWNPANELD_ARGS
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,405 @@
+// Package panel is the single place where the panel's operations are
+// defined, including who may do what. HTTP, MCP and other front doors only
+// authenticate and translate to and from it, so every one of them does
+// exactly the same thing and enforces the same permissions.
+package panel
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/netip"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/danielgtmn/ownpanel/internal/caddy"
+	"github.com/danielgtmn/ownpanel/internal/deploy"
+	"github.com/danielgtmn/ownpanel/internal/dns"
+	"github.com/danielgtmn/ownpanel/internal/secrets"
+	"github.com/danielgtmn/ownpanel/internal/store"
+)
+
+// WebServer is what the service needs from the web server.
+type WebServer interface {
+	Load(ctx context.Context, cfg any) error
+}
+
+// Config is what New needs.
+type Config struct {
+	Store   *store.Store
+	Deploys *deploy.Manager
+	Web     WebServer
+	Caddy   caddy.Options
+	// SetupCodeFile holds the one-time code for creating the first admin.
+	SetupCodeFile string
+
+	// Secrets encrypts the tokens of DNS connections. Without it no DNS
+	// connection can be added or used.
+	Secrets *secrets.Box
+	// ServerIPs are the server's public addresses, which domains should
+	// point at (see ParseServerIPs).
+	ServerIPs []netip.Addr
+	// NewDNSProvider returns a client for a DNS provider account; nil means
+	// DefaultDNSProvider. Tests pass a fake.
+	NewDNSProvider func(provider, token string) (dns.Provider, error)
+	// Resolver looks up where domains point; nil means asking the domain's
+	// authoritative nameservers directly (which sees a new record at once,
+	// unlike a recursive resolver that caches "no such domain" for an hour),
+	// falling back to the system resolver.
+	Resolver dns.Resolver
+}
+
+// Service owns every use case of the panel.
+type Service struct {
+	store         *store.Store
+	deploys       *deploy.Manager
+	web           WebServer
+	opts          caddy.Options
+	setupCodeFile string
+
+	now     func() time.Time
+	limiter *limiter
+	uploads uploads
+
+	// syncMu serializes Sync so concurrent changes cannot load configs out
+	// of order.
+	syncMu sync.Mutex
+	// unhealthyRetry is how soon Run retries while the web server is out of
+	// sync. A field so tests can lower it.
+	unhealthyRetry time.Duration
+
+	secrets     *secrets.Box
+	serverIPs   []netip.Addr
+	newProvider func(provider, token string) (dns.Provider, error)
+	resolver    dns.Resolver
+	dnsCache    *dnsCache
+}
+
+// New returns a Service. It rejects invalid web server options up front, and
+// a panel domain that a site already uses.
+func New(cfg Config) (*Service, error) {
+	if _, err := caddy.Build(cfg.Caddy, nil); err != nil {
+		return nil, err
+	}
+	s := &Service{
+		store:          cfg.Store,
+		deploys:        cfg.Deploys,
+		web:            cfg.Web,
+		opts:           cfg.Caddy,
+		setupCodeFile:  cfg.SetupCodeFile,
+		now:            time.Now,
+		limiter:        newLimiter(5, 15*time.Minute),
+		unhealthyRetry: 2 * time.Second,
+		secrets:        cfg.Secrets,
+		serverIPs:      slices.Clone(cfg.ServerIPs),
+		newProvider:    cfg.NewDNSProvider,
+		resolver:       cfg.Resolver,
+		dnsCache:       newDNSCache(),
+	}
+	s.limiter.now = func() time.Time { return s.now() }
+	if s.newProvider == nil {
+		s.newProvider = DefaultDNSProvider
+	}
+	if s.resolver == nil {
+		s.resolver = dns.NewAuthoritative(net.DefaultResolver)
+	}
+	if d := cfg.Caddy.PanelDomain; d != "" && s.store != nil {
+		sites, err := s.store.Sites(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		for _, site := range sites {
+			if slices.Contains(site.Domains, d) {
+				return nil, fmt.Errorf("panel domain %s is already used by site %q", d, site.Name)
+			}
+		}
+	}
+	return s, nil
+}
+
+// Site is what callers see of a site.
+type Site struct {
+	Name     string   `json:"name"`
+	Domains  []string `json:"domains"`
+	Owner    string   `json:"owner"`
+	Current  string   `json:"current_release"`
+	Releases []string `json:"releases"`
+}
+
+func (s *Service) view(site store.Site) Site {
+	return Site{
+		Name:     site.Name,
+		Domains:  site.Domains,
+		Owner:    site.Owner,
+		Current:  s.deploys.Current(site.Name),
+		Releases: s.deploys.Releases(site.Name),
+	}
+}
+
+// visibleSite returns a site the actor may see. Sites it may not see answer
+// NotFound like missing ones, so names do not leak.
+func (s *Service) visibleSite(ctx context.Context, a Actor, name string) (store.Site, error) {
+	if err := needAuth(a); err != nil {
+		return store.Site{}, err
+	}
+	site, err := s.store.Site(ctx, name)
+	if err != nil {
+		return store.Site{}, storeError(err)
+	}
+	if !a.canSee(site) {
+		return store.Site{}, errorf(NotFound, "site not found")
+	}
+	return site, nil
+}
+
+func needWrite(a Actor) error {
+	if a.ReadOnly {
+		return errorf(Forbidden, "this access token can only read")
+	}
+	return nil
+}
+
+// Sites lists the sites the actor may see, sorted by name.
+func (s *Service) Sites(ctx context.Context, a Actor) ([]Site, error) {
+	if err := needAuth(a); err != nil {
+		return nil, err
+	}
+	all, err := s.store.Sites(ctx)
+	if err != nil {
+		return nil, storeError(err)
+	}
+	out := []Site{}
+	for _, site := range all {
+		if a.canSee(site) {
+			out = append(out, s.view(site))
+		}
+	}
+	return out, nil
+}
+
+// Site returns one site.
+func (s *Service) Site(ctx context.Context, a Actor, name string) (Site, error) {
+	site, err := s.visibleSite(ctx, a, name)
+	if err != nil {
+		return Site{}, err
+	}
+	return s.view(site), nil
+}
+
+// SaveSite creates a site (owned by the actor) or replaces its domains. If
+// only the web server update fails, the site is saved: it is returned
+// together with a NotSynced error.
+func (s *Service) SaveSite(ctx context.Context, a Actor, name string, domains []string) (Site, error) {
+	if err := needAuth(a); err != nil {
+		return Site{}, err
+	}
+	clean, err := store.NormalizeDomains(domains)
+	if err != nil {
+		return Site{}, storeError(err)
+	}
+	if d := s.opts.PanelDomain; d != "" && slices.Contains(clean, d) {
+		return Site{}, errorf(Invalid, "domain %q is the address of the panel itself", d)
+	}
+
+	existing, err := s.store.Site(ctx, name)
+	var site store.Site
+	action := "site.domains"
+	switch {
+	case err == nil:
+		if !a.canSee(existing) {
+			// Creating would fail anyway; say so without revealing more.
+			return Site{}, errorf(Conflict, "the site name %q is already taken", name)
+		}
+		if err := needWrite(a); err != nil {
+			return Site{}, err
+		}
+		site, err = s.store.SetDomains(ctx, name, clean)
+	case errors.Is(err, store.ErrNotFound):
+		if err := needWrite(a); err != nil {
+			return Site{}, err
+		}
+		if a.Sites != nil {
+			return Site{}, errorf(Forbidden, "this access token is limited to certain sites and cannot create new ones")
+		}
+		if a.Via == ViaSystem {
+			return Site{}, errorf(Forbidden, "sites must be created by a user")
+		}
+		action = "site.create"
+		site, err = s.store.CreateSite(ctx, name, clean, a.UserID)
+	}
+	if err != nil {
+		return Site{}, s.domainError(ctx, a, err)
+	}
+	s.record(ctx, a, action, name, strings.Join(site.Domains, ", "))
+	return s.view(site), s.syncSaved(ctx)
+}
+
+// domainError hides the name of a site the actor may not see when a domain
+// is taken by it.
+func (s *Service) domainError(ctx context.Context, a Actor, err error) error {
+	var taken *store.DomainTakenError
+	if errors.As(err, &taken) {
+		if other, e := s.store.Site(ctx, taken.Site); e != nil || !a.canSee(other) {
+			return &Error{Kind: Invalid, Msg: fmt.Sprintf("domain %q is already used by another site", taken.Domain), Err: err}
+		}
+	}
+	return storeError(err)
+}
+
+// DeleteSite stops serving a site, then removes its files. If the web server
+// cannot be updated the files stay, so nothing is served from a half-removed
+// directory.
+func (s *Service) DeleteSite(ctx context.Context, a Actor, name string) error {
+	if _, err := s.visibleSite(ctx, a, name); err != nil {
+		return err
+	}
+	if err := needWrite(a); err != nil {
+		return err
+	}
+	if a.Sites != nil {
+		return errorf(Forbidden, "this access token is limited to certain sites and cannot delete sites")
+	}
+	if err := s.store.DeleteSite(ctx, name); err != nil {
+		return storeError(err)
+	}
+	s.record(ctx, a, "site.delete", name, "")
+	if err := s.syncSaved(ctx); err != nil {
+		return err
+	}
+	if err := s.deploys.Remove(name); err != nil {
+		return newError(Internal, err)
+	}
+	return nil
+}
+
+// Publish unpacks an archive as a new release and makes it live.
+func (s *Service) Publish(ctx context.Context, a Actor, name string, archive io.Reader) (Site, error) {
+	site, err := s.visibleSite(ctx, a, name)
+	if err != nil {
+		return Site{}, err
+	}
+	if err := needWrite(a); err != nil {
+		return Site{}, err
+	}
+	first := s.deploys.Current(site.Name) == ""
+	id, err := s.deploys.Deploy(site.Name, archive)
+	if err != nil {
+		kind := Internal
+		if errors.Is(err, deploy.ErrBadArchive) {
+			kind = Invalid
+		}
+		return Site{}, newError(kind, err)
+	}
+	slog.Info("deployed", "site", site.Name, "release", id)
+	s.record(ctx, a, "site.publish", site.Name, id)
+	view := s.view(site)
+	// Only the first deployment changes web server config (placeholder ->
+	// files); later ones are just a symlink switch.
+	if first {
+		return view, s.syncSaved(ctx)
+	}
+	return view, nil
+}
+
+// MakeLive switches a site to an existing release; an empty release means the
+// one before the current.
+func (s *Service) MakeLive(ctx context.Context, a Actor, name, release string) (Site, error) {
+	site, err := s.visibleSite(ctx, a, name)
+	if err != nil {
+		return Site{}, err
+	}
+	if err := needWrite(a); err != nil {
+		return Site{}, err
+	}
+	id, err := s.deploys.Rollback(site.Name, release)
+	if err != nil {
+		kind := Internal
+		if errors.Is(err, deploy.ErrNoRelease) {
+			kind = Conflict
+		}
+		return Site{}, newError(kind, err)
+	}
+	slog.Info("made live", "site", site.Name, "release", id)
+	s.record(ctx, a, "site.make-live", site.Name, id)
+	return s.view(site), nil
+}
+
+// Sync is the reconciler: desired state in, full web server config out.
+// Only the system and unrestricted admins may trigger it.
+func (s *Service) Sync(ctx context.Context, a Actor) error {
+	if a.Via != ViaSystem {
+		if err := needAdmin(a); err != nil {
+			return err
+		}
+	}
+	return s.sync(ctx)
+}
+
+func (s *Service) sync(ctx context.Context) error {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	all, err := s.store.Sites(ctx)
+	if err != nil {
+		return err
+	}
+	var sites []caddy.Site
+	for _, site := range all {
+		sites = append(sites, caddy.Site{
+			Name:    site.Name,
+			Domains: site.Domains,
+			Root:    s.deploys.Root(site.Name),
+			Live:    s.deploys.Current(site.Name) != "",
+		})
+	}
+	cfg, err := caddy.Build(s.opts, sites)
+	if err != nil {
+		return err
+	}
+	return s.web.Load(ctx, cfg)
+}
+
+// syncSaved syncs after a change that is already saved. On failure the
+// background loop will retry; the caller is still told.
+func (s *Service) syncSaved(ctx context.Context) error {
+	err := s.sync(ctx)
+	if err == nil {
+		return nil
+	}
+	slog.Error("sync failed", "err", err)
+	return &Error{
+		Kind: NotSynced,
+		Msg:  "saved, but the web server could not be updated yet: " + err.Error(),
+		Err:  err,
+	}
+}
+
+// Run syncs once, then every interval until ctx is done, so drift (e.g. a
+// restarted Caddy) heals by itself. While out of sync it retries sooner.
+func (s *Service) Run(ctx context.Context, interval time.Duration) {
+	healthy := true
+	for {
+		err := s.Sync(ctx, System)
+		switch {
+		case err != nil && ctx.Err() == nil:
+			slog.Warn("web server not in sync", "err", err)
+			healthy = false
+		case err == nil && !healthy:
+			slog.Info("web server back in sync")
+			healthy = true
+		}
+		wait := interval
+		if !healthy {
+			wait = s.unhealthyRetry
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+	}
+}
