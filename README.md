@@ -110,6 +110,9 @@ made with the cookie must send `X-Ownpanel-Request: 1`.
 | `GET` `PUT` | `/api/settings` | admins: panel domain, server addresses, certificate e-mail (with `*_locked` when set by flag), detected addresses, `setup_complete`, `ip_access`; change with any of `{"panel_domain", "server_ips", "acme_email"}` |
 | `GET` | `/api/settings/checks` | admins: does the panel domain point here (`dns`), is a trusted certificate served (`certificate`)? |
 | `POST` | `/api/settings/complete` | admins: finish the setup steps |
+| `GET` | `/api/updates` | admins (signed in or unrestricted write token): installed version and channel, newest `stable`/`nightly` release, `update_available`, automatic updates, progress of a running update (`status.state`: idle, requested, running, succeeded, failed, rolled_back), `supported` |
+| `POST` | `/api/updates` | admins: update with `{"channel": "stable"}` or `{"version": "v1.2.3"}` (202); an older version needs `"allow_downgrade": true` |
+| `PUT` | `/api/updates/auto` | admins: automatic updates `{"mode": "off"\|"stable"\|"nightly", "window": "03:00-05:00"}` (installed channel only) |
 | `GET` `POST` | `/api/dns/connections` | DNS connections (yours; admins see all); add with `{"provider": "hetzner", "name", "token"}` |
 | `POST` | `/api/dns/connections/{id}/check` | list the zones again; the outcome is in `last_error` |
 | `DELETE` | `/api/dns/connections/{id}` | remove a connection (admins: anyone's) |
@@ -226,7 +229,11 @@ curl -fsSL https://raw.githubusercontent.com/danielgtmn/ownpanel/main/install.sh
   | sudo bash -s -- --panel-domain panel.example.com --server-ip 203.0.113.5
 ```
 
-Run the same command again to upgrade; `--uninstall` removes ownpanel but
+Update from the panel (Settings → Updates: one button, a backup first and an
+automatic rollback if the new version does not start, optional automatic
+updates in a nightly time window) or on the server with
+`sudo /usr/local/lib/ownpanel/update.sh` (`--check` only looks). Running the
+installer again upgrades too; `--uninstall` removes ownpanel but
 keeps the data (`--purge` deletes it too). `--channel nightly` follows the
 build of `main` made after every merged pull request instead of the stable
 releases, which come from the `release` branch. Releases are built by the

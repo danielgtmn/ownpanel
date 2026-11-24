@@ -36,6 +36,14 @@ import (
 // builds set it with -ldflags "-X main.version=..." (scripts/package.sh).
 var version = "dev"
 
+// repo is the GitHub repository the panel looks for new releases in; release
+// builds set it with -ldflags "-X main.repo=..." (scripts/package.sh).
+var repo = "danielgtmn/ownpanel"
+
+// releaseFile is where install.sh records the installed release and channel.
+// The panel only offers updates when it exists.
+const releaseFile = "/etc/ownpanel/release"
+
 func main() {
 	args := os.Args[1:]
 	cmd := "serve"
@@ -86,6 +94,7 @@ func serve(args []string) error {
 		acmeEmail   = fs.String("acme-email", "", "contact address given to the certificate authority (optional; overrides the panel settings)")
 		panelDomain = fs.String("panel-domain", "", "serve the panel itself through Caddy on this domain (optional; overrides the panel settings)")
 		interval    = fs.Duration("reconcile-interval", 30*time.Second, "how often the web server is re-synced in the background")
+		releasesAPI = fs.String("releases-api", "https://api.github.com", "GitHub API address used to look for new releases (change it only for testing)")
 	)
 	var serverIPFlags listFlag
 	fs.Var(&serverIPFlags, "server-ip", "public IPv4/IPv6 address of this server that domains should point at (repeatable or comma-separated; overrides the panel settings)")
@@ -152,6 +161,13 @@ func serve(args []string) error {
 		SetupCodeFile: setupFile,
 		Secrets:       secretBox,
 		ServerIPs:     serverIPs,
+		Updates: panel.UpdatesConfig{
+			Version:     version,
+			Repo:        repo,
+			APIURL:      *releasesAPI,
+			ReleaseFile: releaseFile,
+			Dir:         filepath.Join(data, "update"),
+		},
 	})
 	if err != nil {
 		return err
@@ -161,6 +177,9 @@ func serve(args []string) error {
 	} else if needed {
 		slog.Info("no user yet: open the panel and create the first admin with the setup code from " + setupFile)
 	}
+
+	// An update restarts the daemon: put its result in the activity log.
+	go svc.WatchUpdateResult(ctx, 3*time.Second, 10*time.Minute)
 
 	// Initial sync, then heal drift (e.g. Caddy restarted).
 	go svc.Run(ctx, *interval)

@@ -37,6 +37,17 @@ Archives are treated as untrusted. Only regular files and folders are accepted (
 - ownpaneld runs as its own, unprivileged user with `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=full` and `ProtectHome=true`. Caddy's data directories are mode 0700.
 - The database file is created with mode 0600.
 
+### Updates
+
+Updating replaces binaries and restarts services, which needs root; the panel runs as `ownpanel` and must not get root. So the two only talk through files:
+
+- The panel may only **ask**: it writes `request.json` (or `auto.json` for automatic updates) into `/var/lib/ownpanel/update`. That directory is `root:ownpanel` with mode 1770 (sticky), so the panel can create its own files but cannot replace or delete the status file root writes there.
+- `ownpanel-update.service` (root, started by a path unit or a timer) first **moves** the request into a root-only directory, so it cannot be swapped for a link afterwards, then refuses anything that is not a small regular file owned by `ownpanel` and does not match exactly `{"id":"<32 hex>","channel":"stable|nightly"}` or `{"id":"<32 hex>","version":"vX.Y.Z"}`. The content of a refused request is never echoed. Only those values are passed to `update.sh`.
+- Root writes `status.json` by creating a new file and renaming it into place (mode 0640, group `ownpanel`), never by opening an existing file the panel could have prepared.
+- What gets installed is decided by GitHub's release and `checksums.txt`, downloaded by asset id, and the archive's `VERSION` must match; the panel can only choose the channel or a version name.
+- Only admins (signed in, or with an unrestricted write token) can request updates or change automatic updates; read-only and site-limited tokens cannot. Every request and every result is in the activity log.
+- The update unit runs with `NoNewPrivileges`, `PrivateTmp`, `PrivateDevices`, `ProtectHome`, `ProtectKernelModules`, `ProtectKernelLogs`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `RestrictSUIDSGID`, `RestrictNamespaces`, `RestrictRealtime`, `LockPersonality`, native system calls only and a short list of address families. It cannot use `ProtectSystem` or a capability limit: an update writes to `/usr/local`, `/etc/systemd/system` and `/etc/ownpanel`, may create users and open the firewall, just like `install.sh`.
+
 ### Stored secrets
 
 - DNS API tokens are stored encrypted (AES-256-GCM) with a key in `secret.key` (mode 0600), never in the database. The API never returns them, and they are scrubbed from error messages and left out of the activity log. See [[DNS|DNS]].
@@ -56,6 +67,7 @@ One-time links are valid for 15 minutes, for one site, and work once. They are r
 - **Upload links are kept in memory**, so a restart invalidates them (safe, but surprising).
 - **No second factor** for sign-in, and no list of a person's sessions to end them one by one; changing the password ends the others.
 - **Access tokens do not expire.** Revoke them when they are no longer needed.
-- **Not tested on a real server yet:** the installer and the hardening of the systemd units have not been verified in production ([[Roadmap|Roadmap]]).
+- **Not tested on a real server yet:** the installer, the updater and the hardening of the systemd units have not been verified in production ([[Roadmap|Roadmap]]).
+- **A rollback does not restore the database.** If a new version migrated it and the old one cannot read it, restore the backup made before the update.
 
 To report a problem, open an issue at <https://github.com/danielgtmn/ownpanel>.

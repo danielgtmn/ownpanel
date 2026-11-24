@@ -1,0 +1,13 @@
+[Unit]
+Description=Watch for update requests from the ownpanel web interface
+
+[Path]
+# ownpaneld (user ownpanel) writes the request; ownpanel-update.service
+# (root) checks it, removes it and runs update.sh. PathExists also picks up a
+# request that was written while the machine was shutting down.
+PathChanged=/var/lib/ownpanel/update/request.json
+PathExists=/var/lib/ownpanel/update/request.json
+Unit=ownpanel-update.service
+
+[Install]
+WantedBy=paths.target
