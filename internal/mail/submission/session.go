@@ -293,17 +293,27 @@ func (ss *session) Data(r io.Reader) error {
 	if err != nil {
 		return errNoFrom
 	}
-	fromDomain, fromOwner, err := ss.checkFrom(hdr)
+	fromDomain, fromOwner, others, err := ss.checkFrom(hdr)
 	if err != nil {
 		return err
 	}
 	// The limits of the signed-in mailbox count, and those of every mailbox
-	// it sends for (envelope or From).
+	// it sends for (envelope, any From address, a Sender held through
+	// send-as); none of those may be blocked.
 	boxes := []config.Mailbox{ss.box.Mailbox}
-	for _, o := range []*config.Mailbox{ss.owner, fromOwner} {
-		if o != nil && !slices.ContainsFunc(boxes, func(b config.Mailbox) bool { return b.StorageID == o.StorageID }) {
-			boxes = append(boxes, *o)
+	for _, o := range append([]*config.Mailbox{ss.owner}, others...) {
+		if o == nil || slices.ContainsFunc(boxes, func(b config.Mailbox) bool { return b.StorageID == o.StorageID }) {
+			continue
 		}
+		b, err := store.Blocked(ctx, o.StorageID)
+		if err != nil {
+			ss.s.log.Error("submission: block state", "err", err)
+			return errLocal
+		}
+		if b.Blocked {
+			return errBlocked
+		}
+		boxes = append(boxes, *o)
 	}
 	if ss.s.opts.Limits != nil {
 		if err := ss.s.opts.Limits.Reserve(ctx, ss.dir, boxes...); err != nil {
@@ -387,39 +397,43 @@ func (ss *session) Data(r io.Reader) error {
 // those of a mailbox it has the send-as right on, or exactly the address
 // of a mailbox it may send on behalf of, and then only with a Sender of its
 // own. It returns the domain of the first From address (the one that
-// signs) and, when that address is another mailbox's, that mailbox.
-func (ss *session) checkFrom(hdr textproto.MIMEHeader) (string, *config.Mailbox, error) {
+// signs), the mailbox of that address when it is another mailbox's, and
+// every other mailbox the message is sent for: those of all From addresses
+// and of a Sender held through send-as.
+func (ss *session) checkFrom(hdr textproto.MIMEHeader) (string, *config.Mailbox, []*config.Mailbox, error) {
 	values := hdr.Values("From")
 	if len(values) == 0 {
-		return "", nil, errNoFrom
+		return "", nil, nil, errNoFrom
 	}
 	if len(values) > 1 {
-		return "", nil, errManyFrom
+		return "", nil, nil, errManyFrom
 	}
 	list, err := (&mail.AddressParser{}).ParseList(values[0])
 	if err != nil || len(list) == 0 {
-		return "", nil, errNoFrom
+		return "", nil, nil, errNoFrom
 	}
 	me := &ss.box.Mailbox
 	ownSender := false
+	var others []*config.Mailbox
 	senders := hdr.Values("Sender")
 	switch {
 	case len(senders) > 1:
-		return "", nil, errBadSender
+		return "", nil, nil, errBadSender
 	case len(senders) == 1:
 		sl, err := (&mail.AddressParser{}).ParseList(senders[0])
 		if err != nil || len(sl) != 1 {
-			return "", nil, errBadSender
+			return "", nil, nil, errBadSender
 		}
-		switch mode, _ := ss.dir.SendMode(me, directory.Normalize(sl[0].Address)); mode {
+		switch mode, owner := ss.dir.SendMode(me, directory.Normalize(sl[0].Address)); mode {
 		case directory.SendOwn:
 			ownSender = true
 		case directory.SendAsGrant:
+			others = append(others, owner)
 		default:
-			return "", nil, errSenderHdr
+			return "", nil, nil, errSenderHdr
 		}
 	case len(list) > 1:
-		return "", nil, errNeedSender
+		return "", nil, nil, errNeedSender
 	}
 	domain := ""
 	var first *config.Mailbox
@@ -428,11 +442,14 @@ func (ss *session) checkFrom(hdr textproto.MIMEHeader) (string, *config.Mailbox,
 		mode, owner := ss.dir.SendMode(me, addr)
 		switch mode {
 		case directory.SendDenied:
-			return "", nil, errFromDenied
+			return "", nil, nil, errFromDenied
 		case directory.SendOnBehalfGrant:
 			if !ownSender {
-				return "", nil, errOnBehalf
+				return "", nil, nil, errOnBehalf
 			}
+		}
+		if mode != directory.SendOwn {
+			others = append(others, owner)
 		}
 		if i == 0 {
 			_, domain, _ = config.SplitAddress(addr)
@@ -441,7 +458,7 @@ func (ss *session) checkFrom(hdr textproto.MIMEHeader) (string, *config.Mailbox,
 			}
 		}
 	}
-	return domain, first, nil
+	return domain, first, others, nil
 }
 
 // keepSentCopy stores the sent message in the Sent folder of the shared
