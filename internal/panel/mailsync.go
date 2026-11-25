@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/mailsetup"
 	"github.com/danielgtmn/ownpanel/internal/store"
 )
 
@@ -360,13 +361,7 @@ type MailListener struct {
 }
 
 // MailClientSettings are what people enter in their mail program.
-type MailClientSettings struct {
-	Server          string `json:"server"`
-	IMAPPort        int    `json:"imap_port"`
-	SMTPPort        int    `json:"smtp_port"`
-	SMTPStartTLS    int    `json:"smtp_starttls_port"`
-	UserNameIsEmail bool   `json:"user_name_is_address"`
-}
+type MailClientSettings = mailsetup.ClientSettings
 
 // MailStatus tells how the mail service is doing.
 type MailStatus struct {

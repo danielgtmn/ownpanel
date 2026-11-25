@@ -291,6 +291,20 @@ CREATE TABLE account_overlays (
 	data       TEXT NOT NULL
 );
 `,
+	// 7: sessions of the self-service area (G1). Only a hash of the
+	// session id is stored; credential is a fingerprint of the password
+	// hash at sign-in, so a new password ends the session.
+	`
+CREATE TABLE account_sessions (
+	id_hash    BLOB PRIMARY KEY,
+	storage_id TEXT NOT NULL,
+	address    TEXT NOT NULL,
+	credential TEXT NOT NULL,
+	created    INTEGER NOT NULL,
+	last_seen  INTEGER NOT NULL
+);
+CREATE INDEX account_sessions_mailbox ON account_sessions(storage_id, created);
+`,
 }
 
 func migrate(db *sql.DB) error {

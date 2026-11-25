@@ -531,6 +531,10 @@ func (s *Server) boundAddr(st *listenerState) string {
 	return st.addr
 }
 
+// RecordEvent records an event for the panel (the self-service area's
+// sign-in failures). Detail must not contain secrets.
+func (s *Server) RecordEvent(e config.Event) { s.event(e) }
+
 func (s *Server) event(e config.Event) {
 	if err := s.store.AddEvent(context.Background(), e); err != nil {
 		s.log.Error("mail: record event", "err", err)

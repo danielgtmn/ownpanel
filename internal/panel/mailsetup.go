@@ -12,6 +12,7 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/caddy"
 	"github.com/danielgtmn/ownpanel/internal/dns"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/mailsetup"
 	"github.com/danielgtmn/ownpanel/internal/store"
 )
 
@@ -214,7 +215,7 @@ type MailClientSetup struct {
 }
 
 func (s *Service) clientSettings(host string) MailClientSettings {
-	return MailClientSettings{Server: host, IMAPPort: 993, SMTPPort: 465, SMTPStartTLS: 587, UserNameIsEmail: true}
+	return mailsetup.Settings(host)
 }
 
 // errNoMailSetup is the answer of the public setup for everything that is

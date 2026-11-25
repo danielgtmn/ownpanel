@@ -2,28 +2,20 @@ package panel
 
 import (
 	"sync"
-	"unicode/utf8"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/passwd"
 )
 
-const (
-	minPasswordLen = 10
-	maxPasswordLen = 200
-)
-
 // hashSlots bounds concurrent hashing: each one takes 64 MiB.
 var hashSlots = passwd.NewSlots(4)
 
+// validatePassword applies the rules for new passwords (shared with the
+// mail service's self-service area). Panel users get the same rules as
+// mailboxes, including the one against the form of app passwords.
 func validatePassword(pw string) error {
-	n := utf8.RuneCountInString(pw)
-	if n < minPasswordLen || n > maxPasswordLen {
-		return errorf(Invalid, "the password must be between %d and %d characters long", minPasswordLen, maxPasswordLen)
-	}
-	if config.LooksLikeAppPassword(pw) {
-		// Mail programs would check it as an app password, never as this one.
-		return errorf(Invalid, "this looks like an app password; choose another password")
+	if err := config.CheckNewPassword(pw); err != nil {
+		return errorf(Invalid, "%s", err.Error())
 	}
 	return nil
 }

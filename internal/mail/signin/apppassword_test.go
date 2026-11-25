@@ -2,6 +2,7 @@ package signin
 
 import (
 	"errors"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -172,5 +173,49 @@ func TestCacheKeyIncludesCredential(t *testing.T) {
 	c := New(Options{Slots: slots})
 	if c.cacheKey("a@example.org", "", "pw", "h") == c.cacheKey("a@example.org", "x", "pw", "h") {
 		t.Fatal("credential not in the cache key")
+	}
+}
+
+// TestCheckMain: the self-service sign-in takes the main password only,
+// also with AppPasswordsOnly, and throttles per address and network.
+func TestCheckMain(t *testing.T) {
+	t.Parallel()
+	w := newAppWorld(t)
+	clk := &clock{t: time.Unix(1_800_000_000, 0)}
+	c := New(Options{Slots: slots, Now: clk.now})
+	only := w.dir(func(m *config.Mailbox) { m.AppPasswordsOnly = true })
+	ip := netip.MustParseAddr("192.0.2.1")
+
+	if g, err := c.CheckMain(only, ip, "Alice@Example.org", "pw"); err != nil || g.StorageID != mailtest.ID('a') || g.AppPassword != "" {
+		t.Fatalf("main password with app passwords only: %+v %v", g, err)
+	}
+	if _, err := c.CheckMain(only, ip, "alice@example.org", w.token); !errors.Is(err, ErrFailed) {
+		t.Fatalf("a valid app password signed in: %v", err)
+	}
+	// Mail programs still may not use the main password.
+	if _, err := New(Options{Slots: slots}).Check(only, ip, "alice@example.org", "pw"); !errors.Is(err, ErrFailed) {
+		t.Fatalf("Check took the main password: %v", err)
+	}
+
+	// Per (network, address): PairLimit failures, then refused even with
+	// the right password; another address from the same network still
+	// gets through.
+	v6 := netip.MustParseAddr("2001:db8:1:2::1")
+	for range PairLimit - 1 { // one failure already counted above for ip, not v6
+		c.CheckMain(only, v6, "alice@example.org", "wrong")
+	}
+	if _, err := c.CheckMain(only, v6, "alice@example.org", "wrong"); !errors.Is(err, ErrFailed) {
+		t.Fatalf("last failure: %v", err)
+	}
+	// The same /48, another /64: still throttled.
+	if _, err := c.CheckMain(only, netip.MustParseAddr("2001:db8:1:ffff::9"), "alice@example.org", "pw"); !errors.Is(err, ErrThrottled) {
+		t.Fatalf("same /48: %v", err)
+	}
+	if _, err := c.CheckMain(only, netip.MustParseAddr("2001:db8:2::1"), "alice@example.org", "pw"); err != nil {
+		t.Fatalf("other /48: %v", err)
+	}
+	clk.add(Window)
+	if _, err := c.CheckMain(only, v6, "alice@example.org", "pw"); err != nil {
+		t.Fatalf("after the window: %v", err)
 	}
 }

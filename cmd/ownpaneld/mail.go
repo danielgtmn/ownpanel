@@ -5,12 +5,14 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
 
+	"github.com/danielgtmn/ownpanel/internal/mail/account"
 	"github.com/danielgtmn/ownpanel/internal/mail/server"
 )
 
@@ -40,6 +42,9 @@ func runMail(args []string) error {
 		webPath = path
 	}
 
+	// The self-service API needs the server, the server needs the handler
+	// before it opens the web socket (in Run): it is set right after New.
+	var acct *account.Handler
 	srv, err := server.New(server.Options{
 		DataDir:         *dataDir,
 		AdminSocket:     *admin,
@@ -51,13 +56,18 @@ func runMail(args []string) error {
 		IMAPSAddr:       *imaps,
 		IPv6Outbound:    *ipv6Out,
 		AllowPrivateMX:  *allowPrivateMX,
+		AccountHandler:  http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { acct.ServeHTTP(w, r) }),
 		Logger:          slog.Default(),
 	})
 	if err != nil {
 		return err
 	}
+	acct = account.New(account.Options{Backend: srv, Logger: slog.Default()})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if webPath != "" {
+		go acct.Run(ctx)
+	}
 	slog.Info("mail service starting", "version", version, "data", *dataDir, "admin", *admin, "web", webPath)
 	if err := srv.Run(ctx); err != nil {
 		return err

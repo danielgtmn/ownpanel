@@ -25,7 +25,8 @@
 //
 // Check is for mail programs (IMAP, submission; later DAV and ManageSieve).
 // The self-service area must not use it: there only the main password is
-// valid, also with AppPasswordsOnly.
+// valid, also with AppPasswordsOnly; it uses CheckMain on a Checker of its
+// own.
 package signin
 
 import (
@@ -183,26 +184,12 @@ func ipKey(ip netip.Addr) netip.Prefix {
 // and the credential. address is normalized here (lowercase).
 func (c *Checker) Check(dir *directory.Directory, ip netip.Addr, address, password string) (Grant, error) {
 	address = directory.Normalize(address)
-	ipk := ipKey(ip)
-	pk := pairKey{ipk, address}
 	now := c.opts.Now()
-
-	// Charge the attempt as a failure before any hashing, so parallel
-	// attempts cannot get past the limits; a success refunds exactly this
-	// charge, never one of another attempt.
-	c.mu.Lock()
-	c.sweepLocked(now)
-	throttled := over(c.ips, ipk, now, IPLimit) || over(c.pairs, pk, now, PairLimit) ||
-		full(c.ips, ipk, c.max) || full(c.pairs, pk, c.max)
-	var ipw *window
-	if !throttled {
-		ipw = charge(c.ips, ipk, now)
-		charge(c.pairs, pk, now)
+	pk, ipw, err := c.begin(ip, address, now)
+	if err != nil {
+		return Grant{}, err
 	}
-	c.mu.Unlock()
-	if throttled {
-		return Grant{}, ErrThrottled
-	}
+	ipk := pk.ip
 
 	m, ok := dir.Mailbox(address)
 	if id, secret, isApp := config.ParseAppPassword(password); isApp {
@@ -229,6 +216,61 @@ func (c *Checker) Check(dir *directory.Directory, ip netip.Addr, address, passwo
 	}
 	if ok {
 		c.addressFailed(now, ipk, m)
+	}
+	return Grant{}, ErrFailed
+}
+
+// begin charges an attempt as a failure before any hashing, so parallel
+// attempts cannot get past the limits; a success refunds exactly this
+// charge (refundLocked), never one of another attempt.
+func (c *Checker) begin(ip netip.Addr, address string, now time.Time) (pairKey, *window, error) {
+	ipk := ipKey(ip)
+	pk := pairKey{ipk, address}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sweepLocked(now)
+	if over(c.ips, ipk, now, IPLimit) || over(c.pairs, pk, now, PairLimit) ||
+		full(c.ips, ipk, c.max) || full(c.pairs, pk, c.max) {
+		return pk, nil, ErrThrottled
+	}
+	ipw := charge(c.ips, ipk, now)
+	charge(c.pairs, pk, now)
+	return pk, ipw, nil
+}
+
+// CheckMain signs in address with its main password, for the mailbox's
+// own area (the self-service API of the mail service):
+//
+//   - only the main password counts: anything of the form of an app
+//     password fails, also a valid one;
+//   - Mailbox.AppPasswordsOnly does not apply (it is about mail programs);
+//   - nothing is cached: sign-ins here are rare and start a session.
+//
+// Throttling, timing and failure events are those of Check. Use a Checker
+// of its own for this (New with its own Slots): its tables and hashing
+// slots are then separate from those of mail programs, so a flood here
+// cannot slow IMAP or sending, nor the other way round.
+func (c *Checker) CheckMain(dir *directory.Directory, ip netip.Addr, address, password string) (Grant, error) {
+	address = directory.Normalize(address)
+	now := c.opts.Now()
+	pk, ipw, err := c.begin(ip, address, now)
+	if err != nil {
+		return Grant{}, err
+	}
+	m, ok := dir.Mailbox(address)
+	if ok && password != "" && len(password) <= MaxPasswordBytes && !config.LooksLikeAppPassword(password) {
+		if c.verify(m.PasswordHash, password) {
+			c.mu.Lock()
+			c.refundLocked(pk, ipw)
+			c.mu.Unlock()
+			return Grant{Mailbox: *m}, nil
+		}
+	} else if len(password) <= MaxPasswordBytes {
+		// Same work as for a mailbox, so the time does not tell.
+		c.verify(c.dummyHash(), password)
+	}
+	if ok {
+		c.addressFailed(now, pk.ip, m)
 	}
 	return Grant{}, ErrFailed
 }

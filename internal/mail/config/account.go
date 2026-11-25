@@ -10,12 +10,15 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/hex"
+	"errors"
 	"net/netip"
 	"regexp"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/danielgtmn/ownpanel/internal/passwd"
 )
 
 // Limits of mailbox accounts.
@@ -197,4 +200,21 @@ type AccountChange struct {
 	AppPasswordID string `json:"app_password_id,omitempty"`
 	// Network: EventAppPasswordUsed (see Network).
 	Network string `json:"network,omitempty"`
+}
+
+// ErrLooksLikeAppPassword: a new main password has the form of an app
+// password, so mail programs would only ever check it as one.
+var ErrLooksLikeAppPassword = errors.New("this looks like an app password; choose another password")
+
+// CheckNewPassword tells whether pw may be a mailbox's new main password:
+// the panel's rules (passwd.CheckNew), and not of the form of an app
+// password. Errors are meant for people.
+func CheckNewPassword(pw string) error {
+	if err := passwd.CheckNew(pw); err != nil {
+		return err
+	}
+	if LooksLikeAppPassword(pw) {
+		return ErrLooksLikeAppPassword
+	}
+	return nil
 }
