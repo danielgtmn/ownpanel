@@ -12,6 +12,7 @@ import {
 import { Radio, RadioGroup, RadioIndicator } from '@ui-sdk/react/radio'
 import { Switch, SwitchThumb } from '@ui-sdk/react/switch'
 import { Textarea } from '@ui-sdk/react/textarea'
+import { toast } from '@ui-sdk/react/toast'
 import { useState, type FormEvent } from 'react'
 import { errorMessage, isNotFound } from '../../shared/api/index.ts'
 import { useResource } from '../../shared/hooks/index.ts'
@@ -24,7 +25,7 @@ import {
   type PanelSettings,
 } from '../../shared/settings/index.ts'
 import { Section, StatusBadge } from '../../shared/ui/index.ts'
-import { getMailHealth, healthLine, validateMailHost } from './mailHealth.ts'
+import { getMailHealth, healthLine, setUpMailHostSPF, validateMailHost } from './mailHealth.ts'
 import {
   JUNK_MAX,
   JUNK_MIN,
@@ -300,6 +301,17 @@ function MailHealthList({ version }: { version: string }) {
     return <p className="muted">Couldn't check the mail server. {errorMessage(health.error)}</p>
   }
   const host = health.data.mail_host
+
+  async function addHostRecord() {
+    try {
+      await setUpMailHostSPF()
+      toast.success(`The record for ${host} was added. It can take a while until other servers see it.`)
+    } catch (error) {
+      toast.error(errorMessage(error))
+    }
+    await health.reload()
+  }
+
   return (
     <div className="mail-health">
       <div className="mail-health-head">
@@ -319,6 +331,13 @@ function MailHealthList({ version }: { version: string }) {
               </div>
               {line.hint ? <p className="muted">{line.hint}</p> : null}
               {check.detail && check.state !== 'ok' && !line.ownDetail ? <p className="muted">{check.detail}</p> : null}
+              {check.id === 'mail_host_spf' && check.can_apply ? (
+                <div>
+                  <Button pendingAnnouncement="Adding" onClick={addHostRecord}>
+                    Add the record
+                  </Button>
+                </div>
+              ) : null}
             </li>
           )
         })}

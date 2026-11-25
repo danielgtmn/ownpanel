@@ -12,6 +12,8 @@ import {
   limitsChange,
   parseTargets,
   recordName,
+  recommendedOpen,
+  recordPurpose,
   recordStatus,
   recordsNeedWork,
   sortAliases,
@@ -143,6 +145,22 @@ describe('DNS records', () => {
     expect(recordName({ name: '' })).toBe('@')
     expect(recordName({ name: '_dmarc' })).toBe('_dmarc')
     expect(recordsNeedWork([{ status: 'ok' }, { status: 'missing' }, { status: 'unknown' }])).toBe(2)
+  })
+
+  it('keeps recommended records apart from the ones mail needs', () => {
+    const records = [
+      { status: 'ok' },
+      { status: 'missing', optional: true },
+      { status: 'different', optional: true },
+      { status: 'ok', optional: true },
+    ]
+    expect(recordsNeedWork(records)).toBe(0)
+    expect(recommendedOpen(records)).toBe(2)
+    expect(recordStatus('missing', true)).toEqual({ tone: 'neutral', label: 'Recommended' })
+    expect(recordStatus('ok', true).label).toBe('Set up')
+    expect(recordStatus('unknown', true).label).toBe("Couldn't check")
+    expect(recordPurpose('autoconfig')).toBe('Lets mail programs set themselves up')
+    expect(recordPurpose('autodiscover')).toBe('Lets Outlook set itself up')
   })
 
   it('explains that taking over the mail moves it away from the other server', () => {

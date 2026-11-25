@@ -34,6 +34,8 @@ export const setMailboxLimits = (id: number, change: LimitsChange) =>
   request<Mailbox>(`/mail/mailboxes/${id}`, { method: 'PATCH', body: change })
 export const unblockMailbox = (id: number) => request<void>(`/mail/mailboxes/${id}/unblock`, { method: 'POST' })
 export const deleteMailbox = (id: number) => request<void>(`/mail/mailboxes/${id}`, { method: 'DELETE' })
+// A file download, opened as a link (the session cookie goes along).
+export const appleProfileHref = (id: number) => `/api/mail/mailboxes/${id}/apple-profile`
 
 export const listAliases = async (domain: string) =>
   ((await request<MailAlias[] | null>(`${domainPath(domain)}/aliases`)) ?? []).map((alias) => ({

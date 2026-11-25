@@ -260,6 +260,13 @@ func (s *Service) runMail(ctx context.Context, interval time.Duration) {
 	healthy := true
 	for {
 		s.activateMailDomains(ctx)
+		if s.checkMailSetupHosts(ctx) && ctx.Err() == nil {
+			// A name for setting up mail programs points here now (or no
+			// more): the web server serves it from now on (or stops).
+			if err := s.sync(ctx); err != nil {
+				slog.Warn("web server not in sync", "err", err)
+			}
+		}
 		err := s.mailSync(ctx)
 		switch {
 		case err != nil && ctx.Err() == nil:
@@ -334,7 +341,7 @@ func (s *Service) MailStatus(ctx context.Context, a Actor) (MailStatus, error) {
 	out := MailStatus{
 		MailHost:  host,
 		Listeners: []MailListener{},
-		Client:    MailClientSettings{Server: host, IMAPPort: 993, SMTPPort: 465, SMTPStartTLS: 587, UserNameIsEmail: true},
+		Client:    s.clientSettings(host),
 	}
 	if host == "" {
 		out.Problem = "The name of the mail server is not set yet; an admin sets it in the settings."

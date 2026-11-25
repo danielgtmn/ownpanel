@@ -135,6 +135,9 @@ type Service struct {
 	mailSyncMu sync.Mutex
 	// mailHealth caches the outbound port check of MailHealth.
 	mailHealth mailHealthState
+	// setupHosts knows which names for setting up mail programs point
+	// here (mailsetup.go).
+	setupHosts setupHostsState
 }
 
 // New returns a Service. It rejects invalid web server options up front, and
@@ -463,7 +466,11 @@ func (s *Service) sync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	cfg, err := caddy.Build(s.caddyOptions(), sites, redirects...)
+	opts := s.caddyOptions()
+	if err := s.mailSetupCaddy(ctx, &opts, all, redirects); err != nil {
+		return err
+	}
+	cfg, err := caddy.Build(opts, sites, redirects...)
 	if err != nil {
 		return err
 	}

@@ -75,6 +75,15 @@ outgoing encryption policies (MTA-STS, DANE). See [[Roadmap|Roadmap]].
    | TXT | `_dmarc` | `v=DMARC1; p=none; adkim=r; aspf=r` (only if you have none) |
    | SRV | `_submissions._tcp` | `0 1 465 mail.example.com.` |
    | SRV | `_imaps._tcp` | `0 1 993 mail.example.com.` |
+   | CNAME | `autoconfig` | `mail.example.com.` (recommended) |
+   | CNAME | `autodiscover` | `mail.example.com.` (recommended) |
+
+   The two recommended names let mail programs set themselves up from just
+   the address and password; A/AAAA records with the server's addresses
+   work as well. The panel serves them only after it has seen them point
+   to this server (checked every few minutes, and whenever the records page
+   is opened), so it never requests certificates for names that lead
+   elsewhere.
 
 4. **Wait for the domain to become active.** The domain receives mail once
    its MX record points at the mail server name; the panel checks every few
@@ -95,7 +104,15 @@ outgoing encryption policies (MTA-STS, DANE). See [[Roadmap|Roadmap]].
 | Incoming (IMAP) | port 993, SSL/TLS |
 | Outgoing (SMTP) | port 465, SSL/TLS, or port 587, STARTTLS |
 
-Many programs find these settings by themselves from the SRV records.
+Most programs find these settings by themselves: Thunderbird and others
+ask `autoconfig.<domain>` (or `<domain>/.well-known/autoconfig/…` when the
+domain is a site of this panel), Outlook asks `autodiscover.<domain>`, and
+some use the SRV records. These answers exist only for active mail domains
+and are the same for every address, so they never tell whether a mailbox
+exists. For iPhone, iPad and Mac, **Download setup for Apple devices** on a
+mailbox gives a profile to install; it contains no password and asks for it
+during installation (it is not signed, so the device shows it as
+unverified).
 A mailbox can send as its own address and as forwarding addresses that
 deliver to it (not as addresses the catch-all covers).
 
@@ -142,6 +159,10 @@ password first if it may have been stolen.
 
 - the mail service runs with the current settings,
 - the mail server name points at this server,
+- the mail server name has an SPF record that allows this server
+  (`v=spf1 a -all`, or `a` added to an existing one): bounces and mail
+  forwarded to other servers are sent under that name. If its zone is in
+  your DNS account, **Add the record** writes it,
 - each address of the server has the mail server name as reverse name,
 - connections to port 25 of other mail servers get through,
 - the certificate is valid,

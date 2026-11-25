@@ -25,6 +25,7 @@ import {
 import { AliasDialog } from './AliasDialog.tsx'
 import {
   activateMailDomain,
+  appleProfileHref,
   checkMailDomain,
   createAlias,
   createMailbox,
@@ -176,6 +177,9 @@ function MailboxRow({
         </Button>
         <Button onClick={() => onLimits(mailbox)}>
           Limits<span className="visually-hidden"> of {mailbox.address}</span>
+        </Button>
+        <Button className="mail-download" render={<a href={appleProfileHref(mailbox.id)} download />}>
+          Download setup for Apple devices<span className="visually-hidden"> for {mailbox.address}</span>
         </Button>
         {isAdmin && blocked ? (
           <Button pendingAnnouncement="Allowing" onClick={() => onUnblock(mailbox)}>
@@ -397,6 +401,11 @@ function ClientSection() {
           </div>
         ))}
       </dl>
+      <p className="muted mail-client-auto">
+        Most mail programs fill these in by themselves from the address once the domain's recommended records are set
+        up. On an iPhone, iPad or Mac, open the mailbox's setup for Apple devices instead; it asks for the password when
+        you install it.
+      </p>
       {data.problem ? <p className="notice mail-client-problem">{data.problem}</p> : null}
     </Section>
   )

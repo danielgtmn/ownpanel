@@ -166,14 +166,17 @@ type deleteAliasInput struct {
 }
 
 type mailRecordInfo struct {
-	Kind   string   `json:"kind" jsonschema:"which record: mx, spf, dkim, dmarc, srv-submissions or srv-imaps"`
-	Type   string   `json:"type" jsonschema:"DNS record type (MX, TXT, SRV)"`
+	Kind   string   `json:"kind" jsonschema:"which record: mx, spf, dkim, dmarc, srv-submissions, srv-imaps, autoconfig or autodiscover"`
+	Type   string   `json:"type" jsonschema:"DNS record type (MX, TXT, SRV, CNAME)"`
 	Name   string   `json:"name" jsonschema:"record name relative to zone when can_apply, else relative to the mail domain; @ is the name itself"`
 	FQDN   string   `json:"fqdn" jsonschema:"full record name"`
 	Want   string   `json:"want" jsonschema:"the value that should be published (for SPF: the existing record with mx added)"`
 	Found  []string `json:"found" jsonschema:"values the domain's nameservers answer now"`
 	Status string   `json:"status" jsonschema:"ok, missing, different, conflict (needs a person; never changed automatically) or unknown (lookup failed)"`
 	Note   string   `json:"note" jsonschema:"why the record is not ok, in plain words"`
+	// Optional: autoconfig and autodiscover only let mail programs set
+	// themselves up; A/AAAA records with the server's addresses count too.
+	Optional bool `json:"optional" jsonschema:"recommended only: mail works without it (the names mail programs look up to set themselves up)"`
 }
 
 type mailRecordsOutput struct {
@@ -192,7 +195,7 @@ type setUpMailRecordsInput struct {
 }
 
 type mailRecordChangeInfo struct {
-	Kind         string   `json:"kind" jsonschema:"which record: mx, spf, dkim, dmarc, srv-submissions or srv-imaps"`
+	Kind         string   `json:"kind" jsonschema:"which record: mx, spf, dkim, dmarc, srv-submissions, srv-imaps, autoconfig, autodiscover or mail-host-spf"`
 	Type         string   `json:"type" jsonschema:"DNS record type"`
 	Name         string   `json:"name" jsonschema:"record name relative to the zone"`
 	Action       string   `json:"action" jsonschema:"create, replace, add (to other TXT values that stay), keep (already right) or skip (needs a person)"`
@@ -200,6 +203,7 @@ type mailRecordChangeInfo struct {
 	New          []string `json:"new" jsonschema:"values after"`
 	NeedsConfirm bool     `json:"needs_confirm" jsonschema:"the change is only made with confirm"`
 	Note         string   `json:"note" jsonschema:"explanation"`
+	Optional     bool     `json:"optional" jsonschema:"recommended only: mail works without it"`
 }
 
 type mailRecordChangesOutput struct {
@@ -208,11 +212,12 @@ type mailRecordChangesOutput struct {
 }
 
 type mailHealthCheckInfo struct {
-	ID       string   `json:"id" jsonschema:"service, mail_host_dns, ptr, outbound_port, certificate, listeners, postmaster or blocklists"`
+	ID       string   `json:"id" jsonschema:"service, mail_host_dns, mail_host_spf, ptr, outbound_port, certificate, listeners, postmaster or blocklists"`
 	State    string   `json:"state" jsonschema:"ok, warning, error or unknown"`
 	Found    []string `json:"found" jsonschema:"what was found"`
 	Expected []string `json:"expected" jsonschema:"what was expected"`
 	Detail   string   `json:"detail" jsonschema:"explanation and what to do"`
+	CanApply bool     `json:"can_apply" jsonschema:"for mail_host_spf: set_up_mail_host_spf can write the expected record (the zone is in one of your own DNS connections)"`
 }
 
 type mailHealthOutput struct {
@@ -249,6 +254,7 @@ func addMailTools(s *sdk.Server, p *panel.Service) {
 		Name:  "get_mail_records",
 		Title: "Show a mail domain's DNS records",
 		Description: "List the DNS records a mail domain needs (MX, SPF, DKIM, DMARC, and SRV records for mail programs), " +
+			"plus the optional autoconfig and autodiscover names that let mail programs set themselves up, " +
 			"what the domain's nameservers answer now and whether each is ok. can_apply tells whether set_up_mail_records " +
 			"can write them; otherwise tell the user what to create at their DNS provider.",
 		Annotations: annotations("Show a mail domain's DNS records", true, false, true),
@@ -290,7 +296,8 @@ func addMailTools(s *sdk.Server, p *panel.Service) {
 		Name:  "get_mail_health",
 		Title: "Check the mail server's health",
 		Description: "Check what decides whether mail from this server is accepted elsewhere (admins only): the mail service " +
-			"runs, the mail server's name points here, each server address has it as reverse name (PTR), outgoing port 25 " +
+			"runs, the mail server's name points here and has an SPF record (bounces and forwarded mail are sent under it; " +
+			"set_up_mail_host_spf writes it), each server address has it as reverse name (PTR), outgoing port 25 " +
 			"works, the certificate is valid, every port listens, postmaster mail has somewhere to go and no blocklist refused " +
 			"this server's queries in the last 7 days.",
 		Annotations: annotations("Check the mail server's health", true, false, true),
@@ -302,6 +309,25 @@ func addMailTools(s *sdk.Server, p *panel.Service) {
 		out := mailHealthOutput{MailHost: h.MailHost, Checks: []mailHealthCheckInfo{}}
 		for _, x := range h.Checks {
 			out.Checks = append(out.Checks, mailHealthCheckInfo(x))
+		}
+		return out, nil
+	})
+
+	add(s, &sdk.Tool{
+		Name:  "set_up_mail_host_spf",
+		Title: "Set up the SPF record of the mail server's name",
+		Description: "Write the SPF record of the mail server's name (v=spf1 a -all, or a added to an existing SPF record) " +
+			"into its zone in your own DNS connection (admins only). Bounces and forwarded mail are sent under that name. " +
+			"An SPF record that cannot be merged safely is skipped and reported.",
+		Annotations: annotations("Set up the SPF record of the mail server's name", false, false, true),
+	}, func(ctx context.Context, c call, _ noInput) (mailRecordChangesOutput, error) {
+		r, err := p.SetUpMailHostSPF(ctx, c.actor)
+		if err != nil {
+			return mailRecordChangesOutput{}, err
+		}
+		out := mailRecordChangesOutput{Changes: []mailRecordChangeInfo{}, Applied: r.Applied}
+		for _, x := range r.Changes {
+			out.Changes = append(out.Changes, mailRecordChangeInfo(x))
 		}
 		return out, nil
 	})

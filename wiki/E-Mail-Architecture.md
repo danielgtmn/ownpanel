@@ -263,6 +263,20 @@ have no panel account and cannot change their own password yet (*later*).
 
 - The panel shows the client settings: server `mail_host`, IMAP 993 (TLS),
   SMTP 465 (TLS) or 587 (STARTTLS), user name = full address.
+- Automatic setup (`internal/panel/mailsetup.go`, `internal/api/mailsetup.go`):
+  Thunderbird autoconfig at `autoconfig.<domain>/mail/config-v1.1.xml` and
+  `<domain>/.well-known/autoconfig/mail/config-v1.1.xml` (sites of this
+  panel), Outlook autodiscover (POX) at
+  `autodiscover.<domain>/autodiscover/autodiscover.xml`, and an unsigned
+  Apple profile (`com.apple.mail.managed`, no password) per mailbox for
+  whoever may see the mailbox. The public answers exist only for active
+  mail domains and are the same for every address of a domain. Caddy gets
+  `autoconfig.`/`autodiscover.` hosts only once the panel saw the name
+  resolve to the server's addresses only (CNAME to `mail_host` or A/AAAA):
+  the background loop looks every 5 minutes, opening a domain's records
+  looks at once, and a change re-syncs Caddy. A failed lookup changes
+  nothing; a name that resolves elsewhere or not at all is dropped. So
+  Caddy never asks a CA for a name that does not point here.
 - IMAP (implicit TLS on 993 only, RFC 8314): `INBOX`, `Sent`, `Drafts`,
   `Junk`, `Trash`, `Archive` with special-use flags; IDLE, MOVE, UIDPLUS.
   Envelope and body structure are read from the message file on FETCH
@@ -377,6 +391,21 @@ the authoritative nameservers:
 | TXT (DKIM) | `<selector>._domainkey` | `v=DKIM1; k=rsa; p=…` | replaced (the selector is ours) |
 | TXT (DMARC) | `_dmarc` | `v=DMARC1; p=none; adkim=r; aspf=r` | never changed |
 | SRV | `_submissions._tcp`, `_imaps._tcp` | `0 1 465 <mail_host>.`, `0 1 993 <mail_host>.` | replaced |
+| CNAME (optional) | `autoconfig`, `autodiscover` | `<mail_host>.` | judged by where the name resolves (A/AAAA with the server's addresses are fine); a CNAME elsewhere is replaced, other records are left alone |
+
+The mail host itself needs one record, checked by mail health
+(`mail_host_spf`) and written by admins whose DNS connection holds its zone
+(`POST /api/mail/host-spf`):
+
+| Record | Name | Value | If something else exists |
+|---|---|---|---|
+| TXT (SPF) | `<mail_host>` | `v=spf1 a -all` | `a` inserted after `v=spf1`, same rules as the domain SPF |
+
+Bounces and DSNs have the null sender, so receivers check SPF against the
+HELO name (`mail_host`), and mail forwarded with SRS for addresses without
+SPF pass uses `SRS0=…@<alias domain>`; postmaster@`mail_host` forwarding
+uses the mail host as alias domain. Without this record those messages fail
+SPF.
 
 Other TXT values at `@` are kept. When the domain's zone is in one of the
 actor's own DNS connections with write access, "Set up records" first returns

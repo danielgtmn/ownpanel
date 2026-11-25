@@ -63,7 +63,15 @@ export type MailStatus = {
   client: MailClientSettings
 }
 
-export type MailRecordKind = 'mx' | 'spf' | 'dkim' | 'dmarc' | 'srv-submissions' | 'srv-imaps'
+export type MailRecordKind =
+  | 'mx'
+  | 'spf'
+  | 'dkim'
+  | 'dmarc'
+  | 'srv-submissions'
+  | 'srv-imaps'
+  | 'autoconfig'
+  | 'autodiscover'
 export type MailRecordStatus = 'ok' | 'missing' | 'different' | 'conflict' | 'unknown'
 
 export type MailRecord = {
@@ -75,6 +83,8 @@ export type MailRecord = {
   found: string[]
   status: MailRecordStatus | string
   note: string
+  // Recommended only: mail works without it (lets mail programs set themselves up).
+  optional?: boolean
 }
 
 export type MailRecords = {
@@ -99,6 +109,7 @@ export type RecordChange = {
   new: string[]
   needs_confirm: boolean
   note: string
+  optional?: boolean
 }
 
 export type ApplyResult = { changes: RecordChange[]; applied: boolean }

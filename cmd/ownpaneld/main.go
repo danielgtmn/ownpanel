@@ -219,7 +219,8 @@ func serve(args []string) error {
 	// Initial sync, then heal drift (e.g. Caddy restarted).
 	go svc.Run(ctx, *interval)
 
-	srv := timeouts.Server(*listen, svc.MailChallengeHandler(compose((&api.Server{Panel: svc}).Handler(), webui.Handler(webui.FS()), mcp.Handler(svc, version, mcp.WithPanelDomainFunc(svc.PanelDomain)))))
+	apiServer := &api.Server{Panel: svc}
+	srv := timeouts.Server(*listen, svc.MailChallengeHandler(apiServer.MailSetupHandler(compose(apiServer.Handler(), webui.Handler(webui.FS()), mcp.Handler(svc, version, mcp.WithPanelDomainFunc(svc.PanelDomain))))))
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)

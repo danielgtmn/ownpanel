@@ -111,14 +111,14 @@ func TestMailRecordAndHealthTools(t *testing.T) {
 
 	var r mailRecordsOutput
 	ok(t, call_(t, cs, "get_mail_records", map[string]any{"domain": "example.com"}), &r)
-	if r.Domain != "example.com" || len(r.Records) != 6 || r.CanApply || r.ApplyNote == "" || r.Records[0].Kind != "mx" || r.Records[0].Status != "ok" {
+	if r.Domain != "example.com" || len(r.Records) != 8 || r.CanApply || r.ApplyNote == "" || r.Records[0].Kind != "mx" || r.Records[0].Status != "ok" {
 		t.Fatalf("records %+v", r)
 	}
 	refused(t, call_(t, cs, "set_up_mail_records", map[string]any{"domain": "example.com"}), "DNS connections")
 
 	var h mailHealthOutput
 	ok(t, call_(t, cs, "get_mail_health", nil), &h)
-	if h.MailHost != "mail.example.net" || len(h.Checks) != 8 || h.Checks[0].ID != "service" || h.Checks[0].State != "error" {
+	if h.MailHost != "mail.example.net" || len(h.Checks) != 9 || h.Checks[0].ID != "service" || h.Checks[0].State != "error" {
 		t.Fatalf("health %+v", h)
 	}
 

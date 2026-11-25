@@ -51,10 +51,31 @@ type Options struct {
 	// into the server on the HTTP port only, never into a host matcher on
 	// the HTTPS port, so Caddy does not request a certificate for it.
 	MailHost string
+
+	// MailSetupHosts are names like autoconfig.<domain> and
+	// autodiscover.<domain> that point to this server: the paths where
+	// mail programs look for their settings (MailSetupPaths) are passed to
+	// the panel, everything else answers 404. They get certificates like
+	// sites, so only names known to point here belong in it.
+	MailSetupHosts []string
+	// MailAutoconfigDomains are the active mail domains: when one of them
+	// is a site's domain, MailAutoconfigWellKnown is passed to the panel
+	// before the site's files.
+	MailAutoconfigDomains []string
 }
 
 // acmeChallengePath is where ACME HTTP-01 challenges are answered.
 const acmeChallengePath = "/.well-known/acme-challenge/*"
+
+// Where mail programs look for their settings.
+const (
+	MailAutoconfigPath      = "/mail/config-v1.1.xml"
+	MailAutoconfigWellKnown = "/.well-known/autoconfig/mail/config-v1.1.xml"
+	MailAutodiscoverPath    = "/autodiscover/autodiscover.xml"
+)
+
+// MailSetupPaths are the paths of MailSetupHosts passed to the panel.
+var MailSetupPaths = []string{MailAutoconfigPath, MailAutoconfigWellKnown, MailAutodiscoverPath}
 
 // Site is what the web server needs to know about one site.
 type Site struct {
@@ -118,9 +139,45 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 		})
 	}
 	routes = append(routes, domainRedirects...)
+	if len(opts.MailSetupHosts) > 0 {
+		if opts.PanelUpstream == "" {
+			return nil, fmt.Errorf("names for setting up mail programs need the panel's address")
+		}
+		hosts := append([]string(nil), opts.MailSetupHosts...)
+		sort.Strings(hosts)
+		routes = append(routes, obj{
+			"match": []obj{{"host": hosts}},
+			"handle": []obj{{"handler": "subroute", "routes": []obj{
+				{"match": []obj{{"path": MailSetupPaths}}, "handle": []obj{proxyTo(opts.PanelUpstream)}},
+				{"handle": []obj{{"handler": "static_response", "status_code": 404, "body": "Not found.\n"}}},
+			}}},
+			"terminal": true,
+		})
+	}
+	mailDomains := map[string]bool{}
+	for _, d := range opts.MailAutoconfigDomains {
+		mailDomains[d] = true
+	}
 	for _, s := range sorted {
 		if len(s.Domains) == 0 {
 			continue
+		}
+		var siteRoutes []obj
+		var autoconfig []string
+		for _, d := range s.Domains {
+			if mailDomains[d] {
+				autoconfig = append(autoconfig, d)
+			}
+		}
+		if len(autoconfig) > 0 {
+			if opts.PanelUpstream == "" {
+				return nil, fmt.Errorf("settings for mail programs need the panel's address")
+			}
+			siteRoutes = append(siteRoutes, obj{
+				"match":    []obj{{"host": autoconfig, "path": []string{MailAutoconfigWellKnown}}},
+				"handle":   []obj{proxyTo(opts.PanelUpstream)},
+				"terminal": true,
+			})
 		}
 		var handlers []obj
 		if s.Live {
@@ -138,7 +195,7 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 		}
 		routes = append(routes, obj{
 			"match":    []obj{{"host": s.Domains}},
-			"handle":   []obj{{"handler": "subroute", "routes": append(sitePathRedirects(pathRedirects, s.Domains), obj{"handle": handlers})}},
+			"handle":   []obj{{"handler": "subroute", "routes": append(append(siteRoutes, sitePathRedirects(pathRedirects, s.Domains)...), obj{"handle": handlers})}},
 			"terminal": true,
 		})
 	}

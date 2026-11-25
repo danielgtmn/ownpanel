@@ -234,14 +234,14 @@ func TestMailRecordsAndHealthRoutes(t *testing.T) {
 	wantStatus(t, rec, 200, "")
 	wantKeys(t, rec.Body.Bytes(), "domain", "mail_host", "records", "can_apply", "connection_id", "zone", "apply_note")
 	r := decode[panel.MailRecords](t, rec)
-	if r.Domain != "example.com" || r.MailHost != "mail.example.net" || r.CanApply || len(r.Records) != 6 || r.ApplyNote == "" {
+	if r.Domain != "example.com" || r.MailHost != "mail.example.net" || r.CanApply || len(r.Records) != 8 || r.ApplyNote == "" {
 		t.Fatalf("records %s", rec.Body)
 	}
 	var raw struct {
 		Records []json.RawMessage `json:"records"`
 	}
 	json.Unmarshal(rec.Body.Bytes(), &raw)
-	wantKeys(t, raw.Records[0], "kind", "type", "name", "fqdn", "want", "found", "status", "note")
+	wantKeys(t, raw.Records[0], "kind", "type", "name", "fqdn", "want", "found", "status", "note", "optional")
 	if r.Records[0].Kind != "mx" || r.Records[0].Status != "ok" || r.Records[1].Kind != "spf" || r.Records[1].Status != "missing" {
 		t.Fatalf("records %s", rec.Body)
 	}
@@ -255,14 +255,14 @@ func TestMailRecordsAndHealthRoutes(t *testing.T) {
 	wantStatus(t, rec, 200, "")
 	wantKeys(t, rec.Body.Bytes(), "mail_host", "checks")
 	h := decode[panel.MailHealth](t, rec)
-	if len(h.Checks) != 8 || h.Checks[0].ID != "service" || h.Checks[0].State != "warning" && h.Checks[0].State != "ok" {
+	if len(h.Checks) != 9 || h.Checks[0].ID != "service" || h.Checks[0].State != "warning" && h.Checks[0].State != "ok" {
 		t.Fatalf("health %s", rec.Body)
 	}
 	var rawH struct {
 		Checks []json.RawMessage `json:"checks"`
 	}
 	json.Unmarshal(rec.Body.Bytes(), &rawH)
-	wantKeys(t, rawH.Checks[0], "id", "state", "found", "expected", "detail")
+	wantKeys(t, rawH.Checks[0], "id", "state", "found", "expected", "detail", "can_apply")
 
 	// Read-only tokens read records, but do not apply them.
 	_, read := e.createToken("read", "null")
