@@ -110,6 +110,22 @@ export function familyStatus(family: Family, states: PointStates): FamilyStatus 
   return pending ? 'pending' : 'ok'
 }
 
+/** What makes a family need attention, as one sentence; empty when nothing does. */
+export function attentionText(family: Family, states: PointStates): string {
+  const parts: string[] = []
+  const empty = family.sites.filter((site) => !site.live).map((site) => site.name)
+  if (empty.length === 1) parts.push(`The site ${empty[0]} has no content yet`)
+  else if (empty.length > 1) parts.push(`${empty.length} sites have no content yet`)
+  const away = family.servedDomains.filter((host) => {
+    const state = states[host]
+    return state === 'points_elsewhere' || state === 'no_record'
+  })
+  if (away.length === 1) parts.push(`${away[0]} doesn't point to this server yet`)
+  else if (away.length > 1) parts.push(`${away.length} addresses don't point to this server yet`)
+  // No capital letter added: a sentence may start with a domain, which is written as it is.
+  return parts.length === 0 ? '' : `${parts.join(', and ')}.`
+}
+
 export const STATUS_TEXT: Record<FamilyStatus, string> = {
   ok: 'everything works',
   attention: 'needs attention',

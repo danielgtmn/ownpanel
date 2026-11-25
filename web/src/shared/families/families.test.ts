@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildFamilies, familyStatus, familySummary, initialsOf, type DomainSources } from './families.ts'
+import { attentionText, buildFamilies, familyStatus, familySummary, initialsOf, type DomainSources } from './families.ts'
 import { registrableDomain } from './suffix.ts'
 
 const empty: DomainSources = { sites: [], zones: [], redirects: [] }
@@ -150,5 +150,29 @@ describe('labels', () => {
     expect(initialsOf('example.com')).toBe('Ex')
     expect(initialsOf('shop.co.uk')).toBe('Sh')
     expect(initialsOf('4u.de')).toBe('4u')
+  })
+})
+
+describe('attentionText', () => {
+  const [family] = buildFamilies({
+    ...empty,
+    sites: [
+      { name: 'blog', domains: ['example.com', 'www.example.com'], live: false },
+      { name: 'shop', domains: ['shop.example.com'], live: true },
+    ],
+  })
+
+  it('names what needs to be done', () => {
+    expect(attentionText(family, { 'example.com': 'no_record', 'www.example.com': 'points_here' })).toBe(
+      "The site blog has no content yet, and example.com doesn't point to this server yet.",
+    )
+    expect(
+      attentionText(family, { 'example.com': 'no_record', 'www.example.com': 'points_elsewhere', 'shop.example.com': 'points_here' }),
+    ).toBe("The site blog has no content yet, and 2 addresses don't point to this server yet.")
+  })
+
+  it('is empty when nothing needs attention', () => {
+    const [live] = buildFamilies({ ...empty, sites: [{ name: 'blog', domains: ['example.com'], live: true }] })
+    expect(attentionText(live, { 'example.com': 'points_here' })).toBe('')
   })
 })
