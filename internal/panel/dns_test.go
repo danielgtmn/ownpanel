@@ -942,8 +942,9 @@ func TestChosenDNSZones(t *testing.T) {
 	want("in the panel", inPanel(), "bob-main/example.com")
 	want("available", available(), "second/new.example", "bob-main/other.org")
 	z, _ := d.svc.DNSZones(ctx, bob)
-	if used := z.Zones[0].UsedBy; z.Zones[0].Adopted || len(used) != 3 || used[0] != "the site bobother (bobother.example.com)" ||
-		used[2] != "a site of another person (rootsite.example.com)" {
+	// Only bob's own sites count; root's site in the zone is left out.
+	if used := z.Zones[0].UsedBy; z.Zones[0].Adopted || !reflect.DeepEqual(used,
+		[]string{"the site bobother (bobother.example.com)", "the site bobsite (bobsite.example.com)"}) {
 		t.Fatalf("example.com: %+v", z.Zones[0])
 	}
 
@@ -996,8 +997,35 @@ func TestChosenDNSZones(t *testing.T) {
 	if !srv.HasZone("other.org") {
 		t.Fatal("releasing deleted the zone at the provider")
 	}
+
+	// Another person's things in a zone don't bring it into bob's panel, but
+	// they still keep it from being deleted at the provider.
+	if _, err := d.svc.SaveSite(ctx, admin, "rootother", []string{"blog.other.org"}); err != nil {
+		t.Fatal(err)
+	}
+	want("with another person's site", available(), "bob-main/other.org")
+	if err := d.svc.DeleteDNSZone(ctx, bob, d.bobConn, "other.org", "other.org"); KindOf(err) != Conflict ||
+		!strings.Contains(err.Error(), "a site of another person (blog.other.org)") {
+		t.Fatalf("delete a zone another person uses: %v", err)
+	}
+	if err := d.svc.DeleteSite(ctx, admin, "rootother"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The panel's own address counts for administrators only.
 	d.svc.settings.panelDomain = "panel.other.org"
-	want("with the panel domain", inPanel(), "bob-main/example.com", "second/new.example", "bob-main/other.org")
+	want("with the panel domain", available(), "bob-main/other.org")
+	rootSecond, err := d.svc.CreateDNSConnection(ctx, admin, "hetzner", "root-second", bobToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rz, err := d.svc.DNSZones(ctx, admin)
+	if names := zoneNames(t, rz, err); !slices.Contains(names, "root-second/other.org") {
+		t.Fatalf("panel domain for an administrator: %v", names)
+	}
+	if err := d.svc.DeleteDNSConnection(ctx, admin, rootSecond.ID); err != nil {
+		t.Fatal(err)
+	}
 	d.svc.settings.panelDomain = ""
 
 	// A created zone is adopted; a deleted one is forgotten.
@@ -1017,7 +1045,7 @@ func TestChosenDNSZones(t *testing.T) {
 	if _, err := d.svc.AdoptDNSZone(ctx, admin, d.rootConn, "example.com"); err != nil {
 		t.Fatal(err)
 	}
-	rz, err := d.svc.DNSZones(ctx, admin)
+	rz, err = d.svc.DNSZones(ctx, admin)
 	want("root's zones", zoneNames(t, rz, err), "root-main/example.com")
 
 	acts, err := d.svc.store.Activities(ctx, 100)

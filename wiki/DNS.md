@@ -53,7 +53,7 @@ Adding, checking and removing connections needs a password sign-in or an access 
 The DNS page and the sidebar list the domains that are **in the panel**:
 
 - domains you chose to manage here (**DNS → Add domain**, or **Manage DNS here** on a domain's page), and
-- every zone of your own connections that something uses: a site domain, a whole-domain redirect, a mail domain or the panel's own domain, whoever they belong to (a name below the zone counts too, like `shop.example.com` for `example.com`). Those are in the panel automatically and stay while they are used.
+- every zone of your own connections that something of yours uses: a domain of your sites, of your whole-domain redirects or your mail domains, and for administrators the panel's own domain (a name below the zone counts too, like `shop.example.com` for `example.com`). Those are in the panel automatically and stay while they are used. Another person's site on a name in your zone does not bring it into your panel, but it still keeps the zone from being deleted at Hetzner (below).
 
 **Add domain** offers two ways:
 
@@ -62,11 +62,11 @@ The DNS page and the sidebar list the domains that are **in the panel**:
 
 The page of a domain (**`#/d/<domain>`**) offers **Manage DNS here** when one of your accounts has its zone, or a link to create it when none has.
 
-**Stop managing here** on a zone's page takes a chosen domain out of the panel. The zone and its records stay at Hetzner unchanged, and you can add it again any time. A domain that something uses cannot be taken out; the page says what uses it.
+**Stop managing here** on a zone's page takes a chosen domain out of the panel. The zone and its records stay at Hetzner unchanged, and you can add it again any time. A domain that something of yours uses cannot be taken out; the page says what uses it.
 
 Entering a domain without managing its DNS here is not possible: a domain appears in the panel through a site, redirect, mail domain or a managed zone.
 
-Upgrading from a version before this existed adopts nothing: zones that something uses stay visible, all others disappear from the sidebar but stay available under **Add domain**. Nothing is deleted at Hetzner.
+Upgrading from a version before this existed adopts nothing: zones that something of yours uses stay visible, all others disappear from the sidebar but stay available under **Add domain**. Nothing is deleted at Hetzner.
 
 API: `GET /api/dns/zones` lists the zones in the panel, `GET /api/dns/zones/available` the others; `PUT /api/dns/connections/{id}/zones/{zone}/managed` starts managing a zone, `DELETE` on the same path stops (`409` while it is used). Both need what adding connections needs.
 

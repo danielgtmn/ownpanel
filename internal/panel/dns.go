@@ -580,8 +580,9 @@ func (s *Service) zoneIn(ctx context.Context, c store.DNSConnection, zone string
 // ---- zones and records ----
 
 // DNSZones lists the zones that are in the panel: of the actor's own
-// connections, those the actor adopted and those something uses (a site, a
-// redirect, e-mail or the panel itself). A connection that fails is reported
+// connections, those the actor adopted and those the actor's own things use
+// (a site, a redirect, e-mail, or the panel itself for administrators).
+// Another person's site on a subdomain does not bring a zone in. A connection that fails is reported
 // in Problems; the others are still listed.
 func (s *Service) DNSZones(ctx context.Context, a Actor) (DNSZones, error) {
 	return s.listZones(ctx, a, true)
@@ -632,7 +633,7 @@ func (s *Service) listZones(ctx context.Context, a Actor, inPanel bool) (DNSZone
 		for _, z := range zones {
 			v := zoneView(c, z)
 			v.Adopted = adopted[zoneKey{c.ID, z.Name}]
-			v.UsedBy = usersOf(uses, z.Name)
+			v.UsedBy = usersOf(uses, z.Name, true)
 			if (v.Adopted || len(v.UsedBy) > 0) == inPanel {
 				out.Zones = append(out.Zones, v)
 			}

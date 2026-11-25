@@ -225,10 +225,10 @@ connected under **Settings → Connected accounts**.
 
 **Choosing domains.** Connecting an account imports nothing. The panel shows
 the zones you choose under **DNS → Add domain** (from your accounts, or
-created new at Hetzner), plus every zone that a site, redirect, mail domain
-or the panel's own domain uses. **Stop managing here** takes a chosen zone out
-of the panel without touching it at Hetzner; deleting it at Hetzner is a
-separate action. After upgrading, zones in use stay visible and the others
+created new at Hetzner), plus every zone that one of your sites, redirects
+or mail domains uses (for administrators also the panel's own domain).
+**Stop managing here** takes a chosen zone out of the panel without touching
+it at Hetzner; deleting it at Hetzner is a separate action. After upgrading, zones in use stay visible and the others
 wait under **Add domain**; nothing is deleted.
 
 - Connections belong to the person who added them. Admins see everyone's

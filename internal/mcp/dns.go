@@ -15,7 +15,7 @@ type dnsDomainInfo struct {
 	ReadOnly       bool     `json:"read_only" jsonschema:"the provider does not allow changing its records"`
 	Nameservers    []string `json:"nameservers" jsonschema:"the provider's nameservers, to be set where the domain is registered"`
 	Adopted        bool     `json:"adopted" jsonschema:"the user chose to manage this domain in the panel"`
-	UsedBy         []string `json:"used_by" jsonschema:"what uses a domain inside it (sites, redirects, e-mail, the panel itself); a used domain stays in the panel while it is used"`
+	UsedBy         []string `json:"used_by" jsonschema:"what of yours uses a domain inside it (your sites, redirects, e-mail; for administrators the panel itself); such a domain stays in the panel while it is used"`
 }
 
 func dnsDomainInfoOf(z panel.DNSZone) dnsDomainInfo {
@@ -60,7 +60,8 @@ func addDNSTools(s *sdk.Server, p *panel.Service) {
 		Name:  "list_dns_domains",
 		Title: "List DNS domains",
 		Description: "List the domains (DNS zones) managed in the panel through your own DNS connections: those you " +
-			"chose to manage and those a site, redirect, e-mail or the panel itself uses. With available, list the " +
+			"chose to manage and those your own sites, redirects or e-mail use (for administrators also the panel " +
+			"itself). With available, list the " +
 			"domains of your connections that are not managed in the panel yet instead. A connection that cannot be " +
 			"read is reported in problems.",
 		Annotations: annotations("List DNS domains", true, false, true),
@@ -100,8 +101,8 @@ func addDNSTools(s *sdk.Server, p *panel.Service) {
 		Name:  "stop_managing_dns_domain",
 		Title: "Stop managing a DNS domain in the panel",
 		Description: "Stop managing a domain in the panel. The domain and its records stay at the DNS provider " +
-			"unchanged; it can be managed here again later. A domain that a site, redirect, e-mail or the panel " +
-			"itself uses stays in the panel; the error says what uses it.",
+			"unchanged; it can be managed here again later. A domain that your own sites, redirects or e-mail " +
+			"(or, for administrators, the panel itself) use stays in the panel; the error says what uses it.",
 		Annotations: annotations("Stop managing a DNS domain in the panel", false, false, false),
 	}, func(ctx context.Context, c call, in dnsDomainInput) (releasedDNSDomainOutput, error) {
 		if err := p.ReleaseDNSZone(ctx, c.actor, in.ConnectionID, in.Domain); err != nil {
