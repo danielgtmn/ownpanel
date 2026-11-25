@@ -17,6 +17,14 @@
   margin: 0;
 }
 
+.update-installed-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
 .update-progress {
   display: flex;
   align-items: flex-start;

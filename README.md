@@ -110,7 +110,8 @@ made with the cookie must send `X-Ownpanel-Request: 1`.
 | `GET` `PUT` | `/api/settings` | admins: panel domain, server addresses, certificate e-mail (with `*_locked` when set by flag), detected addresses, `setup_complete`, `ip_access`; change with any of `{"panel_domain", "server_ips", "acme_email"}` |
 | `GET` | `/api/settings/checks` | admins: does the panel domain point here (`dns`), is a trusted certificate served (`certificate`)? |
 | `POST` | `/api/settings/complete` | admins: finish the setup steps |
-| `GET` | `/api/updates` | admins (signed in or unrestricted write token): installed version and channel, newest `stable`/`nightly` release, `update_available`, automatic updates, progress of a running update (`status.state`: idle, requested, running, succeeded, failed, rolled_back), `supported` |
+| `GET` | `/api/updates` | admins (signed in or unrestricted write token): installed version and channel, newest `stable`/`nightly` release, `update_available`, automatic updates, progress of a running update (`status.state`: idle, requested, running, succeeded, failed, rolled_back), `supported`, `checked_at` |
+| `POST` | `/api/updates/check` | admins: look for new releases now instead of using the 30-minute cache, at most once a minute (within it, the last result); same answer as `GET /api/updates`, whose `checked_at` tells when the last lookup was and `check_error` why it failed |
 | `POST` | `/api/updates` | admins: update with `{"channel": "stable"}` or `{"version": "v1.2.3"}` (202); an older version needs `"allow_downgrade": true` |
 | `PUT` | `/api/updates/auto` | admins: automatic updates `{"mode": "off"\|"stable"\|"nightly", "window": "03:00-05:00"}` (installed channel only) |
 | `GET` `POST` | `/api/dns/connections` | DNS connections (yours; admins see all); add with `{"provider": "hetzner", "name", "token"}` |
