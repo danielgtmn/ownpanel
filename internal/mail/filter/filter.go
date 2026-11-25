@@ -229,20 +229,43 @@ const (
 	// GreylistValid: a triplet that passed passes for this long after its
 	// last message.
 	GreylistValid = 30 * 24 * time.Hour
+	// GreylistPerNetwork bounds the waiting triplets of one network (IPv4
+	// /24, IPv6 /48), GreylistMax all triplets, so a flood of made-up
+	// senders cannot grow the table without end. New triplets beyond
+	// either are refused for now.
+	GreylistPerNetwork = 1000
+	GreylistMax        = 200_000
 )
+
+var greylistRules = storage.Greylist{
+	Delay: GreylistDelay, Retry: GreylistRetry, Valid: GreylistValid,
+	PerNetwork: GreylistPerNetwork, Max: GreylistMax,
+}
 
 // Greylist tells whether a message from ip (counted per /24 or /64) with
 // the envelope sender to rcpt may pass now.
 func (f *Filter) Greylist(ctx context.Context, ip netip.Addr, sender, rcpt string) (bool, error) {
 	key := Network(ip) + "|" + strings.ToLower(sender) + "|" + strings.ToLower(rcpt)
-	return f.opts.Store.GreylistCheck(ctx, key, f.opts.Now(), storage.Greylist{
-		Delay: GreylistDelay, Retry: GreylistRetry, Valid: GreylistValid,
-	})
+	return f.opts.Store.GreylistCheck(ctx, key, greylistNetwork(ip), f.opts.Now(), greylistRules)
 }
 
 // Prune drops greylisting triplets that are no longer looked at.
 func (f *Filter) Prune(ctx context.Context) error {
-	return f.opts.Store.PruneGreylist(ctx, f.opts.Now().Add(-GreylistValid))
+	return f.opts.Store.PruneGreylist(ctx, f.opts.Now(), greylistRules)
+}
+
+// greylistNetwork is the unit GreylistPerNetwork counts in: ip's /24
+// (IPv4) or /48 (IPv6).
+func greylistNetwork(ip netip.Addr) string {
+	ip = ip.Unmap()
+	if !ip.Is6() {
+		return Network(ip)
+	}
+	p, err := ip.Prefix(48)
+	if err != nil {
+		return ip.String()
+	}
+	return p.String()
 }
 
 // Network is ip's /24 (IPv4) or /64 (IPv6).

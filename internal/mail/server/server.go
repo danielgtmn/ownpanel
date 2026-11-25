@@ -553,7 +553,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	retry := time.NewTicker(30 * time.Second)
 	defer retry.Stop()
-	prune := time.NewTicker(24 * time.Hour)
+	prune := time.NewTicker(time.Hour)
 	defer prune.Stop()
 	for {
 		select {

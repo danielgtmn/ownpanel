@@ -531,3 +531,81 @@ func TestConcurrentAppends(t *testing.T) {
 		t.Fatalf("%d messages", len(msgs))
 	}
 }
+
+func TestGreylist(t *testing.T) {
+	s := open(t, t.TempDir(), 0)
+	ctx := context.Background()
+	t0 := time.Unix(1_800_000_000, 0)
+	g := Greylist{Delay: 5 * time.Minute, Retry: 24 * time.Hour, Valid: 30 * 24 * time.Hour, PerNetwork: 2, Max: 4}
+	check := func(key, net string, at time.Time) bool {
+		t.Helper()
+		ok, err := s.GreylistCheck(ctx, key, net, at, g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	count := func() int {
+		var n int
+		s.rdb.QueryRow(`SELECT count(*) FROM greylist`).Scan(&n)
+		return n
+	}
+	if check("a", "n1", t0) || check("b", "n1", t0) {
+		t.Fatal("first attempts pass")
+	}
+	// The third waiting triplet of n1 is refused and not recorded.
+	if check("c", "n1", t0) || count() != 2 {
+		t.Fatalf("per network: %d rows", count())
+	}
+	if check("d", "n2", t0) || check("e", "n3", t0) || count() != 4 {
+		t.Fatalf("other networks: %d rows", count())
+	}
+	// Overall bound.
+	if check("f", "n4", t0) || count() != 4 {
+		t.Fatalf("max: %d rows", count())
+	}
+
+	// Seen again before the delay, or passing again soon after the last
+	// pass: no write (the writer is held, so a write would block).
+	s.wmu.Lock()
+	done := make(chan bool)
+	go func() { done <- check("a", "n1", t0.Add(time.Minute)) }()
+	select {
+	case ok := <-done:
+		if ok {
+			t.Error("passed before the delay")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiting triplet wrote")
+	}
+	s.wmu.Unlock()
+	if !check("a", "n1", t0.Add(6*time.Minute)) {
+		t.Fatal("after the delay")
+	}
+	s.wmu.Lock()
+	go func() { done <- check("a", "n1", t0.Add(7*time.Minute)) }()
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Error("known triplet refused")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("known triplet wrote")
+	}
+	s.wmu.Unlock()
+
+	// After a day the triplets that never passed are gone; the passed one
+	// stays until it was not seen for Valid.
+	if err := s.PruneGreylist(ctx, t0.Add(25*time.Hour), g); err != nil {
+		t.Fatal(err)
+	}
+	if count() != 1 {
+		t.Fatalf("after a day: %d rows", count())
+	}
+	if err := s.PruneGreylist(ctx, t0.Add(31*24*time.Hour), g); err != nil {
+		t.Fatal(err)
+	}
+	if count() != 0 {
+		t.Fatalf("after Valid: %d rows", count())
+	}
+}

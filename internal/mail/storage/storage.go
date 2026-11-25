@@ -226,6 +226,11 @@ CREATE TABLE greylist (
 );
 CREATE INDEX greylist_first ON greylist(first);
 `,
+	// 4: the network a greylisting triplet counts against.
+	`
+ALTER TABLE greylist ADD COLUMN net TEXT NOT NULL DEFAULT '';
+CREATE INDEX greylist_net ON greylist(net, passed);
+`,
 }
 
 func migrate(db *sql.DB) error {
