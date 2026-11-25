@@ -85,10 +85,13 @@ Values given as installer options (`--panel-domain`, `--server-ip`, `--acme-emai
 | Item | Details |
 |---|---|
 | User `caddy` | system user, home `/var/lib/ownpanel/caddy-home`, shell `/usr/sbin/nologin` |
-| User `ownpanel` | system user, home `/var/lib/ownpanel`, shell `/usr/sbin/nologin`; added to the group `caddy` |
+| User `ownpanel` | system user, home `/var/lib/ownpanel`, shell `/usr/sbin/nologin`; added to the groups `caddy` and `ownpanel-mail` |
+| User `ownpanel-mail` | system user with its own group, home `/var/lib/ownpanel-mail`, shell `/usr/sbin/nologin` |
 | `/usr/local/bin/ownpaneld`, `/usr/local/bin/caddy` | the binaries (mode 0755); an existing `/usr/local/bin/caddy` is replaced |
 | `/etc/systemd/system/ownpaneld.service` | the panel daemon, runs as `ownpanel` |
 | `/etc/systemd/system/ownpanel-caddy.service` | Caddy, runs as `caddy` |
+| `/etc/systemd/system/ownpanel-mail.service` | the mail service, runs as `ownpanel-mail` |
+| `/var/lib/ownpanel-mail` | the mail service's data (created by systemd), owned by `ownpanel-mail`, mode 0700 |
 | `/var/lib/ownpanel` | data directory, owned by `ownpanel` (0755) |
 | `/var/lib/ownpanel/caddy`, `/var/lib/ownpanel/caddy-home` | Caddy's certificate storage and home, owned by `caddy`, mode 0700 |
 | `/etc/ownpanel/caddy-bootstrap.json` | Caddy's start configuration (only the admin socket) |
@@ -99,7 +102,7 @@ Values given as installer options (`--panel-domain`, `--server-ip`, `--acme-emai
 | `/var/lib/ownpanel/update` | `root:ownpanel`, mode 1770: update requests from the panel and the update status |
 | `/var/lib/ownpanel/backups` | root only: the backups made before each update (the last three) |
 
-Both services are enabled and started. The installer waits until the panel answers on `127.0.0.1:8600`; if it does not within 60 seconds, it shows the daemon's log and fails.
+The services are enabled and started. The installer waits until the panel answers on `127.0.0.1:8600`; if it does not within 60 seconds, it shows the daemon's log and fails.
 
 ### The Caddy admin socket
 
@@ -110,6 +113,8 @@ Caddy's admin API is a Unix socket, never a TCP port, because on TCP every local
 - The user `ownpanel` is a member of the group `caddy`, so ownpaneld can connect. Other local users can neither enter the directory nor open the socket.
 - Caddy's own data directories are 0700, so the group membership gives `ownpanel` nothing else.
 
+The mail service's admin socket works the same way: `/run/ownpanel-mail/admin.sock` in a directory of the group `ownpanel-mail` (0750), socket mode 0660, and `ownpanel` is a member of that group.
+
 The units also set `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=full` and `ProtectHome=true`; Caddy gets `CAP_NET_BIND_SERVICE` to bind ports 80 and 443. Caddy is started with `--resume`, so after a restart it serves the last config until ownpaneld pushes the current one.
 
 ## Flags
@@ -117,8 +122,10 @@ The units also set `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=full` and `Pr
 ownpaneld reads its flags from `/etc/ownpanel/ownpaneld.env`, the variable `OWNPANELD_ARGS`. A fresh install writes:
 
 ```
-OWNPANELD_ARGS=-tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock
+OWNPANELD_ARGS=-tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock -mail-admin unix:///run/ownpanel-mail/admin.sock
 ```
+
+(Upgrades of installs from before e-mail get `-mail-admin` added.)
 
 plus `-panel-domain`, `-server-ip` and `-acme-email` if you gave the matching options. The service starts `/usr/local/bin/ownpaneld -data /var/lib/ownpanel $OWNPANELD_ARGS`. See [[Configuration|Configuration]] for all flags.
 
@@ -126,12 +133,15 @@ You can edit the file; apply a change with `systemctl restart ownpaneld`. The in
 
 ## Firewall
 
-If `ufw` is active, the installer allows 80/tcp and 443/tcp and says so. Otherwise it only reminds you; open them in your provider's firewall if it has one.
+If `ufw` is active, the installer allows 80, 443, 25, 465, 587 and 993 over TCP and says so. Otherwise it only reminds you; open them in your provider's firewall if it has one.
 
 | Port | Used for |
 |---|---|
 | 80/tcp | HTTP: redirects to HTTPS, and certificate validation |
 | 443/tcp | HTTPS for your sites, the panel domain, and the panel on the server's address during setup |
+| 25/tcp | mail from other mail servers; also outgoing, which many providers block until asked ([[E-Mail|E-Mail]]) |
+| 465/tcp, 587/tcp | mail programs sending mail |
+| 993/tcp | mail programs reading mail |
 
 Do not open port 8600; the panel listens on the loopback address only and Caddy reaches it from the same machine.
 

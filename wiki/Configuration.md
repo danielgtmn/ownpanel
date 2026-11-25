@@ -61,8 +61,24 @@ There is no configuration file and there are no other environment variables for 
 |---|---|---|
 | `-data` | `./data` | Data directory of the daemon. |
 | `-out` | none (required) | Archive to write, `.tar.gz`. The file must not exist; it is created with mode 0600. |
+| `-mail-data` | `/var/lib/ownpanel-mail` | Data directory of the mail service; skipped if it does not exist. |
+| `-no-mail` | off | Leave the stored mail out of the archive. |
 
 See [[Backup and Restore|Backup-and-Restore]].
+
+## `ownpaneld mail`
+
+The mail service ([[E-Mail|E-Mail]]). `install.sh` runs it as `ownpanel-mail.service`; everything else (domains, mailboxes, certificate, limits) comes from the panel over the admin socket.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `-data` | `/var/lib/ownpanel-mail` | Its data: last configuration, mail index, messages, queue. |
+| `-admin` | `/run/ownpanel-mail/admin.sock` | Unix socket the panel configures it through (`-mail-admin unix://…` of `serve`). |
+| `-smtp` | `:25` | Incoming mail from other servers. |
+| `-submission` | `:587` | Mail programs sending mail (STARTTLS before sign-in); `""` turns it off. |
+| `-submissions` | `:465` | Mail programs sending mail over TLS; `""` turns it off. |
+| `-imaps` | `:993` | Mail programs reading mail (IMAP over TLS); `""` turns it off. |
+| `-ipv6-outbound` | off | Also deliver outgoing mail over IPv6. Only turn it on when the server's IPv6 address has the mail server name as reverse name. |
 
 ## Version
 

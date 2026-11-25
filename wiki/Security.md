@@ -54,6 +54,16 @@ Updating replaces binaries and restarts services, which needs root; the panel ru
 - Passwords, session secrets and access tokens are never written to the log.
 - A [[backup|Backup-and-Restore]] contains the database and the key together, so it must be protected like the server.
 
+### E-mail
+
+- The mail server runs as its own service and user (`ownpanel-mail`) with its own data in `/var/lib/ownpanel-mail` (0700). It cannot read the panel's database or `secret.key`; the panel cannot read stored mail. They talk only through a local socket of the group `ownpanel-mail`. The unit keeps only the capability to open ports below 1024, with a read-only system and no access to home directories.
+- Mailbox passwords are argon2id hashes; mail programs sign in only over encrypted connections. Failed sign-ins are limited per address and network and per network, never per address alone (that would let anyone lock a mailbox). Unknown addresses take as long as wrong passwords.
+- DKIM keys are stored encrypted with `secret.key`. Password hashes and keys never appear in API answers, logs or the activity log.
+- A domain receives mail only once its MX record points at the mail server (or an administrator says so), so nobody can catch mail sent from this server to a domain they do not own.
+- A mailbox can only send as its own address or forwarding addresses that deliver to it. Sending limits stop a hijacked mailbox; only administrators can allow it again.
+- Accepted mail is written to disk before the server confirms it.
+- **Administrators can read any mailbox** by setting its password.
+
 ### Upload links
 
 One-time links are valid for 15 minutes, for one site, and work once. They are re-checked against the creating token when used, so revoking the token ends them.
@@ -68,6 +78,7 @@ One-time links are valid for 15 minutes, for one site, and work once. They are r
 - **No second factor** for sign-in, and no list of a person's sessions to end them one by one; changing the password ends the others.
 - **Access tokens do not expire.** Revoke them when they are no longer needed.
 - **Not tested on a real server yet:** the installer, the updater and the hardening of the systemd units have not been verified in production ([[Roadmap|Roadmap]]).
+- **E-mail has not been tested on a public server,** and there is no virus scanning. See [[E-Mail|E-Mail]].
 - **A rollback does not restore the database.** If a new version migrated it and the old one cannot read it, restore the backup made before the update.
 
 To report a problem, open an issue at <https://github.com/danielgtmn/ownpanel>.
