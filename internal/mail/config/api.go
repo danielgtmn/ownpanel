@@ -24,7 +24,7 @@ import (
 //	GET    /status                          Status
 //	GET    /events?after=<id>               []Event, oldest first, at most 500
 //	POST   /mailboxes/{storage_id}/unblock  204, 404 if unknown
-//	DELETE /mailboxes/{storage_id}          204 (also when there was no data)
+//	DELETE /mailboxes/{storage_id}          204 (also when there was no data), 409 while configured
 //	POST   /checks/outbound                 OutboundCheck
 const (
 	PathLoad     = "/load"
@@ -228,7 +228,8 @@ func (c *Client) Unblock(ctx context.Context, storageID string) error {
 	return c.do(ctx, http.MethodPost, PathMailbox+url.PathEscape(storageID)+"/unblock", nil, nil)
 }
 
-// DeleteMailbox removes all data of a mailbox.
+// DeleteMailbox removes all data of a mailbox that is no longer in the
+// loaded configuration (409 otherwise).
 func (c *Client) DeleteMailbox(ctx context.Context, storageID string) error {
 	if !ValidStorageID(storageID) {
 		return errors.New("invalid storage id")

@@ -3,6 +3,7 @@ package imapd
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"io"
 	"strings"
 	"time"
@@ -16,8 +17,48 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/mail/storage"
 )
 
-// maxScanBytes bounds how much of one message TEXT and BODY searches read.
-const maxScanBytes = 64 << 20
+// maxScanBytes bounds how much of one message TEXT and BODY searches read;
+// maxHeaderBytes how much of its header any search reads. A message whose
+// header is longer matches no header criterion.
+const (
+	maxScanBytes   = 64 << 20
+	maxHeaderBytes = 1 << 20
+)
+
+var errHeaderTooLong = errors.New("header too long")
+
+// headerCap passes reads through, but while capped fails once more than n
+// bytes were read: the header of a message must end within them.
+type headerCap struct {
+	r      io.Reader
+	n      int64
+	capped bool
+}
+
+func (h *headerCap) Read(p []byte) (int, error) {
+	if !h.capped {
+		return h.r.Read(p)
+	}
+	if h.n <= 0 {
+		return 0, errHeaderTooLong
+	}
+	if int64(len(p)) > h.n {
+		p = p[:h.n]
+	}
+	n, err := h.r.Read(p)
+	h.n -= int64(n)
+	return n, err
+}
+
+// readHeader reads the header of a message from r, at most maxHeaderBytes
+// of it, and returns it with a reader of the body.
+func readHeader(r io.Reader) (textproto.Header, io.Reader, error) {
+	hc := &headerCap{r: r, n: maxHeaderBytes, capped: true}
+	br := bufio.NewReader(hc)
+	h, err := textproto.ReadHeader(br)
+	hc.capped = false
+	return h, br, err
+}
 
 func (s *session) Search(kind imapserver.NumKind, criteria *imap.SearchCriteria, options *imap.SearchOptions) (*imap.SearchData, error) {
 	if err := s.check(); err != nil {
@@ -101,7 +142,7 @@ func (ev *evaluator) headerOf(c *candidate) *mail.Header {
 		return nil
 	}
 	defer f.Close()
-	h, err := textproto.ReadHeader(bufio.NewReader(f))
+	h, _, err := readHeader(f)
 	if err != nil {
 		return nil
 	}
@@ -197,7 +238,11 @@ func (ev *evaluator) scan(c *candidate, pattern string, includeHeader bool) bool
 		return false
 	}
 	defer f.Close()
-	e, err := gomessage.Read(bufio.NewReader(io.LimitReader(f, maxScanBytes)))
+	h, body, err := readHeader(io.LimitReader(f, maxScanBytes))
+	if err != nil {
+		return false
+	}
+	e, err := gomessage.New(gomessage.Header{Header: h}, body)
 	if e == nil {
 		return false
 	}

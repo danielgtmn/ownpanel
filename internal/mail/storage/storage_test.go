@@ -194,6 +194,11 @@ func TestCopyMoveExpunge(t *testing.T) {
 	if read(t, s, arch[0]) != "two" {
 		t.Fatal("shared file removed")
 	}
+	// UIDs not flagged \Deleted, or not there at all, are left alone.
+	gone, err = s.Expunge(ctx, idA, "INBOX", []uint32{1, 1, 99})
+	if err != nil || len(gone) != 0 {
+		t.Fatalf("uid expunge of undeleted %v %v", err, gone)
+	}
 	gone, _ = s.Expunge(ctx, idA, "INBOX", nil)
 	if !slices.Equal(gone, []uint32{3}) {
 		t.Fatalf("expunge %v", gone)

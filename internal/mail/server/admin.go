@@ -108,6 +108,15 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid storage id", http.StatusBadRequest)
 		return
 	}
+	// The panel removes a mailbox from the configuration before it asks
+	// for its data to be deleted; a mailbox still configured keeps its
+	// data. Holding loadMu keeps a load from adding it back meanwhile.
+	s.loadMu.Lock()
+	defer s.loadMu.Unlock()
+	if _, ok := s.Directory().MailboxByStorageID(id); ok {
+		http.Error(w, "the mailbox is still configured", http.StatusConflict)
+		return
+	}
 	if err := s.store.DeleteMailbox(r.Context(), id); err != nil {
 		s.internalError(w, "delete", err)
 		return

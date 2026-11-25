@@ -641,6 +641,42 @@ func TestSearch(t *testing.T) {
 	}
 }
 
+// SEARCH reads at most maxHeaderBytes of a message's header: a longer
+// header matches no header criterion.
+func TestSearchHeaderLimit(t *testing.T) {
+	e := start(t)
+	pad := "X-Pad: " + strings.Repeat("a", 1000) + "\r\n"
+	big := func(n int, subject string) string {
+		return "From: bob@example.org\r\n" + strings.Repeat(pad, n) + "Subject: " + subject + "\r\n\r\nbody word\r\n"
+	}
+	e.deliver("INBOX", big(maxHeaderBytes/len(pad)-10, "near limit"))
+	e.deliver("INBOX", big(maxHeaderBytes/len(pad)+10, "over limit"))
+	c, _ := e.login()
+	if _, err := c.Select("INBOX", nil).Wait(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		crit imap.SearchCriteria
+		want []uint32
+	}{
+		{"header", imap.SearchCriteria{Header: []imap.SearchCriteriaHeaderField{{Key: "Subject", Value: "limit"}}}, []uint32{1}},
+		{"text", imap.SearchCriteria{Text: []string{"body word"}}, []uint32{1}},
+	} {
+		sd, err := c.UIDSearch(&tc.crit, nil).Wait()
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		var got []uint32
+		for _, u := range sd.AllUIDs() {
+			got = append(got, uint32(u))
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestFolders(t *testing.T) {
 	e := start(t)
 	c, _ := e.login()

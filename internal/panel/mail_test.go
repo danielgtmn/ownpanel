@@ -111,6 +111,11 @@ func (f *fakeMail) DeleteMailbox(_ context.Context, id string) error {
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}
+	// Like the service: a mailbox still in the loaded configuration keeps
+	// its data, so the panel must push the configuration first.
+	if n := len(f.loads); n > 0 && slices.ContainsFunc(f.loads[n-1].Mailboxes, func(m config.Mailbox) bool { return m.StorageID == id }) {
+		return &config.Error{Status: 409, Msg: "the mailbox is still configured"}
+	}
 	f.deleted = append(f.deleted, id)
 	return nil
 }

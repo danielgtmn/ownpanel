@@ -270,7 +270,9 @@ have no panel account and cannot change their own password yet (*later*).
   PLAIN and LOGIN (go-sasl has no LOGIN server; a small one of our own).
 - Sign-in: the IP throttle runs before any hashing; failures are limited per
   (IP, address) and per IP, never per address alone (that would let anyone
-  lock a person out). A successful sign-in is cached in memory for 15 minutes
+  lock a person out); IPv6 counts per /48. When the throttle's tables are
+  full, sign-ins from new IPs are refused until old entries expire (never
+  let through uncounted). A successful sign-in is cached in memory for 15 minutes
   under an HMAC of address, password and hash, so mail clients that open many
   connections do not cost an argon2id hash each. The service has its own
   hashing slots.
@@ -325,6 +327,9 @@ How it is built (phase 1c):
 
 - A mailbox may send as its own address or an alias that delivers to it
   (catch-all does not count), checked for the envelope and the header `From`.
+  The message needs exactly one `From` field; several addresses in it need a
+  `Sender` with one address, which the mailbox must also be allowed to send
+  as. A header section over 1 MB is refused with `552 5.3.4`.
 - DKIM signature (RSA 2048) with the domain's active key.
 - Queue on disk, delivery to MX hosts by preference (implicit MX fallback to
   A/AAAA, null MX `0 .` refuses at once), STARTTLS whenever offered; an
@@ -436,8 +441,12 @@ all DNS goes through one resolver interface, replaced in tests):
   or without an SPF pass. Triplet: network (/24, /64), envelope sender,
   recipient, in `mail.db`. The first attempt and retries within 5 minutes
   get `451 4.7.1`; a retry after 5 minutes (within 24 hours) passes, and
-  the triplet then passes for 30 days after its last message. Old triplets
-  are pruned daily.
+  the triplet then passes for 30 days after its last message. Triplets that
+  never passed are pruned after 24 hours, passed ones 30 days after their
+  last message (checked hourly). At most 1000 waiting triplets per network
+  (/24, /48) and 200,000 in total; new ones beyond that are greylisted
+  without being recorded. Seeing a triplet again writes only when its state
+  changes.
 - **Blocklist refusals** (answers in `127.255.255.0/24`) record the event
   `blocklist.refused` at most once a day per zone; the zone is then simply
   not used for that message.

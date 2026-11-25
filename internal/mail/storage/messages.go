@@ -617,6 +617,13 @@ func (s *Store) Expunge(ctx context.Context, id, folder string, uids []uint32) (
 		if err != nil {
 			return err
 		}
+		var only map[uint32]bool
+		if uids != nil {
+			only = make(map[uint32]bool, len(uids))
+			for _, u := range uids {
+				only[u] = true
+			}
+		}
 		var del []uint32
 		for rows.Next() {
 			var u uint32
@@ -624,7 +631,7 @@ func (s *Store) Expunge(ctx context.Context, id, folder string, uids []uint32) (
 				rows.Close()
 				return err
 			}
-			if uids == nil || slices.Contains(uids, u) {
+			if only == nil || only[u] {
 				del = append(del, u)
 			}
 		}

@@ -282,6 +282,14 @@ func TestOrphansUnblockDelete(t *testing.T) {
 		t.Fatalf("unknown unblock: %v", err)
 	}
 
+	// A configured mailbox keeps its data.
+	if err := in.client.DeleteMailbox(ctx, idBob); !errors.As(err, &ae) || ae.Status != 409 {
+		t.Fatalf("delete of a configured mailbox: %v", err)
+	}
+	if u, _ := store.Usage(ctx, idBob); u == (storage.Usage{}) {
+		t.Fatal("data of a configured mailbox deleted")
+	}
+
 	// Bob is removed from the configuration: his data stays and is
 	// reported until the panel deletes it.
 	if err := in.client.Load(ctx, testConfig(t)); err != nil {
