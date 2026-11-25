@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -24,10 +25,21 @@ import (
 //	TXT   _dmarc                 v=DMARC1; p=none; …    never changed
 //	SRV   _submissions._tcp      0 1 465 <mail_host>.   replaced
 //	SRV   _imaps._tcp            0 1 993 <mail_host>.   replaced
+//	CNAME autoconfig             <mail_host>.           optional; replaced only if a CNAME
+//	CNAME autodiscover           <mail_host>.           optional; replaced only if a CNAME
 //
 // Other TXT values at @ are always kept. An SPF record that cannot be
 // merged safely (several SPF records, +all/?all, more than 10 lookups) is
-// reported, never changed.
+// reported, never changed. The two optional names let mail programs set
+// themselves up (mailsetup.go); A/AAAA records there that point to this
+// server are just as good as the CNAME, other records are left alone.
+//
+// The mail host itself needs one record too (admins, mail health):
+//
+//	TXT   <mail_host> (SPF)      v=spf1 a -all          a inserted into an existing SPF record
+//
+// because bounces (null sender: SPF checks the HELO name) and mail
+// forwarded with an SRS address of the mail host are sent under its name.
 
 // Kinds of mail records.
 const (
@@ -37,6 +49,10 @@ const (
 	MailRecordDMARC          = "dmarc"
 	MailRecordSRVSubmissions = "srv-submissions"
 	MailRecordSRVIMAPS       = "srv-imaps"
+	MailRecordAutoconfig     = "autoconfig"
+	MailRecordAutodiscover   = "autodiscover"
+	// MailRecordHostSPF is the SPF record of the mail host itself.
+	MailRecordHostSPF = "mail-host-spf"
 )
 
 // States of a mail record.
@@ -58,8 +74,10 @@ const (
 )
 
 const (
-	defaultSPF   = "v=spf1 mx -all"
-	defaultDMARC = "v=DMARC1; p=none; adkim=r; aspf=r"
+	defaultSPF = "v=spf1 mx -all"
+	// defaultHostSPF allows the mail host's own addresses.
+	defaultHostSPF = "v=spf1 a -all"
+	defaultDMARC   = "v=DMARC1; p=none; adkim=r; aspf=r"
 	// maxSPFLookups is RFC 7208's limit of mechanisms that need a lookup.
 	maxSPFLookups = 10
 	// maxTXTString is the longest single string of a TXT record; longer
@@ -82,6 +100,8 @@ type MailRecord struct {
 	// failed).
 	Status string `json:"status"`
 	Note   string `json:"note"`
+	// Optional records are recommended, not needed for mail to work.
+	Optional bool `json:"optional"`
 }
 
 // MailRecords lists the records of a mail domain. CanApply tells whether
@@ -112,6 +132,7 @@ type MailRecordChange struct {
 	// records that point elsewhere moves the domain's mail here).
 	NeedsConfirm bool   `json:"needs_confirm"`
 	Note         string `json:"note"`
+	Optional     bool   `json:"optional"`
 }
 
 // MailRecordChanges is the result of SetUpMailRecords. Applied is false
@@ -128,12 +149,15 @@ type mailRecordSpec struct {
 	typ  string
 	sub  string // name relative to the mail domain
 	want string // the value to publish (for SPF: when there is none yet)
+	// optional records are recommended only (the names for setting up
+	// mail programs).
+	optional bool
 }
 
 func (s *Service) mailRecordSpecs(ctx context.Context, domain, host string) ([]mailRecordSpec, error) {
 	specs := []mailRecordSpec{
-		{MailRecordMX, "MX", "@", "10 " + host + "."},
-		{MailRecordSPF, "TXT", "@", defaultSPF},
+		{kind: MailRecordMX, typ: "MX", sub: "@", want: "10 " + host + "."},
+		{kind: MailRecordSPF, typ: "TXT", sub: "@", want: defaultSPF},
 	}
 	keys, err := s.store.DKIMKeys(ctx, domain)
 	if err != nil {
@@ -141,16 +165,25 @@ func (s *Service) mailRecordSpecs(ctx context.Context, domain, host string) ([]m
 	}
 	for _, k := range keys {
 		if k.State == store.DKIMActive {
-			specs = append(specs, mailRecordSpec{MailRecordDKIM, "TXT", k.Selector + "._domainkey", "v=DKIM1; k=rsa; p=" + k.PublicKey})
+			specs = append(specs, mailRecordSpec{kind: MailRecordDKIM, typ: "TXT", sub: k.Selector + "._domainkey", want: "v=DKIM1; k=rsa; p=" + k.PublicKey})
 			break
 		}
 	}
 	return append(specs,
-		mailRecordSpec{MailRecordDMARC, "TXT", "_dmarc", defaultDMARC},
-		mailRecordSpec{MailRecordSRVSubmissions, "SRV", "_submissions._tcp", "0 1 465 " + host + "."},
-		mailRecordSpec{MailRecordSRVIMAPS, "SRV", "_imaps._tcp", "0 1 993 " + host + "."},
+		mailRecordSpec{kind: MailRecordDMARC, typ: "TXT", sub: "_dmarc", want: defaultDMARC},
+		mailRecordSpec{kind: MailRecordSRVSubmissions, typ: "SRV", sub: "_submissions._tcp", want: "0 1 465 " + host + "."},
+		mailRecordSpec{kind: MailRecordSRVIMAPS, typ: "SRV", sub: "_imaps._tcp", want: "0 1 993 " + host + "."},
+		mailRecordSpec{kind: MailRecordAutoconfig, typ: "CNAME", sub: "autoconfig", want: host + ".", optional: true},
+		mailRecordSpec{kind: MailRecordAutodiscover, typ: "CNAME", sub: "autodiscover", want: host + ".", optional: true},
 	), nil
 }
+
+// hostSPFSpec is the SPF record of the mail host (relative to the mail
+// host itself).
+var hostSPFSpec = mailRecordSpec{kind: MailRecordHostSPF, typ: "TXT", sub: "@", want: defaultHostSPF}
+
+// isSPFKind: the record is an SPF record, merged into an existing one.
+func isSPFKind(kind string) bool { return kind == MailRecordSPF || kind == MailRecordHostSPF }
 
 // subName returns the full name of a name relative to the mail domain.
 func subName(sub, domain string) string {
@@ -204,18 +237,19 @@ type spfMerge struct {
 	conflict string // why the record is not changed automatically
 }
 
-// mergeSPF inserts "mx" after "v=spf1" of an existing SPF record, keeping
-// everything else (qualifiers, includes, redirect=). A record that allows
-// every server (+all, ?all), excludes the MX hosts or would need more than
-// 10 DNS lookups is a conflict: it is left to a person.
-func mergeSPF(existing string) spfMerge {
+// mergeSPF inserts mech ("mx" for a mail domain, "a" for the mail host)
+// after "v=spf1" of an existing SPF record, keeping everything else
+// (qualifiers, includes, redirect=). A record that allows every server
+// (+all, ?all), excludes what mech allows or would need more than 10 DNS
+// lookups is a conflict: it is left to a person.
+func mergeSPF(existing, mech string) spfMerge {
 	terms := strings.Fields(existing)
 	if len(terms) == 0 || !strings.EqualFold(terms[0], "v=spf1") {
 		return spfMerge{value: existing, conflict: "The SPF record does not start with v=spf1; fix it by hand."}
 	}
 	rest := terms[1:]
 	lookups := 0
-	hasMX := false
+	has := false
 	for _, t := range rest {
 		l := strings.ToLower(t)
 		q := byte('+')
@@ -236,25 +270,29 @@ func mergeSPF(existing string) spfMerge {
 			return spfMerge{value: existing, conflict: "The SPF record allows every server on the internet to send for this domain (+all). Replace it by hand with one that ends in -all or ~all."}
 		case name == "all" && q == '?':
 			return spfMerge{value: existing, conflict: "The SPF record makes no statement about other servers (?all), so it protects nothing. Change it by hand to end in -all or ~all."}
-		case name == "include" || name == "a" || name == "ptr" || name == "exists":
+		case name == mech:
 			lookups++
-		case name == "mx":
-			lookups++
-			bare := l == "mx" || strings.HasPrefix(l, "mx/")
+			bare := l == mech || strings.HasPrefix(l, mech+"/")
 			if bare && q == '+' {
-				hasMX = true
+				has = true
 			} else if bare {
-				return spfMerge{value: existing, conflict: "The SPF record marks the domain's own mail servers as not allowed (" + t + "). Change it by hand."}
+				who := "the domain's own mail servers"
+				if mech == "a" {
+					who = "the mail server itself"
+				}
+				return spfMerge{value: existing, conflict: "The SPF record marks " + who + " as not allowed (" + t + "). Change it by hand."}
 			}
+		case name == "include" || name == "a" || name == "mx" || name == "ptr" || name == "exists":
+			lookups++
 		}
 	}
-	if hasMX {
+	if has {
 		return spfMerge{value: existing, ok: true}
 	}
 	if lookups+1 > maxSPFLookups {
-		return spfMerge{value: existing, conflict: fmt.Sprintf("With mx added, the SPF record would need %d DNS lookups; receivers allow at most %d. Shorten it by hand (fewer include: entries) and add mx.", lookups+1, maxSPFLookups)}
+		return spfMerge{value: existing, conflict: fmt.Sprintf("With %s added, the SPF record would need %d DNS lookups; receivers allow at most %d. Shorten it by hand (fewer include: entries) and add %s.", mech, lookups+1, maxSPFLookups, mech)}
 	}
-	return spfMerge{value: strings.Join(append([]string{"v=spf1", "mx"}, rest...), " ")}
+	return spfMerge{value: strings.Join(append([]string{"v=spf1", mech}, rest...), " ")}
 }
 
 func dkimEqual(a, b string) bool {
@@ -326,7 +364,11 @@ func judge(spec mailRecordSpec, host string, found []string) judgement {
 			j.status, j.note = RecordDifferent, fmt.Sprintf("Mail for this domain goes to %s now. Replacing the MX records moves the domain's mail to this server.", strings.Join(targets, ", "))
 		}
 		j.values = []string{spec.want}
-	case MailRecordSPF:
+	case MailRecordSPF, MailRecordHostSPF:
+		mech, missing := "mx", "There is no SPF record yet; receivers cannot tell that this server may send for the domain."
+		if spec.kind == MailRecordHostSPF {
+			mech, missing = "a", "There is no SPF record for the mail server's name yet; receivers cannot tell that bounces and forwarded mail from this server are genuine."
+		}
 		var spfs []string
 		for _, v := range found {
 			if isSPF(v) {
@@ -336,10 +378,10 @@ func judge(spec mailRecordSpec, host string, found []string) judgement {
 		j.keepOthers = true
 		switch len(spfs) {
 		case 0:
-			j.status, j.note = RecordMissing, "There is no SPF record yet; receivers cannot tell that this server may send for the domain."
+			j.status, j.note = RecordMissing, missing
 			j.values = []string{spec.want}
 		case 1:
-			m := mergeSPF(spfs[0])
+			m := mergeSPF(spfs[0], mech)
 			j.want = m.value
 			switch {
 			case m.conflict != "":
@@ -347,12 +389,12 @@ func judge(spec mailRecordSpec, host string, found []string) judgement {
 			case m.ok:
 				j.status = RecordOK
 			default:
-				j.status, j.note = RecordDifferent, "The SPF record does not allow this server yet. mx is added after v=spf1; everything else in it stays as it is."
+				j.status, j.note = RecordDifferent, "The SPF record does not allow this server yet. "+mech+" is added after v=spf1; everything else in it stays as it is."
 				j.values = []string{m.value}
 			}
 		default:
 			j.want = ""
-			j.status, j.note = RecordConflict, "There are several SPF records; receivers then treat SPF as broken. Merge them into one by hand and include mx."
+			j.status, j.note = RecordConflict, "There are several SPF records; receivers then treat SPF as broken. Merge them into one by hand and include "+mech+"."
 		}
 	case MailRecordDKIM:
 		switch {
@@ -528,8 +570,10 @@ func (s *Service) MailRecords(ctx context.Context, a Actor, domain string) (Mail
 	type looked struct {
 		found []string
 		err   error
+		check dns.Check // for the names that set up mail programs
 	}
 	res := make([]looked, len(specs))
+	ips := s.effectiveServerIPs()
 	lctx, cancel := context.WithTimeout(ctx, lookupTimeout)
 	defer cancel()
 	var wg sync.WaitGroup
@@ -537,8 +581,14 @@ func (s *Service) MailRecords(ctx context.Context, a Actor, domain string) (Mail
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			if spec.typ == "CNAME" {
+				if len(ips) > 0 {
+					res[i].check = dns.CheckDomain(lctx, s.resolver, subName(spec.sub, md.Domain), ips)
+				}
+				return
+			}
 			f, err := s.lookupRecord(lctx, spec, md.Domain)
-			res[i] = looked{f, err}
+			res[i] = looked{found: f, err: err}
 		}()
 	}
 
@@ -562,11 +612,22 @@ func (s *Service) MailRecords(ctx context.Context, a Actor, domain string) (Mail
 		return MailRecords{}, newError(Internal, ctx.Err())
 	}
 
+	setupChanged := false
 	for i, spec := range specs {
 		full := subName(spec.sub, md.Domain)
-		r := MailRecord{Kind: spec.kind, Type: spec.typ, Name: spec.sub, FQDN: full, Want: spec.want, Found: []string{}}
+		r := MailRecord{Kind: spec.kind, Type: spec.typ, Name: spec.sub, FQDN: full, Want: spec.want, Found: []string{}, Optional: spec.optional}
 		if out.CanApply {
 			r.Name = zoneRelative(full, out.Zone)
+		}
+		if spec.typ == "CNAME" {
+			c := res[i].check
+			r.Status, r.Note = judgeSetupName(c, len(ips) > 0)
+			r.Found = nonNil(c.Found)
+			if md.Active && len(ips) > 0 && s.setupHosts.note(full, c.State) {
+				setupChanged = true
+			}
+			out.Records = append(out.Records, r)
+			continue
 		}
 		if res[i].err != nil {
 			r.Status, r.Note = RecordUnknown, "The record could not be looked up at the domain's nameservers; try again in a moment."
@@ -580,7 +641,29 @@ func (s *Service) MailRecords(ctx context.Context, a Actor, domain string) (Mail
 		}
 		out.Records = append(out.Records, r)
 	}
+	if setupChanged {
+		// A name for setting up mail programs points here now (or no
+		// more): the web server serves it from now on (or stops).
+		_ = s.syncSaved(ctx) // logged; the background loop retries
+	}
 	return out, nil
+}
+
+// judgeSetupName judges an optional name for setting up mail programs by
+// where it leads: a CNAME to the mail host and A/AAAA records with the
+// server's addresses both end at this server.
+func judgeSetupName(c dns.Check, haveIPs bool) (status, note string) {
+	switch {
+	case !haveIPs:
+		return RecordUnknown, "The server's addresses are not set in the settings, so it cannot be checked where this name points."
+	case c.State == dns.PointsHere:
+		return RecordOK, ""
+	case c.State == dns.NoRecord:
+		return RecordMissing, "Recommended: mail programs such as Thunderbird and Outlook look up this name to set themselves up with just the address and password."
+	case c.State == dns.PointsElsewhere:
+		return RecordDifferent, "This name points to another server, so mail programs that look here are not set up for this one. Point it to the mail server's name."
+	}
+	return RecordUnknown, "The record could not be looked up at the domain's nameservers; try again in a moment."
 }
 
 // ---- applying ----
@@ -588,11 +671,16 @@ func (s *Service) MailRecords(ctx context.Context, a Actor, domain string) (Mail
 // planMailRecords compares the records the mail domain needs with the
 // zone's record sets and returns the changes, with the record sets to
 // write (nil for keep and skip).
-func planMailRecords(specs []mailRecordSpec, host, domain, zone string, sets []dns.RecordSet) ([]MailRecordChange, []*dns.RecordSet) {
+func planMailRecords(specs []mailRecordSpec, host, domain, zone string, sets []dns.RecordSet, ips []netip.Addr) ([]MailRecordChange, []*dns.RecordSet) {
 	changes := []MailRecordChange{}
 	var writes []*dns.RecordSet
 	for _, spec := range specs {
 		name := zoneRelative(subName(spec.sub, domain), zone)
+		if spec.typ == "CNAME" {
+			c, w := planSetupName(spec, host, name, sets, ips)
+			changes, writes = append(changes, c), append(writes, w)
+			continue
+		}
 		var existing *dns.RecordSet
 		hasCNAME := false
 		for i := range sets {
@@ -628,7 +716,7 @@ func planMailRecords(specs []mailRecordSpec, host, domain, zone string, sets []d
 			// TXT at @ or _dmarc: only our value is added or replaced.
 			var mine, others []string
 			for _, v := range old {
-				if (spec.kind == MailRecordSPF && isSPF(v)) || (spec.kind == MailRecordDMARC && isDMARC(v)) {
+				if (isSPFKind(spec.kind) && isSPF(v)) || (spec.kind == MailRecordDMARC && isDMARC(v)) {
 					mine = append(mine, v)
 				} else {
 					others = append(others, v)
@@ -663,13 +751,71 @@ func planMailRecords(specs []mailRecordSpec, host, domain, zone string, sets []d
 	return changes, writes
 }
 
+// planSetupName plans an optional name for setting up mail programs: a
+// CNAME to the mail host is created where the name is unused, and replaces
+// a CNAME that leads elsewhere. Address records that point to this server
+// are fine as they are; other records at the name are never touched.
+func planSetupName(spec mailRecordSpec, host, name string, sets []dns.RecordSet, ips []netip.Addr) (MailRecordChange, *dns.RecordSet) {
+	c := MailRecordChange{Kind: spec.kind, Type: spec.typ, Name: name, Old: []string{}, New: []string{}, Optional: true}
+	var cname *dns.RecordSet
+	var addrs []string
+	others := false
+	for i := range sets {
+		if !strings.EqualFold(sets[i].Name, name) {
+			continue
+		}
+		switch strings.ToUpper(sets[i].Type) {
+		case "CNAME":
+			cname = &sets[i]
+		case "A", "AAAA":
+			addrs = append(addrs, normalValues(strings.ToUpper(sets[i].Type), sets[i].Values)...)
+		default:
+			others = true
+		}
+	}
+	switch {
+	case cname != nil:
+		old := normalValues("CNAME", cname.Values)
+		c.Old = old
+		if len(old) == 1 && strings.EqualFold(strings.TrimSuffix(old[0], "."), host) {
+			c.Action, c.New = ChangeKeep, old
+			return c, nil
+		}
+		c.Action, c.New = ChangeReplace, []string{spec.want}
+		c.Note = "This name points mail programs to another server; it is replaced."
+		return c, &dns.RecordSet{Name: name, Type: "CNAME", TTL: cname.TTL, Values: []string{spec.want}}
+	case len(addrs) > 0:
+		c.Old, c.New = addrs, addrs
+		here := true
+		for _, v := range addrs {
+			ip, err := netip.ParseAddr(v)
+			if err != nil || !slices.Contains(ips, ip.Unmap()) {
+				here = false
+			}
+		}
+		if here {
+			c.Action = ChangeKeep
+			return c, nil
+		}
+		c.Action = ChangeSkip
+		c.Note = "There are address records at this name that point to another server; change them by hand to this server's addresses, or remove them so the name can point to the mail server."
+		return c, nil
+	case others:
+		c.Action = ChangeSkip
+		c.Note = "There are other records at this name, so it cannot point to the mail server; set it up by hand if mail programs should find their settings here."
+		return c, nil
+	}
+	c.Action, c.New = ChangeCreate, []string{spec.want}
+	return c, &dns.RecordSet{Name: name, Type: "CNAME", Values: []string{spec.want}}
+}
+
 // keptValues are the values of a record set that concern the record (for
 // TXT at @ only the SPF value).
 func keptValues(spec mailRecordSpec, values []string) []string {
 	out := []string{}
 	for _, v := range values {
 		switch spec.kind {
-		case MailRecordSPF:
+		case MailRecordSPF, MailRecordHostSPF:
 			if !isSPF(v) {
 				continue
 			}
@@ -718,27 +864,73 @@ func (s *Service) SetUpMailRecords(ctx context.Context, a Actor, domain string, 
 	if note != "" && m.conn.ID == 0 {
 		return MailRecordChanges{}, errorf(Conflict, "%s", strings.TrimSuffix(note, "."))
 	}
-	// The same checks as every other DNS change (write access, the zone
-	// still in the connection, a primary zone).
-	c, z, err := s.writableZone(ctx, a, m.conn.ID, m.zone.Name)
-	if err != nil {
-		return MailRecordChanges{}, err
-	}
 	specs, err := s.mailRecordSpecs(ctx, md.Domain, host)
 	if err != nil {
 		return MailRecordChanges{}, err
 	}
-	p, token, err := s.provider(c)
+	res, kinds, err := s.writeMailRecords(ctx, a, m, specs, host, md.Domain, confirm, "mail.records.set", md.Domain)
+	if err != nil || !res.Applied {
+		return res, err
+	}
+	if len(kinds) > 0 {
+		// The records were just written: the domain may become active now,
+		// and the names for setting up mail programs may point here.
+		if fresh, err := s.store.MailDomain(ctx, md.Domain); err == nil && !fresh.Active {
+			if fresh, err = s.checkMailDomain(ctx, fresh); err == nil && fresh.Active {
+				_ = s.mailSaved(ctx) // logged; the background loop retries
+			}
+		}
+		s.setupHosts.checkSoon()
+	}
+	return res, nil
+}
+
+// SetUpMailHostSPF writes the SPF record of the mail host (v=spf1 a -all,
+// or a merged into an existing one) into its zone in the admin's own DNS
+// connection. Only admins: the mail host is a setting of the whole server.
+func (s *Service) SetUpMailHostSPF(ctx context.Context, a Actor) (MailRecordChanges, error) {
+	if err := needAdmin(a); err != nil {
+		return MailRecordChanges{}, err
+	}
+	if err := needDNS(a); err != nil {
+		return MailRecordChanges{}, err
+	}
+	host, err := s.mailHostOrConflict()
 	if err != nil {
 		return MailRecordChanges{}, err
 	}
+	m, note, err := s.mailZone(ctx, a, host)
+	if err != nil {
+		return MailRecordChanges{}, err
+	}
+	if note != "" && m.conn.ID == 0 {
+		return MailRecordChanges{}, errorf(Conflict, "%s", strings.TrimSuffix(strings.Replace(note, "The domain's zone", "The zone of the mail server's name", 1), "."))
+	}
+	res, _, err := s.writeMailRecords(ctx, a, m, []mailRecordSpec{hostSPFSpec}, host, host, true, "mail.host-spf.set", host)
+	return res, err
+}
+
+// writeMailRecords plans the records of specs for domain (relative to the
+// zone of m) and writes them through the actor's DNS connection: the same
+// checks as every other DNS change (write access, the zone still in the
+// connection, a primary zone). Without confirm nothing is written when a
+// change needs confirmation. It returns the kinds written.
+func (s *Service) writeMailRecords(ctx context.Context, a Actor, m zoneMatch, specs []mailRecordSpec, host, domain string, confirm bool, action, target string) (MailRecordChanges, []string, error) {
+	c, z, err := s.writableZone(ctx, a, m.conn.ID, m.zone.Name)
+	if err != nil {
+		return MailRecordChanges{}, nil, err
+	}
+	p, token, err := s.provider(c)
+	if err != nil {
+		return MailRecordChanges{}, nil, err
+	}
 	sets, err := p.RecordSets(ctx, z.Name)
 	if err != nil {
-		return MailRecordChanges{}, dnsError(c.Provider, c.Name, token, err)
+		return MailRecordChanges{}, nil, dnsError(c.Provider, c.Name, token, err)
 	}
-	changes, writes := planMailRecords(specs, host, md.Domain, z.Name, sets)
+	changes, writes := planMailRecords(specs, host, domain, z.Name, sets, s.effectiveServerIPs())
 	if !confirm && slices.ContainsFunc(changes, func(c MailRecordChange) bool { return c.NeedsConfirm }) {
-		return MailRecordChanges{Changes: changes, Applied: false}, nil
+		return MailRecordChanges{Changes: changes, Applied: false}, nil, nil
 	}
 
 	var kinds []string
@@ -746,7 +938,7 @@ func (s *Service) SetUpMailRecords(ctx context.Context, a Actor, domain string, 
 		if len(kinds) > 0 {
 			s.dnsCache.dropZones(c.ID)
 			s.noteWrite(ctx, c, nil, nil)
-			s.record(ctx, a, "mail.records.set", md.Domain, fmt.Sprintf("%s in zone %s (connection %q)", strings.Join(kinds, ", "), z.Name, c.Name))
+			s.record(ctx, a, action, target, fmt.Sprintf("%s in zone %s (connection %q)", strings.Join(kinds, ", "), z.Name, c.Name))
 		}
 		if err != nil {
 			derr := dnsError(c.Provider, c.Name, token, err)
@@ -767,25 +959,17 @@ func (s *Service) SetUpMailRecords(ctx context.Context, a Actor, domain string, 
 		rs, err := validateRecordSet(z.Name, w.Name, w.Type, ttl, w.Values)
 		if err != nil {
 			if ferr := finish(nil); ferr != nil {
-				return MailRecordChanges{}, ferr
+				return MailRecordChanges{}, kinds, ferr
 			}
-			return MailRecordChanges{}, err
+			return MailRecordChanges{}, kinds, err
 		}
 		if err := p.SetRecordSet(ctx, z.Name, rs); err != nil {
-			return MailRecordChanges{}, finish(err)
+			return MailRecordChanges{}, kinds, finish(err)
 		}
 		kinds = append(kinds, changes[i].Kind)
 	}
 	if err := finish(nil); err != nil {
-		return MailRecordChanges{}, err
+		return MailRecordChanges{}, kinds, err
 	}
-	if len(kinds) > 0 {
-		// The records were just written: the domain may become active now.
-		if fresh, err := s.store.MailDomain(ctx, md.Domain); err == nil && !fresh.Active {
-			if fresh, err = s.checkMailDomain(ctx, fresh); err == nil && fresh.Active {
-				_ = s.mailSaved(ctx) // logged; the background loop retries
-			}
-		}
-	}
-	return MailRecordChanges{Changes: changes, Applied: true}, nil
+	return MailRecordChanges{Changes: changes, Applied: true}, kinds, nil
 }

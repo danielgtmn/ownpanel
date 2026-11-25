@@ -167,3 +167,47 @@ describe('mail service sentences', () => {
     )
   })
 })
+
+describe('moving mail in and out', () => {
+  it.each([
+    ['mail.mailbox.import-started', 'anna started importing mail into info@example.com'],
+    ['mail.mailbox.import-cancelled', 'anna cancelled an import into info@example.com'],
+    ['mail.mailbox.exported', 'anna downloaded all mail of info@example.com'],
+  ])('describes %s', (action, sentence) => {
+    expect(describeActivity({ actor: 'anna', action, target: 'info@example.com' })).toBe(sentence)
+  })
+
+  it('describes how imports ended', () => {
+    const say = (action: string, target = 'info@example.com') => describeActivity({ actor: 'mail', action, target })
+    expect(say('mail.mailbox.import-finished')).toBe('Importing mail into info@example.com finished')
+    expect(say('mail.mailbox.import-failed')).toBe('Importing mail into info@example.com failed')
+    expect(say('mail.mailbox.import-paused')).toBe(
+      'Importing mail into info@example.com paused until the other server allows more downloads',
+    )
+    expect(say('mail.mailbox.import-interrupted')).toBe('Importing mail into info@example.com was interrupted by a restart')
+    expect(say('mail.mailbox.import-finished', '')).toBe('Importing mail finished')
+  })
+
+  it('names the source and the counts, never more', () => {
+    expect(describeDetail({ action: 'mail.mailbox.import-started', detail: 'import 3 from me@old.example at imap.old.example' })).toBe(
+      'From me@old.example on imap.old.example',
+    )
+    expect(
+      describeDetail({ action: 'mail.mailbox.import-started', detail: 'import 3 from me@old.example at imap.old.example (continued)' }),
+    ).toBe('From me@old.example on imap.old.example · Continued')
+    expect(describeDetail({ action: 'mail.mailbox.import-started', detail: 'import 4 from file Takeout.zip' })).toBe(
+      'From the file Takeout.zip',
+    )
+    expect(
+      describeDetail({ action: 'mail.mailbox.import-finished', detail: 'import 4 from old.mbox: 12 copied, 3 already there, 0 failed' }),
+    ).toBe('From old.mbox · 12 copied · 3 already there')
+    expect(
+      describeDetail({
+        action: 'mail.mailbox.import-failed',
+        detail: 'import 5 from me at imap.old.example: 0 copied, 0 already there, 2 failed: the other server refused the sign-in',
+      }),
+    ).toBe('From me on imap.old.example · 0 copied · 2 not copied · The other server refused the sign-in')
+    expect(describeDetail({ action: 'mail.mailbox.exported', detail: '' })).toBe('')
+    expect(describeDetail({ action: 'mail.mailbox.import-paused', detail: 'something else' })).toBe('something else')
+  })
+})

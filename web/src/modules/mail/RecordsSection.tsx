@@ -12,6 +12,7 @@ import {
   changeSentence,
   changesToConfirm,
   recordName,
+  recommendedOpen,
   recordPurpose,
   recordStatus,
   recordsNeedWork,
@@ -27,7 +28,7 @@ function CopyButton({ text, what }: { text: string; what: string }) {
 }
 
 function RecordRow({ record }: { record: MailRecord }) {
-  const status = recordStatus(record.status)
+  const status = recordStatus(record.status, record.optional)
   const name = recordName(record)
   return (
     <li className="mail-record">
@@ -173,13 +174,14 @@ export function RecordsSection({ domain, onApplied }: { domain: string; onApplie
 
   const data = records.status === 'ready' ? records.data : null
   const open = data ? recordsNeedWork(data.records) : 0
+  const recommended = data ? recommendedOpen(data.records) : 0
 
   return (
     <Section
       title="DNS records"
       description="These records send mail for the domain to this server and let other mail servers trust the mail it sends."
       actions={
-        data?.can_apply && open > 0 ? (
+        data?.can_apply && open + recommended > 0 ? (
           <Button data-variant="solid" pendingAnnouncement="Setting up" onClick={apply}>
             Set up records
           </Button>
@@ -192,8 +194,14 @@ export function RecordsSection({ domain, onApplied }: { domain: string; onApplie
       ) : null}
       {data ? (
         <div className="mail-records">
-          {open === 0 ? (
+          {open === 0 && recommended === 0 ? (
             <p className="notice">All records are set up.</p>
+          ) : open === 0 ? (
+            <p>
+              Mail works. {recommended === 1 ? 'One recommended record is' : `${recommended} recommended records are`}{' '}
+              still missing: with {recommended === 1 ? 'it' : 'them'}, mail programs set themselves up with just the
+              address and password.{data.can_apply ? ' The panel can add them for you.' : ''}
+            </p>
           ) : data.can_apply ? (
             <p>
               {data.zone} is managed through one of your DNS connections

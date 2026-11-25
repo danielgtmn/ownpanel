@@ -47,6 +47,22 @@ describe('healthLine', () => {
     expect(healthLine(check('mail_host_dns', 'error'), '').title).toBe('The mail server has no name yet.')
   })
 
+  it('tells which record the mail server name needs for bounces and forwarded mail', () => {
+    const missing = healthLine(check('mail_host_spf', 'warning', { expected: ['v=spf1 a -all'] }), 'mail.example.com')
+    expect(missing.title).toBe('Bounces and forwarded mail from mail.example.com may land in spam.')
+    expect(missing.hint).toBe('Add a TXT record for mail.example.com with the value v=spf1 a -all.')
+    expect(missing.ownDetail).toBe(true)
+    const merge = healthLine(
+      check('mail_host_spf', 'warning', { expected: ['v=spf1 a ip4:192.0.2.1 -all'], found: ['v=spf1 ip4:192.0.2.1 -all'] }),
+      'mail.example.com',
+    )
+    expect(merge.hint).toContain('in place of the one there now')
+    expect(merge.hint).toContain('Now: v=spf1 ip4:192.0.2.1 -all.')
+    const conflict = healthLine(check('mail_host_spf', 'warning', { detail: 'several' }), 'mail.example.com')
+    expect(conflict.ownDetail).toBeFalsy()
+    expect(healthLine(check('mail_host_spf', 'ok'), 'mail.example.com').tone).toBe('positive')
+  })
+
   it('admits when something could not be checked', () => {
     expect(healthLine(check('certificate', 'unknown'), 'mail.example.com')).toEqual({
       tone: 'neutral',

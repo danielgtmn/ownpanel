@@ -162,6 +162,8 @@ const KIND_LABEL: Record<string, string> = {
   dmarc: 'What receivers do with forged mail',
   'srv-submissions': 'Lets mail programs find the server for sending',
   'srv-imaps': 'Lets mail programs find the server for receiving',
+  autoconfig: 'Lets mail programs set themselves up',
+  autodiscover: 'Lets Outlook set itself up',
 }
 
 export function recordPurpose(kind: string): string {
@@ -176,7 +178,8 @@ const STATUS: Record<string, { tone: Tone; label: string }> = {
   unknown: { tone: 'neutral', label: "Couldn't check" },
 }
 
-export function recordStatus(status: string): { tone: Tone; label: string } {
+export function recordStatus(status: string, optional = false): { tone: Tone; label: string } {
+  if (optional && (status === 'missing' || status === 'different')) return { tone: 'neutral', label: 'Recommended' }
   return STATUS[status] ?? STATUS.unknown
 }
 
@@ -185,8 +188,13 @@ export function recordName(record: Pick<MailRecord, 'name'>): string {
   return record.name === '' ? '@' : record.name
 }
 
-export function recordsNeedWork(records: Pick<MailRecord, 'status'>[]): number {
-  return records.filter((record) => record.status !== 'ok').length
+// Records mail needs that aren't set up yet; recommended ones are counted by recommendedOpen.
+export function recordsNeedWork(records: Pick<MailRecord, 'status' | 'optional'>[]): number {
+  return records.filter((record) => !record.optional && record.status !== 'ok').length
+}
+
+export function recommendedOpen(records: Pick<MailRecord, 'status' | 'optional'>[]): number {
+  return records.filter((record) => record.optional && record.status !== 'ok').length
 }
 
 const ACTION_LABEL: Record<string, string> = {

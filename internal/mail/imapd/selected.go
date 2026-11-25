@@ -351,6 +351,11 @@ func (s *session) Copy(numSet imap.NumSet, dest string) (*imap.CopyData, error) 
 	if len(entries) == 0 {
 		return nil, nil
 	}
+	// A copy is a new message file; like APPEND it is refused for now
+	// when the disk is nearly full.
+	if err := s.checkDisk(); err != nil {
+		return nil, err
+	}
 	res, err := s.srv.opts.Store.Copy(s.ctx, s.id(), sel.name, uidsOf(entries), dest)
 	if err != nil {
 		return nil, s.fail(errTryCreate(err))
@@ -369,6 +374,10 @@ func (s *session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string
 	entries := sel.resolve(numSet)
 	if len(entries) == 0 {
 		return nil
+	}
+	// Moving writes to the storage too (new UIDs, index entries).
+	if err := s.checkDisk(); err != nil {
+		return err
 	}
 	res, err := s.srv.opts.Store.Move(s.ctx, s.id(), sel.name, uidsOf(entries), dest)
 	if err != nil {

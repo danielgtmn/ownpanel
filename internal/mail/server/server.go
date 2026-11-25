@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +31,7 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/mail/smtpd"
 	"github.com/danielgtmn/ownpanel/internal/mail/storage"
 	"github.com/danielgtmn/ownpanel/internal/mail/submission"
+	"github.com/danielgtmn/ownpanel/internal/mail/transfer"
 )
 
 // Options configure the service.
@@ -66,6 +68,14 @@ type Options struct {
 	// (SPF, DKIM, DMARC, blocklists, reverse DNS); nil means the system
 	// resolver (tests replace it).
 	Resolver auth.Resolver
+
+	// ImportResolver, ImportDial and ImportRootCAs replace address lookups,
+	// connections and trusted certificates of IMAP imports (tests); nil
+	// means the system's. AllowPrivateMX also lets imports reach private
+	// addresses.
+	ImportResolver transfer.Resolver
+	ImportDial     func(ctx context.Context, network, address string) (net.Conn, error)
+	ImportRootCAs  *x509.CertPool
 }
 
 // configFile is the last configuration loaded, used at start like Caddy's
@@ -89,12 +99,13 @@ type Server struct {
 
 	loadMu sync.Mutex // serializes loads
 
-	signIn *signin.Checker
-	limits *submission.Limiter
-	signer *auth.Signer
-	queue  *queue.Queue
-	filter *filter.Filter
-	srs    *auth.SRS
+	signIn  *signin.Checker
+	limits  *submission.Limiter
+	signer  *auth.Signer
+	queue   *queue.Queue
+	imports *transfer.Manager
+	filter  *filter.Filter
+	srs     *auth.SRS
 
 	lisMu       sync.Mutex
 	smtp        listenerState
@@ -190,6 +201,21 @@ func New(opts Options) (*Server, error) {
 		Event:        s.event,
 		Logger:       s.log,
 	})
+	imp := transfer.Options{
+		Store:        store,
+		Directory:    s.Directory,
+		FreeBytes:    opts.FreeBytes,
+		MinFreeBytes: smtpd.DefaultMinFreeBytes,
+		Event:        s.event,
+		Logger:       s.log,
+		Dial:         opts.ImportDial,
+		RootCAs:      opts.ImportRootCAs,
+		AllowPrivate: opts.AllowPrivateMX,
+	}
+	if opts.ImportResolver != nil {
+		imp.Resolver = opts.ImportResolver
+	}
+	s.imports = transfer.New(imp)
 	if err := s.resume(); err != nil {
 		// A broken file must not keep mail down: the panel pushes again.
 		s.log.Error("mail: last configuration not loaded", "err", err)
@@ -555,6 +581,9 @@ func (s *Server) Run(ctx context.Context) error {
 	s.limits.Prune(ctx)
 	s.filter.Prune(ctx)
 	s.queue.Start()
+	if err := s.imports.Start(ctx); err != nil {
+		s.log.Error("mail: start imports", "err", err)
+	}
 
 	retry := time.NewTicker(30 * time.Second)
 	defer retry.Stop()
@@ -581,6 +610,9 @@ func (s *Server) Run(ctx context.Context) error {
 			}
 			if err := s.filter.Prune(context.Background()); err != nil {
 				s.log.Error("mail: prune greylist", "err", err)
+			}
+			if err := s.imports.Prune(context.Background()); err != nil {
+				s.log.Error("mail: prune imports", "err", err)
 			}
 		}
 	}
@@ -639,9 +671,14 @@ func (s *Server) shutdown() error {
 	// Deliveries still running when the grace time is over are cancelled
 	// and tried again after the next start.
 	s.queue.Shutdown(ctx)
+	// Imports stop at the next message; they continue (files) or are
+	// interrupted (IMAP) after the next start.
+	s.imports.Shutdown(ctx)
 	if s.admin != nil {
 		actx, acancel := context.WithTimeout(context.Background(), 5*time.Second)
-		s.admin.Shutdown(actx)
+		if err := s.admin.Shutdown(actx); err != nil {
+			s.admin.Close() // uploads and exports still running are cut off
+		}
 		acancel()
 		os.Remove(s.opts.AdminSocket)
 	}

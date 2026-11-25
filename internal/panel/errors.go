@@ -34,6 +34,10 @@ const (
 	// Unavailable: an outside service (e.g. the DNS provider) could not be
 	// reached or failed on its side.
 	Unavailable
+	// TooLarge: a file or part of one is over the limit.
+	TooLarge
+	// NoSpace: the server has not enough free disk space for it.
+	NoSpace
 )
 
 func (k Kind) String() string {
@@ -54,6 +58,10 @@ func (k Kind) String() string {
 		return "throttled"
 	case Unavailable:
 		return "unavailable"
+	case TooLarge:
+		return "too large"
+	case NoSpace:
+		return "no space"
 	}
 	return "internal"
 }

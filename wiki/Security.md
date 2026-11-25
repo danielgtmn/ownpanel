@@ -92,6 +92,8 @@ Updating replaces binaries and restarts services, which needs root; the panel ru
 - Accepted mail is written to disk before the server confirms it.
 - Backups never read the mail data as root: `ownpaneld backup` reads it in a child process running as `ownpanel-mail` and keeps only plain files and folders from its output, so a taken-over mail service cannot make root copy or hand over other files through links.
 - **Administrators can read any mailbox** by setting its password.
+- **Download all mail** reads a whole mailbox without its user noticing, so only administrators and the owner of the mail domain may, signed in with a password or with an unrestricted write token (never read-only or site-limited tokens, never through MCP). Every download is noted in the activity log, which the domain's owner and administrators see; one runs per mailbox at a time.
+- **Importing mail** takes another account's password. It goes to the mail service only, is kept in memory while copying, and is never stored, logged, returned or written to the activity log (it is asked for again after a restart). The mail service connects only to public addresses on ports 993 and 143, checks the other server's certificate and signs in only over an encrypted connection; the old account is opened read-only. Uploaded files are untrusted: zip files are checked for unsafe names, size and number of entries before anything is read, and an import stops at the mailbox's storage limit and before the disk runs low.
 
 ### Upload links
 

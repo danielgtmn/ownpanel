@@ -263,6 +263,20 @@ have no panel account and cannot change their own password yet (*later*).
 
 - The panel shows the client settings: server `mail_host`, IMAP 993 (TLS),
   SMTP 465 (TLS) or 587 (STARTTLS), user name = full address.
+- Automatic setup (`internal/panel/mailsetup.go`, `internal/api/mailsetup.go`):
+  Thunderbird autoconfig at `autoconfig.<domain>/mail/config-v1.1.xml` and
+  `<domain>/.well-known/autoconfig/mail/config-v1.1.xml` (sites of this
+  panel), Outlook autodiscover (POX) at
+  `autodiscover.<domain>/autodiscover/autodiscover.xml`, and an unsigned
+  Apple profile (`com.apple.mail.managed`, no password) per mailbox for
+  whoever may see the mailbox. The public answers exist only for active
+  mail domains and are the same for every address of a domain. Caddy gets
+  `autoconfig.`/`autodiscover.` hosts only once the panel saw the name
+  resolve to the server's addresses only (CNAME to `mail_host` or A/AAAA):
+  the background loop looks every 5 minutes, opening a domain's records
+  looks at once, and a change re-syncs Caddy. A failed lookup changes
+  nothing; a name that resolves elsewhere or not at all is dropped. So
+  Caddy never asks a CA for a name that does not point here.
 - IMAP (implicit TLS on 993 only, RFC 8314): `INBOX`, `Sent`, `Drafts`,
   `Junk`, `Trash`, `Archive` with special-use flags; IDLE, MOVE, UIDPLUS.
   Envelope and body structure are read from the message file on FETCH
@@ -353,7 +367,9 @@ How it is built (phase 1c):
 - Only public addresses are connected to: mail servers on loopback, private
   (RFC 1918, ULA), link-local, CGNAT, multicast or other special addresses
   are skipped, and a domain whose mail servers have only such addresses
-  bounces at once (`5.4.4`). Otherwise anyone who can send mail could make
+  bounces at once (`5.4.4`). NAT64 addresses (`64:ff9b::/96`, and
+  `64:ff9b:1::/48` in its /96 form only) count by the IPv4 address they
+  carry. Otherwise anyone who can send mail could make
   the server open port 25 inside its own network. `-allow-private-mx` lifts
   this for test setups.
 - On shutdown, an attempt that does not finish within the grace time is
@@ -375,6 +391,21 @@ the authoritative nameservers:
 | TXT (DKIM) | `<selector>._domainkey` | `v=DKIM1; k=rsa; p=…` | replaced (the selector is ours) |
 | TXT (DMARC) | `_dmarc` | `v=DMARC1; p=none; adkim=r; aspf=r` | never changed |
 | SRV | `_submissions._tcp`, `_imaps._tcp` | `0 1 465 <mail_host>.`, `0 1 993 <mail_host>.` | replaced |
+| CNAME (optional) | `autoconfig`, `autodiscover` | `<mail_host>.` | judged by where the name resolves (A/AAAA with the server's addresses are fine); a CNAME elsewhere is replaced, other records are left alone |
+
+The mail host itself needs one record, checked by mail health
+(`mail_host_spf`) and written by admins whose DNS connection holds its zone
+(`POST /api/mail/host-spf`):
+
+| Record | Name | Value | If something else exists |
+|---|---|---|---|
+| TXT (SPF) | `<mail_host>` | `v=spf1 a -all` | `a` inserted after `v=spf1`, same rules as the domain SPF |
+
+Bounces and DSNs have the null sender, so receivers check SPF against the
+HELO name (`mail_host`), and mail forwarded with SRS for addresses without
+SPF pass uses `SRS0=…@<alias domain>`; postmaster@`mail_host` forwarding
+uses the mail host as alias domain. Without this record those messages fail
+SPF.
 
 Other TXT values at `@` are kept. When the domain's zone is in one of the
 actor's own DNS connections with write access, "Set up records" first returns
@@ -507,7 +538,235 @@ Receiving and showing DMARC reports: *later*.
   an hour (IPv6 counted per /64, so phones are not mistaken for attackers);
   receiving goes on. The block is an event: activity log, a mark in
   the panel. Only admins unblock.
-- Free disk below 1 GB: incoming mail and APPEND answer temporary failures.
+- Free disk below 1 GB: incoming mail, APPEND, COPY and MOVE answer temporary
+  failures (`NO [UNAVAILABLE]` in IMAP).
+
+## Import and export
+
+Moving to ownpanel means bringing old mail along; leaving means taking it
+out. Both run **in the mail service**, because only it may read and write
+mail data. The panel checks permissions, starts and cancels jobs, passes
+files through without buffering and shows progress.
+
+### Who may
+
+| | Admin | Owner of the mail domain | Read-only or site-limited token |
+|---|---|---|---|
+| Import into a mailbox | yes | yes | no |
+| Export a mailbox | yes | yes | no |
+| See import jobs | yes | yes | yes (read) |
+
+Export reads a whole mailbox without the mailbox user noticing, so it is a
+write-level action, recorded in the activity log (visible to the domain
+owner and admins), and limited to one export per mailbox at a time and four
+in the service. The same is said in [[Security|Security]].
+
+### Sources
+
+1. **Another mail account over IMAP:** server name, port 993 (TLS) or 143
+   (STARTTLS, required), user name, password. Works with providers that
+   allow IMAP with a password or an app password: Gmail and Yahoo (app
+   password; Gmail needs 2-step verification, Workspace admins can forbid
+   it), IONOS, Strato, GMX, web.de, other panels, Dovecot. **Microsoft 365
+   and Outlook.com are not supported** (they require an OAuth sign-in,
+   planned later).
+2. **A file upload:** `.mbox` (Google Takeout, Thunderbird, Apple Mail),
+   `.eml`, or a `.zip` of those, including our own export. Google Takeout
+   must be exported as `.zip` (not `.tgz`).
+
+### Flow: check first, then copy
+
+1. **Check:** for IMAP the service signs in, lists the folders and returns
+   per folder the local target folder, message count and size
+   (`STATUS`/`RFC822.SIZE`), and the total against the quota. For a file,
+   the upload ends in the same overview after the file is scanned. Nothing
+   is copied yet.
+2. **Choose and start:** the person can untick folders and include Junk and
+   Trash (off by default), then starts the job. For IMAP the password is
+   sent again with the start request (the dialog keeps it in memory, the
+   server never stores it).
+3. **Progress** shows folders, messages copied, skipped as already there,
+   failed, bytes; at the end a list of failed or skipped messages (folder,
+   date, shortened subject, reason; at most 1000 entries).
+4. **Cutover:** import, then point MX here, then run the same import
+   again: it only fetches what is new (see repeats).
+
+### Reading the source
+
+- **IMAP stays read-only on the source:** folders are opened with
+  `EXAMINE`, messages fetched with `BODY.PEEK[]`, so the old account's
+  read state does not change. First `UID`, `FLAGS`, `INTERNALDATE`,
+  `RFC822.SIZE` are fetched; messages over the message size limit are
+  skipped without downloading. `\Deleted` messages are skipped.
+- Flags kept: `\Seen`, `\Answered`, `\Flagged`, `\Draft`, and keywords that
+  are valid here (at most 50; `$Forwarded`, `$Junk`, `$NotJunk`, `$MDNSent`
+  among them); invalid keywords are dropped, not the message.
+- **Received date:** IMAP `INTERNALDATE`; for files the `From ` line
+  (asctime, UTC), else the first `Received`, else `Date`, else now.
+- **Line endings** are normalised to CRLF before storing, so size and quota
+  count the stored bytes. Incoming `Authentication-Results` naming our own
+  host are removed, as on delivery.
+- **mbox dialects:** files are read as mboxo (no unquoting of `>From `)
+  unless our export's `manifest.json` marks them as mboxrd. Flags come only
+  from the first header block: `Status`/`X-Status`/`X-Keywords`,
+  Thunderbird's `X-Mozilla-Status`/`X-Mozilla-Keys`. Thunderbird's `.sbd/`
+  hierarchy and extensionless mbox files, and Apple Mail's
+  `Name.mbox/mbox` bundles (other files in them ignored) are recognised.
+- **Google Takeout** (`Takeout/Mail/All mail Including Spam and
+  Trash.mbox`, one file, labels in `X-Gmail-Labels`): the `Takeout/Mail/`
+  prefix is dropped; `Inbox` → INBOX, `Sent` → Sent, `Spam` → Junk, `Trash`
+  → Trash, `Drafts` → Drafts, the first user label → that folder, otherwise
+  Archive; `Unread` absent → `\Seen`, `Starred` → `\Flagged`. Large Gmail
+  accounts are better moved over IMAP (no upload limit, repeatable).
+
+### Folder mapping
+
+- Special-use folders (RFC 6154) map to ours: `\Sent` → Sent, `\Drafts` →
+  Drafts, `\Archive` → Archive, `\Junk` → Junk, `\Trash` → Trash. Without
+  attributes, well-known names do too (`Sent Items`, `Gesendet`, `Papierkorb`,
+  `Entwürfe`, `[Gmail]/Sent Mail`, …).
+- Names: go-imap decodes modified UTF-7; the personal namespace prefix
+  (e.g. `INBOX.`) is stripped; the remote delimiter becomes ours, a `/`
+  inside a name component and `*`, `%` and control characters become `_`;
+  a NIL delimiter means flat names; `\Noselect`/`\NonExistent` folders are
+  not copied (their children are). Names are cut to 255 bytes, folders
+  that exist are merged into, at most 1000 folders and depth 20 per job.
+  The job records the remote → local mapping.
+- **Gmail:** `\Flagged` ("Starred") and `\Important` are skipped (they
+  only repeat other folders). `\All` ("All Mail") is copied **last into
+  Archive**, skipping every message already imported anywhere in this
+  mailbox; that is where archived mail lives in Gmail.
+
+### Repeats and resume
+
+- Every imported message records its key in `import_seen` (per mailbox,
+  with the folder): SHA-256 of the normalised message (CRLF, without
+  `Status`, `X-Status`, `X-Keywords`, `X-Mozilla-*`, `X-Gmail-Labels`). A
+  message already recorded for that folder is skipped; for the Gmail
+  `\All` pass, one recorded for any folder.
+- IMAP jobs also keep a watermark per (host, user, remote folder,
+  UIDVALIDITY): the highest UID copied. A repeat or a resumed job fetches
+  only higher UIDs (when UIDVALIDITY changed, all again, deduplicated by
+  key). This keeps repeats cheap and inside Gmail's download limit.
+- A repeat does not update flags of messages copied before and does not
+  bring back mail deleted here since.
+
+### Jobs
+
+- One import per mailbox at a time, at most two running in the service,
+  more wait. A job is a row in `mail.db` (`imports`: kind, IMAP host, port
+  and user, state `uploading`/`checking`/`ready`/`waiting`/`running`/
+  `paused`/`done`/`failed`/`cancelled`/`interrupted`, counts, folder
+  mapping, an error text, times), failures in `import_failures`,
+  watermarks in `import_watermarks`. All reference the mailbox `ON DELETE
+  CASCADE` (mail.db migration 5). Finished jobs are kept 30 days.
+- **The IMAP password lives only in memory** for the running job; it is
+  never written to `mail.db`, logs, events or errors, and is removed from
+  any remote error text. After a restart (every update restarts the
+  service) a running IMAP job becomes `interrupted`; **continuing asks for
+  the password again** and resumes from the watermarks. A file job resumes
+  by itself from its spool.
+- **Gmail's download limit** (about 2.5 GB a day; answers like "bandwidth
+  exceeded" or `[ALERT]`) pauses the job (`paused`) instead of failing it;
+  it continues after the password is entered again, the next day.
+- **Abuse:** the first failed sign-in ends the check or job (no retry); at
+  most 10 checks and starts per mailbox and per person and hour. The
+  service does not set the library's debug output (it would log LOGIN).
+- **Deleting a mailbox** during a job: `DELETE /mailboxes/{sid}` cancels
+  and waits for its jobs before deleting, and a job checks before every
+  message that the mailbox is still configured, so it cannot bring
+  deleted data back.
+- **Limits:** before every message the job checks the quota and that free
+  space stays above `MinFreeBytes`; either stops it with a clear error.
+  Messages over the message size limit count as failed. Imported mail does
+  not count as sending, is not filtered and is not forwarded.
+
+### Uploads
+
+- **Chunked and resumable:** the client declares name and total size
+  (at most `MaxImportBytes`, 20 GiB) and gets an upload id, then sends
+  parts of at most 256 MiB with `PUT …/upload/{id}?offset=`; the service
+  appends each part to the spool and answers the bytes it has, so a broken
+  connection resumes where it stopped. Every request stays inside the
+  panel's existing upload size and time limits; Caddy needs no change.
+- An upload is refused unless free space covers the declared size plus
+  `MinFreeBytes`.
+- Spools live in `imports/` (not `tmp/`, which the start-up check empties)
+  and are deleted when the job ends, is cancelled, or has no row.
+- **Zip files** (untrusted): at most 100 000 entries, 1000 folders; at most
+  the message size limit per message entry and 100 GB unpacked in total
+  (no limit on the compression ratio: the zip reader refuses entries larger
+  than they declare, quota and free space stop the import, and folders of
+  similar messages compress far better than 100:1); nested zips not
+  opened; names in UTF-8 when the zip flag says so (or when they are valid
+  UTF-8, as macOS writes them without the flag), else CP437; no `..`,
+  absolute paths, NUL or backslash; duplicate or case-colliding names
+  merged into one folder. Other entries are skipped and counted.
+
+### Export
+
+- **Download all mail** gives a `.zip`: `manifest.json` (format marker,
+  per folder: name, file path, special-use, subscribed, message count;
+  empty folders too) and one `mboxrd` file per folder with CRLF line
+  endings. Paths are escaped (`..`, `.`, `:`, `\`, control characters,
+  case collisions get a suffix); the manifest holds the real names.
+- Messages are unchanged except for `Status:`/`X-Status:`/`X-Keywords:`
+  lines at the top for flags (Thunderbird, Apple Mail, mutt and our
+  importer read them); the `From ` line carries the received date.
+  `\Deleted` messages are not exported. Each folder is a snapshot taken
+  when the export reaches it; messages expunged meanwhile are skipped.
+- Our zip imports back without loss: folders, special use, subscriptions,
+  flags, dates.
+  Its check says `own_export`; the interface then also selects Junk and
+  Trash (they were cleaned up once already).
+
+### Remote connections
+
+The host name must be valid; it is resolved once, every address must be
+**public** (shared helper with the queue: no loopback, private,
+link-local, CGNAT, NAT64 of private, …), and the service dials **that
+address** itself, then speaks TLS with `ServerName` = host name (no second
+lookup, so no DNS rebinding). IPv6 is allowed here. Only ports 993 and 143;
+certificates are verified (no opt-out); on 143 authentication only after
+STARTTLS. Timeouts per command; the job may run for hours. When the
+connection breaks during a job, it connects again (at most three times)
+and goes on from the watermarks. Remote error
+texts are shortened to one line of at most 200 characters.
+`-allow-private-mx` allows private addresses here too (test networks).
+
+### Streams through two hops
+
+The admin-socket client's 30-second timeout does not apply to streams: a
+second client without an overall timeout, using the request context and a
+deadline that is pushed forward while bytes flow (idle timeout 2 minutes).
+The admin server gets the same idle deadlines. The panel's export handler
+pushes its write deadline forward per chunk instead of a fixed extension;
+neither hop buffers. Caddy has no write limit; its read limit of one hour
+per request fits the 256 MiB parts.
+
+### Admin socket and panel API
+
+```
+POST   /mailboxes/{sid}/imports/check     body ImportSource (IMAP)  → ImportCheck
+POST   /mailboxes/{sid}/imports           body ImportStart (IMAP source + choices) → ImportJob
+POST   /mailboxes/{sid}/uploads           {name, size}              → ImportJob (uploading)
+PUT    /mailboxes/{sid}/uploads/{id}?offset=  part                  → {received}
+POST   /mailboxes/{sid}/imports/{id}/start  choices (file jobs; IMAP: + password to continue) → ImportJob
+GET    /mailboxes/{sid}/imports           → []ImportJob, newest first
+GET    /mailboxes/{sid}/imports/{id}      → ImportJob with failures
+DELETE /mailboxes/{sid}/imports/{id}      cancel (a finished job: remove) → 204
+GET    /mailboxes/{sid}/export            → application/zip stream
+```
+
+The panel mirrors these under `/api/mail/domains/{domain}/mailboxes/
+{local_part}/…` with the permission rules above. Activity:
+`mail.mailbox.import-started` and `mail.mailbox.exported` from the panel;
+`import.finished`, `import.failed`, `import.paused`, `import.interrupted`
+come as service events through `/events` (with counts, source host and
+user, never the password) and are recorded like the others, so they appear
+even if nobody watches. MCP: `list_mail_imports` and `cancel_mail_import`
+only; starting an import (it takes another account's password) and
+export are not offered to agents.
 
 ## Webmail — [#30](https://github.com/danielgtmn/ownpanel/issues/30)
 
