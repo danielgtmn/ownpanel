@@ -146,6 +146,9 @@ func New(opts Options) *Handler {
 	mux.HandleFunc("DELETE /account/api/app-passwords/{id}", h.authed(h.revokeAppPassword))
 	mux.HandleFunc("GET /account/api/apple-setup", h.authed(h.appleSetup))
 	mux.HandleFunc("PUT /account/api/delegations", h.authed(h.setDelegations))
+	mux.HandleFunc("GET /account/api/collections", h.authed(h.collections))
+	mux.HandleFunc("GET /account/api/collections/{kind}/{name}/export", h.authed(h.exportCollection))
+	mux.HandleFunc("POST /account/api/collections/{kind}/{name}/import", h.authed(h.importCollection))
 	mux.HandleFunc("/account/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found.")
 	})
@@ -486,7 +489,7 @@ func (h *Handler) view(ctx context.Context, m *config.Mailbox) (meView, error) {
 		AppPasswords: []appPasswordView{}, AppPasswordsOnly: m.AppPasswordsOnly,
 		AppPasswordsAvailable: dir.Config().AppPasswordKey != "",
 		UsesKnownDays:         int(storage.EventRetention / (24 * time.Hour)),
-		Client:                mailsetup.Settings(dir.Hostname()),
+		Client:                mailsetup.Settings(dir.Hostname()).WithDAV(),
 	}
 	v.SharedWith, v.Access = []delegateView{}, []accessView{}
 	for _, g := range dir.Grantees(m.StorageID) {
@@ -810,7 +813,7 @@ func (h *Handler) revokeAppPassword(w http.ResponseWriter, r *http.Request, s *s
 }
 
 func (h *Handler) appleSetup(w http.ResponseWriter, r *http.Request, s *session) {
-	body := mailsetup.AppleProfile(s.mailbox.Address, mailsetup.Settings(h.opts.Backend.Directory().Hostname()))
+	body := mailsetup.AppleProfile(s.mailbox.Address, mailsetup.Settings(h.opts.Backend.Directory().Hostname()).WithDAV())
 	hd := w.Header()
 	hd.Set("Content-Type", mailsetup.ProfileContentType)
 	hd.Set("Content-Disposition", `attachment; filename="`+mailsetup.ProfileFileName(s.mailbox.Address)+`"`)

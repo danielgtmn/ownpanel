@@ -194,6 +194,58 @@
   font-size: 0.875rem;
 }
 
+.account-calendars-note {
+  margin: 1rem 0 0;
+}
+
+.account-collections {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  margin-top: 1.25rem;
+}
+
+.account-collection-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.account-collection-title {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.account-collection-group > ul {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  list-style: none;
+}
+
+.account-collection-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.account-swatch {
+  flex: none;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 999px;
+}
+
+.account-collection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 @media (max-width: 600px) {
   .account-top {
     padding: 0.75rem 1rem 0;

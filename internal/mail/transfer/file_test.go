@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/mail/davobj"
 	"github.com/danielgtmn/ownpanel/internal/mail/storage"
 )
 
@@ -425,9 +426,37 @@ func TestExportImportRoundTrip(t *testing.T) {
 	put("Sent", "Subject: s\r\n\r\nx\r\n", storage.FlagSeen, storage.FlagAnswered)
 	put("Drafts", "Subject: d\r\n\r\nx\r\n", storage.FlagDraft, storage.FlagFlagged)
 	put("Projects/2024", "Subject: p\r\n\r\nx\r\n")
+	// Calendars and contacts go into the zip too.
+	must(t, st.EnsureDefaultDAVCollections(ctx, idAlice))
+	cal, err := st.DAVCollection(ctx, idAlice, davobj.Calendar, storage.DefaultCalendar)
+	must(t, err)
+	ev := []byte("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:ev1\r\nDTSTAMP:20240101T000000Z\r\nDTSTART:20240101T090000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	info, _, err := davobj.ParseCalendar(ev, nil)
+	must(t, err)
+	_, _, err = st.PutDAVObject(ctx, cal, "ev1.ics", ev, info, storage.PutCondition{})
+	must(t, err)
 
 	var zipBuf bytes.Buffer
 	must(t, Export(ctx, st, idAlice, &zipBuf, time.Now()))
+	zr, err := zip.NewReader(bytes.NewReader(zipBuf.Bytes()), int64(zipBuf.Len()))
+	must(t, err)
+	var davFiles []string
+	for _, f := range zr.File {
+		if strings.HasPrefix(f.Name, "calendars/") || strings.HasPrefix(f.Name, "contacts/") {
+			davFiles = append(davFiles, f.Name)
+			if f.Name == "calendars/calendar.ics" {
+				rc, _ := f.Open()
+				b, _ := io.ReadAll(rc)
+				rc.Close()
+				if !strings.Contains(string(b), "UID:ev1") {
+					t.Fatalf("calendar export %q", b)
+				}
+			}
+		}
+	}
+	if strings.Join(davFiles, ",") != "contacts/contacts.vcf,calendars/calendar.ics" {
+		t.Fatalf("calendar and contact files %v", davFiles)
+	}
 
 	// The check tells it is our own export (the interface then includes
 	// Junk and Trash); another zip is not.
@@ -443,7 +472,7 @@ func TestExportImportRoundTrip(t *testing.T) {
 	}
 
 	j := e.importFile(idBob, "alice-export.zip", zipBuf.Bytes(), config.ImportChoices{IncludeJunk: true, IncludeTrash: true})
-	if j.State != config.ImportDone || j.Copied != 5 || j.Failed != 0 {
+	if j.State != config.ImportDone || j.Copied != 5 || j.Failed != 0 || j.Check.SkippedEntries != 0 {
 		t.Fatalf("import %+v", j)
 	}
 	fa, _ := st.ListFolders(ctx, idAlice)

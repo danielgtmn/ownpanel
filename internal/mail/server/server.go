@@ -49,6 +49,9 @@ type Options struct {
 	// AccountHandler serves /account/api/… on the web socket (see
 	// web.Options.Account).
 	AccountHandler http.Handler
+	// DAVHandler serves calendars and contacts on the web socket (see
+	// web.Options.DAV).
+	DAVHandler http.Handler
 	// Listener addresses: SMTP (port 25), submission with STARTTLS (587),
 	// submission with TLS (465) and IMAPS (993). An empty address leaves
 	// that listener closed.
@@ -278,6 +281,9 @@ func (s *Server) quota(storageID string) int64 {
 
 // Directory is the current configuration view.
 func (s *Server) Directory() *directory.Directory { return s.state.Load().dir }
+
+// SignIn is the sign-in checker of mail programs (IMAP, SMTP, DAV).
+func (s *Server) SignIn() *signin.Checker { return s.signIn }
 
 // Store is the mail storage (for IMAP).
 func (s *Server) Store() *storage.Store { return s.store }

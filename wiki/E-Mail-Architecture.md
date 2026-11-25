@@ -109,6 +109,7 @@ mode 0750, socket 0660; the user `ownpanel` is a member of the group
 **Mail service data** `/var/lib/ownpanel-mail` (`StateDirectory`, owner
 `ownpanel-mail`, 0700): `config.json` (0600, rewritten only when it changed),
 `mail.db` (SQLite WAL, one writer, `synchronous=FULL`), `messages/<storage_id>/…`,
+`dav/<storage_id>/<collection>/…` (calendars and contacts, G4a),
 `queue/…`, `srs.key` (32 random bytes, 0600, created on first start; the
 backup copies it with the rest, so SRS addresses stay valid after a
 restore). Data is keyed by `storage_id`, so a reused row id or a restored
@@ -135,7 +136,8 @@ the copy has its file. Restoring is the manual tar step of
 `chown -R ownpanel-mail: /var/lib/ownpanel-mail`. A restored index is older
 than the clients' caches, so the service changes `UIDVALIDITY` of every
 folder when its start-up check finds a difference or the restore marker
-file `restored` exists.
+file `restored` exists; calendars and contacts get a new sync epoch the
+same way (every ETag, ctag and sync token changes).
 
 ## Sync
 

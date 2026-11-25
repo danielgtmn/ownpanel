@@ -180,7 +180,10 @@ signed in with the full address and the mailbox password. There they can
   was last used in the last 30 days, and switch **Only allow mail programs
   with app passwords** on or off;
 - read the **settings for mail programs** and download the **setup for
-  Apple devices**;
+  Apple devices** (mail, calendars and contacts in one);
+- see their **calendars and address books**, download each as a file and
+  import an `.ics` or `.vcf` file (up to 10 MB) into one, see
+  [Calendars and contacts](#calendars-and-contacts);
 - **share their mailbox** with colleagues and see which mailboxes they have
   access to (see [Sharing your own mailbox](#sharing-your-own-mailbox)).
 
@@ -201,14 +204,73 @@ The page needs a mail server name of its own, other than the panel's
 address (**Mail health** warns otherwise), and the mail service's web socket
 (set up by `install.sh`).
 
+### Calendars and contacts
+
+Every mailbox has calendars and address books on the server that sync to
+phones and computers: a calendar "Calendar" and an address book "Contacts"
+to start with (created the first time they are used), more can be added in
+the programs. Each mailbox also sees a read-only address book
+**Directory** with everyone in its organisation (the mailboxes with their
+display names, and the forwarding addresses, not the catch-all), for
+completing addresses while writing.
+
+| | |
+|---|---|
+| Server address | `https://<mail server name>/dav/` (most programs only need the mail server name or even only the e-mail address) |
+| User name | the full e-mail address |
+| Password | the mailbox password, or an app password (with **Only allow mail programs with app passwords**, only an app password) |
+
+- **iPhone, iPad, Mac:** download the **setup for Apple devices** on the
+  mailbox's own page (or in the panel) and install it: it adds the mail
+  account, the calendars and the contacts, and asks for the password once
+  for each. By hand: Settings → Calendar → Accounts → Add Account → Other →
+  Add CalDAV Account (and Add CardDAV Account in Contacts) with the mail
+  server name, the address and the password.
+- **Android:** install **DAVx5**, add an account with "Login with e-mail
+  address" and the address and password (or an app password); DAVx5 finds
+  the server through the domain's records. If it does not, choose "Login
+  with URL and user name" and enter `https://<mail server name>/dav/`.
+- **Thunderbird:** its automatic mail setup cannot carry calendars. In
+  Thunderbird 115 or later: Calendar → New Calendar → On the Network, enter
+  the address and as location the mail server name (or
+  `https://<mail server name>/dav/`); it lists the calendars to add.
+  Address books: Address Book → New Address Book → Add CardDAV Address
+  Book, with the address and `https://<mail server name>/dav/`.
+- **Outlook (Windows):** Outlook has no built-in support. Use the free
+  add-on **CalDav Synchronizer** with the server address
+  `https://<mail server name>/dav/calendars/<address>/calendar/` for the
+  calendar and `https://<mail server name>/dav/addressbooks/<address>/contacts/`
+  for contacts.
+- **GNOME, KDE, Evolution and others:** add a CalDAV/CardDAV account with the
+  server address above.
+
+Programs find the server by themselves through the records
+`_caldavs._tcp` and `_carddavs._tcp` of the address's domain, which the
+domain's DNS records list (recommended) and **Set up records** creates with
+the others, and through `https://<mail server name>/.well-known/caldav`.
+
+Calendars and contacts count towards the mailbox's storage limit: when it
+is full, programs cannot save new entries until something is deleted.
+Limits: 1 MB per entry or contact (photos included), 100 calendars and
+address books per mailbox, 100 000 entries per calendar or address book.
+
+**Moving from Google or Microsoft 365:** export the calendar as `.ics`
+(Google Calendar: Settings → Import & export; Outlook on the web: share or
+publish the calendar and download the `.ics`) and the contacts as `.vcf`
+(Google Contacts: Export → vCard; Outlook: export as CSV, which a program
+like Thunderbird can turn into `.vcf`), then import the files on the
+mailbox's own page. An entry that is there already (same UID) is replaced,
+so the same file can be imported again.
+
 ### Organisations
 
 By default every mail domain stands on its own. When several domains belong
 to one company (for example `example.com` and `example.de`), group them on a
 domain's page under **Organisation → Change**: choose an organisation of
-yours or create one. Mailboxes can only share mail with mailboxes of the
-same organisation (and, once those features exist, calendars, contacts and
-the address book); nothing is shared just by grouping.
+yours or create one. Mailboxes can only share mail, calendars and contacts
+with mailboxes of the same organisation (once sharing exists), and the
+**Directory** address book lists the mailboxes of the organisation;
+nothing else is shared just by grouping.
 
 - You can group only your own domains into your own organisations.
   Grouping domains that belong to different people is for administrators,
@@ -508,6 +570,11 @@ list of the folders. Thunderbird (ImportExport add-on), Apple Mail and most
 mail programs can open the `.mbox` files; ownpanel imports the zip back
 without loss. One download per mailbox runs at a time.
 
+The zip also holds the mailbox's calendars (`calendars/<name>.ics`) and
+address books (`contacts/<name>.vcf`). Importing the zip into a mailbox
+brings back the mail only; import the calendar and contact files on the
+mailbox's own page.
+
 ## New server address: warm it up
 
 Large providers judge new addresses by their history. For the first weeks,
@@ -521,11 +588,13 @@ later.
 In `/var/lib/ownpanel-mail`, owned by the mail service's own user
 `ownpanel-mail`; the panel itself cannot read it. Backups include it unless
 made with `-no-mail` (see [[Backup and Restore|Backup-and-Restore]]).
-Deleting a mailbox or turning off e-mail for a domain deletes its stored
-mail.
+Calendars and contacts are stored there too, next to the mail. Deleting a
+mailbox or turning off e-mail for a domain deletes its stored mail,
+calendars and contacts.
 
 Administrators can set any mailbox's password, and with it read the
-mailbox; they and the domain's owner can also download all of its mail.
+mailbox and its calendars and contacts; they and the domain's owner can also
+download all of its mail, calendars and contacts.
 Mailbox owners should know this.
 
 ## Troubleshooting
