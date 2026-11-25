@@ -309,6 +309,8 @@ describe('jobs', () => {
     expect(jobShare({ ...job, state: 'uploading', received: 25, file_size: 100 })).toBe(25)
     expect(jobShare({ ...job, messages: 0 })).toBeNull()
     expect(jobCounts(job)).toBe('50 messages copied (3 MB) · 30 already there · 20 not copied · of 200')
+    expect(jobCounts({ ...job, state: 'done', copied: 0, skipped: 0, failed: 0, bytes: 0 })).toBe('No new mail to copy')
+    expect(jobCounts({ ...job, state: 'running', copied: 0, skipped: 0, failed: 0, bytes: 0 })).toMatch(/^0 messages copied/)
     expect(jobState({ state: 'paused', kind: 'imap' }).sentence).toMatch(/per day/)
     expect(jobState({ state: 'interrupted', kind: 'file' }).sentence).toMatch(/by itself/)
   })

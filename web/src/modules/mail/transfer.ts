@@ -312,7 +312,9 @@ function count(n: number, one: string, many: string): string {
   return `${n.toLocaleString('en')} ${n === 1 ? one : many}`
 }
 
-export function jobCounts(job: Pick<MailImport, 'messages' | 'copied' | 'skipped' | 'failed' | 'bytes'>): string {
+export function jobCounts(job: Pick<MailImport, 'state' | 'messages' | 'copied' | 'skipped' | 'failed' | 'bytes'>): string {
+  // A repeated import only fetches mail that is new since the last one.
+  if (job.state === 'done' && !job.copied && !job.skipped && !job.failed) return 'No new mail to copy'
   const parts = [`${count(job.copied, 'message', 'messages')} copied (${formatBytes(job.bytes)})`]
   if (job.skipped) parts.push(`${job.skipped.toLocaleString('en')} already there`)
   if (job.failed) parts.push(`${job.failed.toLocaleString('en')} not copied`)
