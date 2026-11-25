@@ -191,21 +191,16 @@ export function AccountPage({
 
         <Section
           title="Password"
-          description="The password you sign in with here and, unless you allow only app passwords, in mail programs."
-          actions={<Button onClick={() => setDialog('password')}>Change password</Button>}
+          description="The password you sign in with here and, unless you allow only app passwords, in mail programs. Choose one you don't use anywhere else."
         >
-          <p className="muted account-value">
-            Choose a password you don't use anywhere else. If you forget it, the people who manage this server can
-            set a new one.
-          </p>
+          <div className="record-actions">
+            <Button onClick={() => setDialog('password')}>Change password</Button>
+          </div>
         </Section>
 
         <Section
           title="App passwords"
           description="A password of its own for each phone or mail program. A lost device is locked out by revoking its app password, without changing the others or your mailbox password."
-          actions={
-            me.app_passwords_available ? <Button onClick={() => setDialog('app')}>Create app password</Button> : null
-          }
         >
           <div className="account-apps">
             {me.app_passwords_available ? null : (
@@ -250,6 +245,11 @@ export function AccountPage({
                 ))}
               </ul>
             )}
+            {me.app_passwords_available ? (
+              <div className="record-actions">
+                <Button onClick={() => setDialog('app')}>Create app password</Button>
+              </div>
+            ) : null}
           </div>
         </Section>
 
