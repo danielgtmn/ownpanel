@@ -238,7 +238,7 @@ Paths match regardless of case. Caddy passes them to the panel only for `autocon
 | `POST` | `/session` | `{"address", "password"}` | Me, sets the cookie. `401` wrong address or password, `429` too many failures |
 | `DELETE` | `/session` | | `204`, signs out |
 | `GET` | `/me` | | Me |
-| `PUT` | `/password` | `{"current_password", "new_password", "revoke_app_passwords"}` | Me. Other sessions of the mailbox end; with `revoke_app_passwords` every app password is revoked |
+| `PUT` | `/password` | `{"current_password", "new_password", "revoke_app_passwords"}` | Me. Other sessions of the mailbox end; with `revoke_app_passwords` every app password is revoked. If the password was changed but some app passwords could not be revoked, the answer is still `200` with Me and a `warning` saying so (they are still listed) |
 | `PUT` | `/display-name` | `{"display_name"}` (`""` removes it) | Me |
 | `PUT` | `/app-passwords-only` | `{"app_passwords_only"}` | Me |
 | `POST` | `/app-passwords` | `{"name"}` | `201` `{"app_password", "password"}`; the password is returned only here. `409` at 50 app passwords |

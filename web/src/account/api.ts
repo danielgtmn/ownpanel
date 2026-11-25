@@ -30,6 +30,8 @@ export type Me = {
   app_passwords_available: boolean
   uses_known_days: number
   client: ClientSettings
+  // Only on the answer to a password change: the password was changed, but not all that came with it.
+  warning?: string
 }
 
 export type NewAppPassword = { app_password: AppPassword; password: string }

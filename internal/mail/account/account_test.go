@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -481,3 +483,40 @@ func TestAppleSetupAndWriteLimit(t *testing.T) {
 }
 
 func mustIP(s string) netip.Addr { return netip.MustParseAddr(s) }
+
+// failingRevokes is the mail service, except that revoking app passwords
+// fails.
+type failingRevokes struct{ *server.Server }
+
+func (f failingRevokes) ApplyAccountChange(ctx context.Context, sid string, ch config.AccountChange) (config.AccountChange, error) {
+	if ch.AppPasswordID != "" {
+		return ch, errors.New("disk full")
+	}
+	return f.Server.ApplyAccountChange(ctx, sid, ch)
+}
+
+// TestPasswordChangedButNotRevoked: when the password changed but app
+// passwords could not be revoked along, the answer says the password was
+// changed and how many app passwords are still there, not a plain error.
+func TestPasswordChangedButNotRevoked(t *testing.T) {
+	e := newEnv(t)
+	cookie := e.signIn(address, password)
+	want(t, e.do(req{method: "POST", path: "/account/api/app-passwords", cookie: cookie, body: `{"name":"Laptop"}`}), 201, "")
+	want(t, e.do(req{method: "POST", path: "/account/api/app-passwords", cookie: cookie, body: `{"name":"Phone"}`}), 201, "")
+	e.h = New(Options{Backend: failingRevokes{e.srv}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: e.clk.now})
+	e.web = web.Handler(web.Options{Account: e.h})
+	cookie = e.signIn(address, password)
+	old := e.mailbox().PasswordHash
+	b, _ := json.Marshal(map[string]any{"current_password": password, "new_password": "new-password-1", "revoke_app_passwords": true})
+	rec := e.do(req{method: "PUT", path: "/account/api/password", cookie: cookie, body: string(b)})
+	want(t, rec, 200, `"warning":"Your password was changed, but 2 app passwords could not be revoked.`)
+	if e.mailbox().PasswordHash == old || len(e.mailbox().AppPasswords) != 2 {
+		t.Fatalf("mailbox %+v", e.mailbox())
+	}
+	// The account as it is now comes along.
+	want(t, rec, 200, `"name":"Laptop"`)
+	// Other answers carry no warning.
+	if rec := e.do(req{method: "GET", path: "/account/api/me", cookie: cookie}); strings.Contains(rec.Body.String(), "warning") {
+		t.Fatalf("me: %s", rec.Body)
+	}
+}

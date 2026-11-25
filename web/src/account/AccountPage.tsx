@@ -29,7 +29,7 @@ import {
   type AppPassword,
   type Me,
 } from './api.ts'
-import { appPasswordUse, clientRows, messagesText, usageShare, usageText } from './rules.ts'
+import { appPasswordUse, clientRows, messagesText, passwordChangedNotice, usageShare, usageText } from './rules.ts'
 
 type Dialog = 'name' | 'password' | 'app' | null
 
@@ -65,13 +65,12 @@ export function AccountPage({
   }
 
   async function savePassword(change: PasswordChange) {
-    onChange(await changePassword(change.current, change.password, change.revokeAppPasswords))
+    const { warning, ...next } = await changePassword(change.current, change.password, change.revokeAppPasswords)
+    onChange(next)
     setDialog(null)
-    toast.success(
-      change.revokeAppPasswords
-        ? 'Your password was changed and all app passwords were revoked.'
-        : 'Your password was changed.',
-    )
+    const notice = passwordChangedNotice(change.revokeAppPasswords, warning)
+    if (notice.kind === 'warning') toast.warning(notice.text)
+    else toast.success(notice.text)
   }
 
   async function addAppPassword(name: string) {

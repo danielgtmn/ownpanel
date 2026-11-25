@@ -440,6 +440,9 @@ type meView struct {
 	// UsesKnownDays is how far back the last use of app passwords is known.
 	UsesKnownDays int                      `json:"uses_known_days"`
 	Client        mailsetup.ClientSettings `json:"client"`
+	// Warning is set only on the answer to a password change whose
+	// password was changed but not everything that came with it.
+	Warning string `json:"warning,omitempty"`
 }
 
 func (h *Handler) view(ctx context.Context, m *config.Mailbox) (meView, error) {
@@ -571,19 +574,46 @@ func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request, s *sess
 	if err := st.DeleteAccountSessions(r.Context(), s.mailbox.StorageID, s.hash); err != nil {
 		h.log.Error("mail: end other self-service sessions", "err", err)
 	}
+	// The password is changed now: whatever happens to the app passwords,
+	// the answer says so, and which are left.
+	notRevoked := 0
 	if in.RevokeAppPasswords {
 		m, _ := h.opts.Backend.Directory().MailboxByStorageID(s.mailbox.StorageID)
 		if m != nil {
 			for _, ap := range m.AppPasswords {
 				_, err := h.opts.Backend.ApplyAccountChange(r.Context(), s.mailbox.StorageID, config.AccountChange{AppPasswordID: ap.ID})
 				if err != nil && !errors.Is(err, server.ErrInvalidChange) { // already revoked meanwhile
-					h.changeFailed(w, err)
-					return
+					h.log.Error("mail: revoke app password after a password change", "err", err)
+					notRevoked++
 				}
 			}
 		}
 	}
-	h.refreshed(w, r, s)
+	m, ok := h.opts.Backend.Directory().MailboxByStorageID(s.mailbox.StorageID)
+	if !ok {
+		h.clearCookie(w)
+		writeError(w, http.StatusUnauthorized, errEnded)
+		return
+	}
+	s.mailbox = *m
+	v, err := h.view(r.Context(), &s.mailbox)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	if notRevoked > 0 {
+		v.Warning = notRevokedWarning(notRevoked)
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+// notRevokedWarning says that the password was changed but n app
+// passwords are still there.
+func notRevokedWarning(n int) string {
+	if n == 1 {
+		return "Your password was changed, but 1 app password could not be revoked. Revoke it below."
+	}
+	return "Your password was changed, but " + strconv.Itoa(n) + " app passwords could not be revoked. Revoke them below."
 }
 
 func (h *Handler) setDisplayName(w http.ResponseWriter, r *http.Request, s *session) {

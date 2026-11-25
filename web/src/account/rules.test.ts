@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   appPasswordUse,
   clientRows,
+  passwordChangedNotice,
   passwordErrors,
   signInErrors,
   usageShare,
@@ -84,5 +85,14 @@ describe('app passwords', () => {
     expect(clientRows(client, 'anna@example.com', false).find((row) => row.label === 'Password')?.value).toMatch(
       /mailbox password/,
     )
+  })
+})
+
+describe('password changed', () => {
+  it('says so, and warns when app passwords are left', () => {
+    expect(passwordChangedNotice(false, undefined)).toEqual({ kind: 'success', text: 'Your password was changed.' })
+    expect(passwordChangedNotice(true, undefined).text).toMatch(/all app passwords were revoked/)
+    const warning = 'Your password was changed, but 1 app password could not be revoked. Revoke it below.'
+    expect(passwordChangedNotice(true, warning)).toEqual({ kind: 'warning', text: warning })
   })
 })

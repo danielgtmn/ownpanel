@@ -127,3 +127,18 @@ export function signInErrors(address: string, password: string): SignInErrors {
   if (!password) errors.password = 'Enter your password.'
   return errors
 }
+
+// What the page says after the password was changed. A warning from the server (the password was changed, but
+// some app passwords are still there) wins over the plain success.
+export function passwordChangedNotice(
+  revokeAppPasswords: boolean,
+  warning: string | undefined,
+): { kind: 'success' | 'warning'; text: string } {
+  if (warning) return { kind: 'warning', text: warning }
+  return {
+    kind: 'success',
+    text: revokeAppPasswords
+      ? 'Your password was changed and all app passwords were revoked.'
+      : 'Your password was changed.',
+  }
+}
