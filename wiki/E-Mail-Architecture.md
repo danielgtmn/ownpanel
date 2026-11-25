@@ -694,8 +694,10 @@ in the service. The same is said in [[Security|Security]].
 - Spools live in `imports/` (not `tmp/`, which the start-up check empties)
   and are deleted when the job ends, is cancelled, or has no row.
 - **Zip files** (untrusted): at most 100 000 entries, 1000 folders; at most
-  the message size limit per message entry and 4× the declared size unpacked in
-  total, entries with a compression ratio over 100 refused; nested zips not
+  the message size limit per message entry and 100 GB unpacked in total
+  (no limit on the compression ratio: the zip reader refuses entries larger
+  than they declare, quota and free space stop the import, and folders of
+  similar messages compress far better than 100:1); nested zips not
   opened; names in UTF-8 when the zip flag says so (or when they are valid
   UTF-8, as macOS writes them without the flag), else CP437; no `..`,
   absolute paths, NUL or backslash; duplicate or case-colliding names

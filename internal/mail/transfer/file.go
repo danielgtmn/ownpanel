@@ -22,12 +22,16 @@ import (
 )
 
 // Limits of uploaded zip files (untrusted).
-// maxZipEntries is a variable for tests.
-var maxZipEntries = 100000
-
-const (
-	maxZipRatio    = 100
-	maxUnpackRatio = 4 // unpacked total at most 4× the declared size
+// maxZipEntries and maxUnpacked are variables for tests.
+//
+// There is no limit on the compression ratio: archive/zip refuses entries
+// that unpack to more than their declared size, the import stops at the
+// mailbox's quota and at MinFreeBytes, and a folder of near-identical
+// messages (newsletters) legitimately compresses far better than 100:1.
+// maxUnpacked only bounds the work of reading a file.
+var (
+	maxZipEntries        = 100000
+	maxUnpacked   uint64 = 5 * config.MaxImportBytes
 )
 
 type entryKind int
@@ -201,10 +205,6 @@ func openZip(f *os.File, size, declared int64) (*fileSource, error) {
 			src.skipped++
 			continue
 		}
-		if zf.UncompressedSize64 > 0 && (zf.CompressedSize64 == 0 || zf.UncompressedSize64/zf.CompressedSize64 > maxZipRatio) {
-			src.skipped++
-			continue
-		}
 		if strings.EqualFold(path.Ext(name), ".zip") {
 			src.skipped++ // nested archives are not opened
 			continue
@@ -230,8 +230,8 @@ func openZip(f *os.File, size, declared int64) (*fileSource, error) {
 			}
 		}
 		total += zf.UncompressedSize64
-		if total > uint64(declared)*maxUnpackRatio {
-			return nil, badFile("the zip file unpacks to more than %d times its size", maxUnpackRatio)
+		if total > maxUnpacked {
+			return nil, badFile("the zip file unpacks to more than %d GB", maxUnpacked>>30)
 		}
 		key := strings.ToLower(e.remote())
 		if first, ok := folders[key]; ok {

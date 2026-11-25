@@ -245,7 +245,7 @@ func TestZipLimits(t *testing.T) {
 		zipEntry{name: `back\slash.eml`, data: eml},
 		zipEntry{name: "inner.zip", data: string(inner), store: true},
 		zipEntry{name: "renamed.eml", data: string(inner), store: true},
-		zipEntry{name: "bomb.eml", data: "Subject: x\r\n\r\n" + strings.Repeat("0", 1<<20)},
+		zipEntry{name: "newsletter.eml", data: "Subject: x\r\n\r\n" + strings.Repeat("0", 1<<20)},
 		zipEntry{name: "Entw\x81rfe/x.eml", data: eml, nonUTF8: true},
 		zipEntry{name: "ok/a.eml", data: eml},
 		zipEntry{name: "OK/b.eml", data: eml},
@@ -266,8 +266,9 @@ func TestZipLimits(t *testing.T) {
 		return nil
 	})
 	must(t, err)
-	// traversal ×2, backslash, nested zip by name, by content, ratio.
-	if src.skipped != 6 || n != 3 || !slices.Equal(folders, []string{"Entwürfe", "ok"}) {
+	// Skipped: traversal ×2, backslash, nested zip by name and by content.
+	// A message that compresses extremely well is mail like any other.
+	if src.skipped != 5 || n != 4 || !slices.Equal(folders, []string{"INBOX", "Entwürfe", "ok"}) {
 		t.Fatalf("skipped %d, %d messages in %q", src.skipped, n, folders)
 	}
 
@@ -280,11 +281,14 @@ func TestZipLimits(t *testing.T) {
 		t.Fatalf("entries: %v", err)
 	}
 	maxZipEntries = old
-	// More than 4× the declared size unpacked.
+	// More unpacked than maxUnpacked.
+	oldUnpacked := maxUnpacked
+	maxUnpacked = 5000
 	big := makeZip(t, zipEntry{name: "a.eml", data: "Subject: x\r\n\r\n" + randomText(6000)})
-	if _, err := openSource(write(big), "x.zip", 1000); status(err) != http.StatusBadRequest {
+	if _, err := openSource(write(big), "x.zip", int64(len(big))); status(err) != http.StatusBadRequest {
 		t.Fatalf("unpacked size: %v", err)
 	}
+	maxUnpacked = oldUnpacked
 	// Takeout as .tgz is refused with a hint.
 	if _, err := openSource(write([]byte{0x1f, 0x8b, 8, 0, 0}), "takeout.tgz", 5); status(err) != http.StatusBadRequest ||
 		!strings.Contains(err.Error(), ".zip") {
