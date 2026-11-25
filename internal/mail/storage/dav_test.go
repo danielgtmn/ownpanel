@@ -105,7 +105,7 @@ func TestDAVReconcileAndDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.DAVMissing != 1 || rep.DAVIndexed != 1 || rep.DAVStray != 1 || !rep.NewDAVEpoch {
+	if rep.DAVMissing != 1 || rep.DAVIndexed != 0 || rep.DAVStray != 2 || !rep.NewDAVEpoch {
 		t.Fatalf("%+v", rep)
 	}
 	c, _ = s.DAVCollection(ctx, idA, davobj.Calendar, DefaultCalendar)
@@ -113,11 +113,11 @@ func TestDAVReconcileAndDelete(t *testing.T) {
 		t.Fatal("epoch kept")
 	}
 	objs, err := s.DAVObjects(ctx, c, 0, 0)
-	if err != nil || len(objs) != 2 {
+	if err != nil || len(objs) != 1 {
 		t.Fatalf("%+v %v", objs, err)
 	}
 	u, _ := s.Usage(ctx, idA)
-	if u.Bytes != int64(len(davEvent("b"))+len(davEvent("lost"))+2*DAVObjectOverhead) {
+	if u.Bytes != int64(len(davEvent("b"))+DAVObjectOverhead) {
 		t.Fatalf("usage %+v", u)
 	}
 	if _, err := os.Stat(filepath.Join(collDir, "2.0123456789abcdef")); !os.IsNotExist(err) {

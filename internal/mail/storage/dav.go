@@ -2,12 +2,15 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"database/sql"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -937,10 +940,11 @@ type davReport struct {
 }
 
 // reconcileDAV brings the DAV index and files in line, in Reconcile's
-// transaction: rows without a file are dropped, files without a row are
-// indexed into their collection when they are a valid object whose UID is
-// not there yet, other files are removed (never acknowledged to a
-// client). It sets a new epoch when anything differed or restored is set.
+// transaction: rows without a file are dropped. Files without a row are
+// removed (a write that crashed before its commit was never acknowledged)
+// except after a restore, when they are indexed into their collection
+// under the name their UID gives, if they are a valid object whose UID is
+// not there yet. It sets a new epoch when anything differed or restored is set.
 func (s *Store) reconcileDAV(tx *sql.Tx, restored bool) (davReport, bool, error) {
 	var rep davReport
 	type row struct {
@@ -1011,7 +1015,14 @@ func (s *Store) reconcileDAV(tx *sql.Tx, restored bool) (davReport, bool, error)
 				if known[p] || !f.Type().IsRegular() {
 					continue
 				}
-				ok, err := s.indexStray(tx, haveColl, sid, collID, kind, comps, p, f.Name())
+				ok := false
+				if restored {
+					// Only after a restore: the files were written after the
+					// copy of the index and acknowledged to clients. Without
+					// a restore they come from a write that crashed before
+					// its commit, which the client will repeat.
+					ok, err = s.indexStray(tx, haveColl, sid, collID, kind, comps, p, f.Name())
+				}
 				if err != nil {
 					return rep, false, err
 				}
@@ -1033,6 +1044,18 @@ func (s *Store) reconcileDAV(tx *sql.Tx, restored bool) (davReport, bool, error)
 		return rep, true, nil
 	}
 	return rep, false, nil
+}
+
+var simpleUIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@-]{0,100}$`)
+
+// strayName is the name a restored object gets: its UID when that is a
+// simple name (what most programs use), else a hash of it.
+func strayName(uid, ext string) string {
+	if simpleUIDRe.MatchString(uid) {
+		return uid + ext
+	}
+	sum := sha256.Sum256([]byte(uid))
+	return hex.EncodeToString(sum[:16]) + ext
 }
 
 // indexStray indexes a file found without a row, if it can be.
@@ -1066,7 +1089,14 @@ func (s *Store) indexStray(tx *sql.Tx, haveColl bool, sid string, coll int64, ki
 	if n > 0 {
 		return false, nil
 	}
-	name := "restored-" + file + ext
+	name := strayName(info.UID, ext)
+	var taken int
+	if err := tx.QueryRow(`SELECT count(*) FROM dav_objects WHERE collection_id = ? AND name = ?`, coll, name).Scan(&taken); err != nil {
+		return false, err
+	}
+	if taken > 0 {
+		name = "restored-" + file + ext
+	}
 	var seq int64
 	if err := tx.QueryRow(`UPDATE dav_collections SET seq = seq + 1 WHERE id = ? RETURNING seq`, coll).Scan(&seq); err != nil {
 		return false, err

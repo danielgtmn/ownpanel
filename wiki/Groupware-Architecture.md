@@ -526,8 +526,10 @@ Synchronizer add-on.
   that number, not stored: the start-up check sets a new epoch when it
   found rows without files or indexed stray files, or the `restored` marker
   exists, which changes all of them at once. Files without a row are
-  indexed again when they are a valid object of an existing collection
-  whose UID is not taken (`restored-<file>.ics`), otherwise removed.
+  removed (a write that crashed before its commit, never acknowledged, so
+  the client's retry works); only after a restore are they indexed again,
+  when they are a valid object of an existing collection whose UID is not
+  taken, under the name the UID gives (`<uid>.ics` when simple).
   Deletions older than 90 days are pruned hourly (`dav.Handler.Run`); a
   token older than the kept deletions, of another collection or epoch, or
   not ours answers `403 valid-sync-token`.
