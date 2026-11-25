@@ -204,8 +204,9 @@ resets it, as today.
 service. How it is built, where it is more precise than the plan above:
 
 - **Configuration:** `Domain.Organisation` (an opaque id: `org-<random>`
-  for a group, `dom-<domain>` for a domain that stands alone; never the
-  owner), `Mailbox.DisplayName`, `Mailbox.AppPasswords []{ID, Name, MAC,
+  for a group, never the owner; empty for a domain that stands alone, which
+  the mail service then treats as its own organisation `dom-<domain>`, so
+  even a domain name of 253 characters fits), `Mailbox.DisplayName`, `Mailbox.AppPasswords []{ID, Name, MAC,
   Created}`, `Mailbox.AppPasswordsOnly`, `Mailbox.Revision` and
   `Config.AppPasswordKey`.
 - **App password key:** one server key (32 random bytes), made by the panel

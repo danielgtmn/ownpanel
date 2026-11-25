@@ -61,11 +61,12 @@ func (s *Service) buildMailConfig(ctx context.Context) (*config.Config, error) {
 				continue
 			}
 			active[d.Domain] = true
+			// A domain that stands alone is pushed without an organisation:
+			// the mail service treats it as its own (StandaloneOrganisation).
+			// "dom-" and a domain of up to 253 characters would not fit an
+			// organisation id and fail the push for everyone.
 			cd := config.Domain{Name: d.Domain, DKIM: []config.DKIMKey{}, SendPerHour: config.DefaultDomainSendPerHour,
 				Organisation: d.OrganisationID}
-			if cd.Organisation == "" {
-				cd.Organisation = config.StandaloneOrganisation(d.Domain)
-			}
 			keys, err := s.store.DKIMKeys(ctx, d.Domain)
 			if err != nil {
 				return nil, err

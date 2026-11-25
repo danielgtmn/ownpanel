@@ -62,12 +62,12 @@ func TestOrganisations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Standalone domains get an organisation of their own that names no
-	// owner.
+	// Standalone domains are pushed without an organisation: the mail
+	// service treats each as its own.
 	if err := svc.mailSync(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if o := pushedDomain(t, w.mail.last(), "bobsite.example.com").Organisation; o != config.StandaloneOrganisation("bobsite.example.com") {
+	if o := pushedDomain(t, w.mail.last(), "bobsite.example.com").Organisation; o != "" {
 		t.Fatalf("standalone %q", o)
 	}
 
@@ -163,7 +163,7 @@ func TestOrganisations(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg = w.mail.last()
-	if o := pushedDomain(t, cfg, "bobsite.example.com").Organisation; o != config.StandaloneOrganisation("bobsite.example.com") {
+	if o := pushedDomain(t, cfg, "bobsite.example.com").Organisation; o != "" {
 		t.Fatalf("after delete %q", o)
 	}
 	if _, err := svc.CreateOrganisation(ctx, bob, "a\nb"); KindOf(err) != Invalid {
@@ -371,5 +371,28 @@ func TestAccountEvents(t *testing.T) {
 	}
 	if pm := pushedMailbox(t, w.mail.last(), "info@bobsite.example.com"); pm.Revision != 6 || pm.PasswordHash != adminHash.PasswordHash {
 		t.Fatalf("pushed %+v", pm)
+	}
+}
+
+// TestLongStandaloneDomain: a domain of the longest possible name that
+// stands alone is pushed without an organisation id (the mail service
+// falls back to the domain), so it cannot fail the push for everyone.
+func TestLongStandaloneDomain(t *testing.T) {
+	ctx := context.Background()
+	w := newMailWorld(t)
+	long := strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 57) + ".com"
+	if len(long) != 253 || !config.ValidDomain(long) {
+		t.Fatalf("test domain %d", len(long))
+	}
+	w.mx.point(long, testMailHost)
+	if _, err := w.svc.EnableMailDomain(ctx, admin, long); err != nil {
+		t.Fatal(err)
+	}
+	cfg := w.mail.last()
+	if o := pushedDomain(t, cfg, long).Organisation; o != "" {
+		t.Fatalf("standalone pushed as %q", o)
+	}
+	if o := pushedDomain(t, cfg, "bobsite.example.com").Organisation; o != "" {
+		t.Fatalf("standalone pushed as %q", o)
 	}
 }
