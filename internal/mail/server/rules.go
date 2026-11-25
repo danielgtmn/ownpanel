@@ -39,7 +39,7 @@ func (s *Server) MailRules(ctx context.Context, storageID string) (config.MailRu
 	if _, ok := s.Directory().MailboxByStorageID(storageID); !ok {
 		return config.MailRules{}, ErrUnknownMailbox
 	}
-	st, managed, active, script, err := s.loadRules(ctx, storageID)
+	st, managed, active, script, _, err := s.loadRules(ctx, storageID)
 	if err != nil {
 		return config.MailRules{}, err
 	}
@@ -62,36 +62,47 @@ func rulesView(st rules.Settings, managed bool, active, script string) config.Ma
 
 // loadRules reads the simple settings. managed is false when another
 // script (or an edited generated one) is active; then st is what the
-// generated script holds, if it still exists unchanged, else empty.
-func (s *Server) loadRules(ctx context.Context, id string) (st rules.Settings, managed bool, active, script string, err error) {
+// generated script holds, if it still exists unchanged, else empty. guard
+// is what was read, for the compare-and-set of a change.
+func (s *Server) loadRules(ctx context.Context, id string) (st rules.Settings, managed bool, active, script string, guard storage.SieveGuard, err error) {
 	name, src, ok, err := s.store.ActiveSieveScript(ctx, id)
 	if err != nil {
-		return st, false, "", "", err
+		return st, false, "", "", guard, err
+	}
+	if ok {
+		guard.Active = name
+	}
+	gen, _, gerr := s.store.SieveScript(ctx, id, rules.ScriptName)
+	switch {
+	case gerr == nil:
+		guard.Generated, guard.HasGenerated = gen, true
+	case !errors.Is(gerr, storage.ErrNoScript):
+		return st, false, "", "", guard, gerr
 	}
 	if ok && name == rules.ScriptName {
-		if parsed, ok := rules.Parse(src); ok {
-			return parsed, true, name, src, nil
+		if parsed, pok := rules.Parse(src); pok {
+			return parsed, true, name, src, guard, nil
 		}
-		return rules.Settings{}, false, name, src, nil
+		return rules.Settings{}, false, name, src, guard, nil
 	}
 	// Another script or none is active: the generated script, if it is
 	// still unchanged, is where a replacement starts from.
-	if gen, _, err := s.store.SieveScript(ctx, id, rules.ScriptName); err == nil {
+	if guard.HasGenerated {
 		if parsed, pok := rules.Parse(gen); pok {
 			st = parsed
 		}
-	} else if !errors.Is(err, storage.ErrNoScript) {
-		return st, false, "", "", err
 	}
 	if ok {
-		return st, false, name, src, nil
+		return st, false, name, src, guard, nil
 	}
-	return st, true, "", "", nil
+	return st, true, "", "", guard, nil
 }
 
 // UpdateRules changes the simple settings with fn and saves the generated
 // script as the active one. Without replace it refuses with ErrNotManaged
-// when another script is active.
+// when another script is active. Check and write happen together in the
+// store: a script a mail program activated or changed in between is never
+// overwritten (ErrNotManaged then).
 func (s *Server) UpdateRules(ctx context.Context, storageID string, replace bool, fn func(*rules.Settings) error) (config.MailRules, error) {
 	box, ok := s.Directory().MailboxByStorageID(storageID)
 	if !ok {
@@ -99,7 +110,7 @@ func (s *Server) UpdateRules(ctx context.Context, storageID string, replace bool
 	}
 	rulesMu.Lock()
 	defer rulesMu.Unlock()
-	st, managed, _, _, err := s.loadRules(ctx, storageID)
+	st, managed, _, _, guard, err := s.loadRules(ctx, storageID)
 	if err != nil {
 		return config.MailRules{}, err
 	}
@@ -122,27 +133,23 @@ func (s *Server) UpdateRules(ctx context.Context, storageID string, replace bool
 			}
 		}
 	}
-	if st.Empty() {
-		if name, _, ok, err := s.store.ActiveSieveScript(ctx, storageID); err != nil {
-			return config.MailRules{}, err
-		} else if ok && (name == rules.ScriptName || replace) {
-			if err := s.store.SetActiveSieveScript(ctx, storageID, ""); err != nil {
-				return config.MailRules{}, err
-			}
-		}
-		if err := s.store.DeleteSieveScript(ctx, storageID, rules.ScriptName); err != nil && !errors.Is(err, storage.ErrNoScript) {
-			return config.MailRules{}, err
-		}
-	} else {
-		// The generated script counts against the limit like any other.
-		if err := s.store.PutSieveScript(ctx, storageID, rules.ScriptName, rules.Generate(st), maildeliver.MaxScripts, true); err != nil {
-			if errors.Is(err, storage.ErrTooManyScript) {
-				return config.MailRules{}, &RulesInvalid{errors.New("the mailbox has the most filter scripts allowed; delete one in your mail program first")}
-			}
-			return config.MailRules{}, err
-		}
+	content := ""
+	if !st.Empty() {
+		content = rules.Generate(st)
 	}
-	st, managed, active, script, err := s.loadRules(ctx, storageID)
+	if st.Empty() && guard.Active != rules.ScriptName && !replace && !guard.HasGenerated {
+		// Nothing to write and nothing to remove.
+	} else if err := s.store.ReplaceGeneratedSieve(ctx, storageID, rules.ScriptName, content, maildeliver.MaxScripts, guard); err != nil {
+		switch {
+		case errors.Is(err, storage.ErrSieveChanged):
+			return config.MailRules{}, ErrNotManaged
+		case errors.Is(err, storage.ErrTooManyScript):
+			// The generated script counts against the limit like any other.
+			return config.MailRules{}, &RulesInvalid{errors.New("the mailbox has the most filter scripts allowed; delete one in your mail program first")}
+		}
+		return config.MailRules{}, err
+	}
+	st, managed, active, script, _, err := s.loadRules(ctx, storageID)
 	if err != nil {
 		return config.MailRules{}, err
 	}

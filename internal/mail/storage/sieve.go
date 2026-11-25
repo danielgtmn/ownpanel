@@ -210,6 +210,17 @@ func (s *Store) SieveDuplicate(ctx context.Context, id, key string, period time.
 	return seen, err
 }
 
+// SieveDuplicateSeen tells whether the duplicate test saw key and still
+// remembers it, without recording anything.
+func (s *Store) SieveDuplicateSeen(ctx context.Context, id, key string, now time.Time) (bool, error) {
+	var until int64
+	err := s.rdb.QueryRowContext(ctx, `SELECT until FROM sieve_duplicates WHERE storage_id = ? AND id = ?`, id, key).Scan(&until)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil && until > now.Unix(), err
+}
+
 // PruneSieve forgets replies and duplicate ids whose time has passed.
 func (s *Store) PruneSieve(ctx context.Context, now time.Time) error {
 	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
@@ -217,6 +228,70 @@ func (s *Store) PruneSieve(ctx context.Context, now time.Time) error {
 			return err
 		}
 		_, err := tx.Exec(`DELETE FROM sieve_duplicates WHERE until <= ?`, now.Unix())
+		return err
+	})
+}
+
+// ErrSieveChanged: the scripts changed since they were read (a mail
+// program changed them meanwhile).
+var ErrSieveChanged = errors.New("the filter scripts changed meanwhile")
+
+// SieveGuard is what a change of the generated script expects to find:
+// the name of the active script ("" for none) and the generated script's
+// content (HasGenerated false: no such script).
+type SieveGuard struct {
+	Active       string
+	Generated    string
+	HasGenerated bool
+}
+
+// ReplaceGeneratedSieve writes the generated script name and makes it the
+// active one, or with content "" deactivates the active script and
+// deletes name. All in one transaction and only if the scripts are still
+// as guard says (ErrSieveChanged otherwise), so a change a mail program
+// made in between is never overwritten. A new script beyond max is
+// ErrTooManyScript.
+func (s *Store) ReplaceGeneratedSieve(ctx context.Context, id, name, content string, max int, guard SieveGuard) error {
+	if err := checkID(id); err != nil {
+		return err
+	}
+	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
+		var active string
+		err := tx.QueryRow(`SELECT name FROM sieve_scripts WHERE storage_id = ? AND active = 1`, id).Scan(&active)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		var gen string
+		err = tx.QueryRow(`SELECT content FROM sieve_scripts WHERE storage_id = ? AND name = ?`, id, name).Scan(&gen)
+		hasGen := err == nil
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if active != guard.Active || hasGen != guard.HasGenerated || hasGen && gen != guard.Generated {
+			return ErrSieveChanged
+		}
+		if content == "" {
+			if _, err := tx.Exec(`UPDATE sieve_scripts SET active = 0 WHERE storage_id = ? AND active = 1`, id); err != nil {
+				return err
+			}
+			_, err := tx.Exec(`DELETE FROM sieve_scripts WHERE storage_id = ? AND name = ?`, id, name)
+			return err
+		}
+		if !hasGen {
+			var n int
+			if err := tx.QueryRow(`SELECT count(*) FROM sieve_scripts WHERE storage_id = ?`, id).Scan(&n); err != nil {
+				return err
+			}
+			if n >= max {
+				return ErrTooManyScript
+			}
+		}
+		if _, err := tx.Exec(`UPDATE sieve_scripts SET active = 0 WHERE storage_id = ? AND active = 1`, id); err != nil {
+			return err
+		}
+		_, err = tx.Exec(`INSERT INTO sieve_scripts (storage_id, name, content, active, updated) VALUES (?, ?, ?, 1, ?)
+			ON CONFLICT (storage_id, name) DO UPDATE SET content = excluded.content, active = 1, updated = excluded.updated`,
+			id, name, content, s.now().Unix())
 		return err
 	})
 }

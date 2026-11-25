@@ -191,7 +191,10 @@ func Parse(script string) (Settings, bool) {
 	if s.Filters == nil {
 		s.Filters = []config.FilterRule{}
 	}
-	if Generate(s) != script {
+	// Only settings the editors could have saved count: a crafted script
+	// whose settings regenerate it but would not pass the checks (an
+	// unknown operator written into the code, say) is not managed.
+	if err := Check(&s); err != nil || Generate(s) != script {
 		return Settings{}, false
 	}
 	return s, true
