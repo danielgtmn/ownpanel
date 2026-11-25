@@ -14,6 +14,7 @@ import type {
   MailboxChange,
   MailboxKind,
   NewMailbox,
+  MailboxRules,
   MailOrganisation,
   MailRecords,
   MailStatus,
@@ -119,6 +120,29 @@ export const createAppPassword = (id: number, name: string) =>
   request<NewAppPassword>(appPasswordsPath(id), { method: 'POST', body: { name } })
 export const revokeAppPassword = (id: number, appId: string) =>
   request<void>(`${appPasswordsPath(id)}/${encodeSegment(appId)}`, { method: 'DELETE' })
+// ---- out-of-office and forwarding ----
+
+const mailboxRulesPath = (id: number) => `/mail/mailboxes/${id}`
+
+export type OutOfOfficeRequest = {
+  enabled: boolean
+  subject: string
+  text: string
+  start: string
+  end: string
+  zone: string
+  days: number
+}
+export type ForwardingRequest = { enabled: boolean; to: string; keep_copy: boolean }
+
+export const getMailboxRules = (id: number) => request<MailboxRules>(`${mailboxRulesPath(id)}/rules`)
+export const setMailboxOutOfOffice = (id: number, body: OutOfOfficeRequest, replace: boolean) =>
+  request<MailboxRules>(`${mailboxRulesPath(id)}/out-of-office`, { method: 'PUT', body: { ...body, replace } })
+export const setMailboxForwarding = (id: number, body: ForwardingRequest, replace: boolean) =>
+  request<MailboxRules>(`${mailboxRulesPath(id)}/forwarding`, { method: 'PUT', body: { ...body, replace } })
+export const setMailboxMayForward = (id: number, allowed: boolean) =>
+  request<void>(`${mailboxRulesPath(id)}/may-forward`, { method: 'PUT', body: { allowed } })
+
 export const unblockMailbox = (id: number) => request<void>(`/mail/mailboxes/${id}/unblock`, { method: 'POST' })
 export const deleteMailbox = (id: number) => request<void>(`/mail/mailboxes/${id}`, { method: 'DELETE' })
 // A file download, opened as a link (the session cookie goes along).

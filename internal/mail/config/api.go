@@ -359,6 +359,9 @@ type MailboxStatus struct {
 	Blocked       bool      `json:"blocked"`
 	BlockedReason string    `json:"blocked_reason,omitempty"`
 	BlockedAt     time.Time `json:"blocked_at,omitzero"`
+	// OutOfOffice: an out-of-office reply is on now (the text is not
+	// reported).
+	OutOfOffice bool `json:"out_of_office,omitempty"`
 }
 
 // Event kinds.

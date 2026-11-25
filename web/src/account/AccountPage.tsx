@@ -8,6 +8,7 @@ import { useState } from 'react'
 import { formatDateTime } from '../shared/format/index.ts'
 import { rightsText, withGrant, withoutGrant } from '../shared/sharing/index.ts'
 import { copyText, Section, StatusBadge } from '../shared/ui/index.ts'
+import { AccountFilters } from './AccountFilters.tsx'
 import {
   ChangePasswordDialog,
   CreateAppPasswordDialog,
@@ -218,6 +219,8 @@ export function AccountPage({
             </p>
           ) : null}
         </Section>
+
+        <AccountFilters />
 
         <Section
           title="Your name"

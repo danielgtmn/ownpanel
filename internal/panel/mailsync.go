@@ -124,6 +124,9 @@ func (s *Service) buildMailConfig(ctx context.Context) (*config.Config, error) {
 			cfg.Mailboxes = append(cfg.Mailboxes, cm)
 		}
 	}
+	if err := s.applyNoForwarding(ctx, cfg, mailboxes); err != nil {
+		return nil, err
+	}
 	aliases, err := s.store.MailAliases(ctx, "")
 	if err != nil {
 		return nil, err

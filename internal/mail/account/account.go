@@ -149,6 +149,7 @@ func New(opts Options) *Handler {
 	mux.HandleFunc("GET /account/api/collections", h.authed(h.collections))
 	mux.HandleFunc("GET /account/api/collections/{kind}/{name}/export", h.authed(h.exportCollection))
 	mux.HandleFunc("POST /account/api/collections/{kind}/{name}/import", h.authed(h.importCollection))
+	h.filterRoutes(mux)
 	mux.HandleFunc("/account/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found.")
 	})

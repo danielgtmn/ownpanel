@@ -30,6 +30,7 @@ func runMail(args []string) error {
 	submission := fs.String("submission", ":587", "address for mail clients sending mail, STARTTLS required before sign-in (\"\" to disable)")
 	submissions := fs.String("submissions", ":465", "address for mail clients sending mail over TLS (\"\" to disable)")
 	imaps := fs.String("imaps", ":993", "address for mail clients reading mail with IMAP over TLS (\"\" to disable)")
+	manageSieve := fs.String("managesieve", ":4190", "address for mail programs managing their mail filters (ManageSieve, STARTTLS required before sign-in; \"\" to disable)")
 	ipv6Out := fs.Bool("ipv6-outbound", false, "also deliver outgoing mail over IPv6 (only if the server's IPv6 address has a reverse DNS entry naming the mail host)")
 	allowPrivateMX := fs.Bool("allow-private-mx", false, "for test setups only: deliver outgoing mail to mail servers with loopback or private network addresses")
 	fs.Parse(args)
@@ -57,6 +58,7 @@ func runMail(args []string) error {
 		SubmissionAddr:  *submission,
 		SubmissionsAddr: *submissions,
 		IMAPSAddr:       *imaps,
+		ManageSieveAddr: *manageSieve,
 		IPv6Outbound:    *ipv6Out,
 		AllowPrivateMX:  *allowPrivateMX,
 		AccountHandler:  http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { acct.ServeHTTP(w, r) }),

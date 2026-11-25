@@ -315,6 +315,9 @@ func TestToolsAndAnnotations(t *testing.T) {
 		"set_mailbox_kind":             {destructive: true, idempotent: true},
 		"set_mailbox_access":           {idempotent: true},
 		"remove_mailbox_access":        {destructive: true, idempotent: true},
+		"get_mailbox_out_of_office":    {readOnly: true, idempotent: true},
+		"set_mailbox_out_of_office":    {idempotent: true},
+		"clear_mailbox_out_of_office":  {destructive: true, idempotent: true},
 	}
 	got := map[string]bool{}
 	for _, tool := range res.Tools {

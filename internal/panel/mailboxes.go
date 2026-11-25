@@ -50,6 +50,8 @@ type MailboxUsage struct {
 	Blocked       bool       `json:"blocked"`
 	BlockedReason string     `json:"blocked_reason"`
 	BlockedAt     *time.Time `json:"blocked_at"`
+	// OutOfOffice: an out-of-office reply is on now (not its text).
+	OutOfOffice bool `json:"out_of_office"`
 }
 
 // MailboxInput is a mailbox to create. Nil limits mean the defaults. A
@@ -102,7 +104,7 @@ func mailboxView(m store.Mailbox, usage map[string]config.MailboxStatus) Mailbox
 	if usage != nil {
 		u := MailboxUsage{}
 		if st, ok := usage[m.StorageID]; ok {
-			u = MailboxUsage{UsedBytes: st.UsedBytes, Messages: st.Messages, Blocked: st.Blocked, BlockedReason: st.BlockedReason}
+			u = MailboxUsage{UsedBytes: st.UsedBytes, Messages: st.Messages, Blocked: st.Blocked, BlockedReason: st.BlockedReason, OutOfOffice: st.OutOfOffice}
 			if !st.BlockedAt.IsZero() {
 				t := st.BlockedAt
 				u.BlockedAt = &t

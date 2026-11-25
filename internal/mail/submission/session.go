@@ -22,6 +22,7 @@ import (
 
 	"github.com/danielgtmn/ownpanel/internal/mail/auth"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/mail/deliver"
 	"github.com/danielgtmn/ownpanel/internal/mail/directory"
 	"github.com/danielgtmn/ownpanel/internal/mail/queue"
 	"github.com/danielgtmn/ownpanel/internal/mail/signin"
@@ -72,6 +73,7 @@ type session struct {
 	// mailbox): its limits count too and it gets the bounces.
 	owner    *config.Mailbox
 	local    []*config.Mailbox
+	rcptOf   map[string]string // storage id → the first recipient address that reached it
 	external []string
 }
 
@@ -82,7 +84,7 @@ func newSession(s *Server, c *smtp.Conn) *session {
 
 func (ss *session) Reset() {
 	ss.dir, ss.from, ss.owner = nil, "", nil
-	ss.local, ss.external = nil, nil
+	ss.local, ss.external, ss.rcptOf = nil, nil, nil
 }
 
 func (ss *session) Logout() error { return nil }
@@ -208,6 +210,10 @@ func (ss *session) Rcpt(to string, _ *smtp.RcptOptions) error {
 	for _, m := range route.Mailboxes {
 		if !slices.ContainsFunc(ss.local, func(b *config.Mailbox) bool { return b.StorageID == m.StorageID }) {
 			ss.local = append(ss.local, m)
+			if ss.rcptOf == nil {
+				ss.rcptOf = map[string]string{}
+			}
+			ss.rcptOf[m.StorageID] = addr
 		}
 	}
 	// External targets of local aliases go out with the rest: the sender
@@ -342,15 +348,29 @@ func (ss *session) Data(r io.Reader) error {
 	// recipients getting it twice.
 	var full []queue.Failure
 	failed := 0
-	returnPath := []byte("Return-Path: <" + ss.from + ">\r\n")
-	for _, m := range ss.local {
-		msg, err := message()
-		if err != nil {
-			return errLocal
+	// Mail between mailboxes runs the recipients' filters (and
+	// out-of-office replies) like mail from outside; it comes from a
+	// signed-in mailbox, so it passed every check.
+	dm := &deliver.Message{Dir: ss.dir, Open: message, Size: ss.size(f, prefix, sig), EnvelopeFrom: ss.from,
+		SenderVerified: true, SenderAuthenticated: true}
+	// Every mailbox stores first; forwards and replies of filters follow
+	// only once the message is accepted.
+	var pending []*deliver.Pending
+	accepted := false
+	defer func() {
+		for _, p := range pending {
+			if accepted {
+				p.Finish(ctx)
+			} else {
+				p.Abort(ctx)
+			}
 		}
-		_, err = store.Append(ctx, m.StorageID, storage.Inbox, io.MultiReader(bytes.NewReader(returnPath), msg), storage.AppendOptions{})
+	}()
+	for _, m := range ss.local {
+		p, err := ss.s.opts.Deliver.Store(ctx, dm, deliver.Recipient{Mailbox: m, Rcpt: ss.rcptOf[m.StorageID]})
 		switch {
 		case err == nil:
+			pending = append(pending, p)
 		case errors.Is(err, storage.ErrOverQuota):
 			full = append(full, queue.Failure{Recipient: m.Address, Status: "5.2.2", Diagnostic: "552 5.2.2 the mailbox of the recipient is full"})
 		default:
@@ -385,9 +405,19 @@ func (ss *session) Data(r io.Reader) error {
 	if fromOwner != nil && fromOwner.Shared() && fromOwner.KeepSentCopy {
 		ss.keepSentCopy(ctx, fromOwner, message)
 	}
+	accepted = true
 	ss.s.log.Info("submission: message accepted", "storage_id", ss.box.StorageID,
 		"local", len(ss.local)-len(full), "external", len(ss.external), "signed", sig != "")
 	return nil
+}
+
+// size is the size of the message as stored.
+func (ss *session) size(f *os.File, prefix []byte, sig string) int64 {
+	st, err := f.Stat()
+	if err != nil {
+		return 0
+	}
+	return st.Size() + int64(len(prefix)+len(sig))
 }
 
 // checkFrom checks the header From (exactly one field) and, when present,

@@ -244,6 +244,9 @@ func (s *Store) DeleteMailbox(ctx context.Context, id string) error {
 			`DELETE FROM bindings WHERE storage_id = ?`,
 			`DELETE FROM blocks WHERE storage_id = ?`,
 			`DELETE FROM shared_seen WHERE reader = ?`,
+			`DELETE FROM sieve_scripts WHERE storage_id = ?`,
+			`DELETE FROM sieve_replies WHERE storage_id = ?`,
+			`DELETE FROM sieve_duplicates WHERE storage_id = ?`,
 		} {
 			if _, err := tx.Exec(q, id); err != nil {
 				return err

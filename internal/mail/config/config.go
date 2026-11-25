@@ -194,6 +194,9 @@ type Mailbox struct {
 	// seconds, 0: never), like PasswordSetAt: a self-delegation the
 	// mailbox made at or before that time no longer counts.
 	GrantsSetAt int64 `json:"grants_set_at,omitempty"`
+	// NoForwarding: the mailbox's filters may not forward mail (redirect);
+	// the domain owner decides, forwarding is allowed by default.
+	NoForwarding bool `json:"no_forwarding,omitempty"`
 }
 
 // Alias delivers mail for Address to Targets.

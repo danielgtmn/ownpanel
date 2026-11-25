@@ -2,6 +2,8 @@ import type { RowStatus } from '../../shared/families/index.ts'
 import { addressList } from '../../shared/sharing/rights.ts'
 import type {
   MailAlias,
+  MailboxForwarding,
+  MailboxOutOfOffice,
   MailClientSettings,
   MailDomain,
   Mailbox,
@@ -335,4 +337,38 @@ export function senderPolicyText(policy: string): string {
   if (policy === 'organisation') return 'Only the organisation may write to it'
   if (policy === 'members') return 'Only its members may write to it'
   return ''
+}
+
+// ---- out-of-office and forwarding ----
+
+// What the panel can say about a mailbox's out-of-office reply. Its text shows only when it was set from the
+// panel; what the person wrote stays private.
+export function outOfOfficeStatus(
+  reply: Pick<MailboxOutOfOffice, 'enabled' | 'on' | 'start' | 'end' | 'set_by' | 'set_at'>,
+  formatDay: (day: string) => string,
+  formatDateTime: (value: string) => string,
+): string {
+  if (!reply.enabled) return 'Off.'
+  const state = reply.on ? 'On' : 'Turned on, but not answering today'
+  const dates = reply.start || reply.end ? ` (${outOfOfficeDates(reply, formatDay)})` : ''
+  const who = reply.set_by
+    ? ` Set by ${reply.set_by}${reply.set_at ? ` on ${formatDateTime(reply.set_at)}` : ''}.`
+    : ' Set by the person; its text is private.'
+  return `${state}${dates}.${who}`
+}
+
+function outOfOfficeDates(reply: Pick<MailboxOutOfOffice, 'start' | 'end'>, formatDay: (day: string) => string) {
+  if (reply.start && reply.end) return `${formatDay(reply.start)} to ${formatDay(reply.end)}`
+  if (reply.start) return `from ${formatDay(reply.start)}`
+  return `until ${formatDay(reply.end)}`
+}
+
+export function forwardingStatus(
+  forwarding: Pick<MailboxForwarding, 'enabled' | 'to' | 'set_by' | 'set_at'>,
+  formatDateTime: (value: string) => string,
+): string {
+  if (!forwarding.enabled) return 'Off.'
+  if (!forwarding.set_by) return 'On. Set by the person; the address is private.'
+  const when = forwarding.set_at ? ` on ${formatDateTime(forwarding.set_at)}` : ''
+  return `On, to ${forwarding.to}. Set by ${forwarding.set_by}${when}.`
 }

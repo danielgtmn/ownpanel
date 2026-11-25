@@ -58,6 +58,7 @@ import {
 } from './MailboxDialogs.tsx'
 import { PersonalAccessPanel, SharedAccessPanel } from './MailboxSharing.tsx'
 import { MailboxImports } from './MailboxImports.tsx'
+import { MailboxRulesPanel } from './MailboxRulesPanel.tsx'
 import { OrganisationSection } from './OrganisationSection.tsx'
 import { RecordsSection } from './RecordsSection.tsx'
 import {
@@ -204,6 +205,9 @@ function MailboxRow({
   const appsId = useId()
   const accessId = useId()
   const hasAccess = shared || mailbox.access_to.length > 0 || mailbox.shared_with.length > 0
+  const [rulesOpen, setRulesOpen] = useState(false)
+  const rulesId = useId()
+  const away = mailbox.usage?.out_of_office ?? false
   return (
     <li className="record-row">
       <div className="record-main mail-mailbox-main">
@@ -219,6 +223,12 @@ function MailboxRow({
             <>
               {' '}
               <StatusBadge tone="warning">Can't send</StatusBadge>
+            </>
+          ) : null}
+          {away ? (
+            <>
+              {' '}
+              <StatusBadge tone="neutral">Out of office</StatusBadge>
             </>
           ) : null}
         </h3>
@@ -272,6 +282,10 @@ function MailboxRow({
             <span className="visually-hidden"> of {mailbox.address}</span>
           </Button>
         )}
+        <Button aria-expanded={rulesOpen} aria-controls={rulesId} onClick={() => setRulesOpen((open) => !open)}>
+          {rulesOpen ? 'Hide out-of-office and forwarding' : 'Out-of-office and forwarding'}
+          <span className="visually-hidden"> of {mailbox.address}</span>
+        </Button>
         <Button onClick={() => onImport(mailbox)}>
           Import mail<span className="visually-hidden"> into {mailbox.address}</span>
         </Button>
@@ -320,6 +334,12 @@ function MailboxRow({
             onCreate={onCreateAppPassword}
             onMailboxChanged={onMailboxChanged}
           />
+        </div>
+      ) : null}
+      {rulesOpen ? (
+        <div id={rulesId} className="mail-apps-panel">
+          <h4>Out-of-office and forwarding</h4>
+          <MailboxRulesPanel mailbox={mailbox} onChanged={() => void onMailboxChanged()} />
         </div>
       ) : null}
       <MailboxImports

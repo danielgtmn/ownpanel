@@ -220,3 +220,87 @@ export async function importFile(collection: Pick<Collection, 'kind' | 'name'>, 
   }
   return (await response.json()) as ImportResult
 }
+
+// ---- filters and out-of-office (internal/mail/account/filters.go) ----
+
+export type FilterField = 'from' | 'to' | 'subject' | 'list'
+export type FilterOp = 'contains' | 'is'
+
+export type FilterCondition = { field: FilterField; op: FilterOp; value: string }
+
+export type FilterRule = {
+  name: string
+  match_any: boolean
+  conditions: FilterCondition[]
+  folder?: string
+  mark_read?: boolean
+  forward_to?: string
+  delete?: boolean
+}
+
+export type OutOfOffice = {
+  enabled: boolean
+  subject: string
+  text: string
+  start?: string
+  end?: string
+  zone?: string
+  days: number
+  // Who set it for the person from the panel, and when; absent when the person did.
+  set_by?: string
+  set_at?: string
+}
+
+export type Forwarding = { enabled: boolean; to: string; keep_copy: boolean; set_by?: string; set_at?: string }
+
+export type MailRules = {
+  // false: filters written in a mail program are in effect; saving here replaces them.
+  managed: boolean
+  out_of_office: OutOfOffice
+  forwarding: Forwarding
+  filters: FilterRule[] | null
+  active_script: string
+  script?: string
+}
+
+export type Filters = { rules: MailRules; folders: string[] | null; may_forward: boolean }
+
+export type OutOfOfficeInput = Pick<OutOfOffice, 'enabled' | 'subject' | 'text' | 'days'> & {
+  start: string
+  end: string
+  zone: string
+}
+export type ForwardingInput = Pick<Forwarding, 'enabled' | 'to' | 'keep_copy'>
+
+export const REPLACES_MAIL_PROGRAM_FILTERS =
+  'Your filters were written in a mail program. Saving here replaces them.'
+
+function filterLists(filters: Filters): Filters {
+  return {
+    ...filters,
+    folders: filters.folders ?? [],
+    rules: { ...filters.rules, filters: filters.rules.filters ?? [] },
+  }
+}
+
+async function saveFilters(path: string, body: unknown): Promise<Filters> {
+  try {
+    return filterLists(await request<Filters>(path, { method: 'PUT', body }))
+  } catch (error) {
+    if (error instanceof AccountError && error.status === 409) {
+      throw new AccountError(409, REPLACES_MAIL_PROGRAM_FILTERS)
+    }
+    throw error
+  }
+}
+
+export const loadFilters = async () => filterLists(await request<Filters>('/filters'))
+
+export const setOutOfOffice = (outOfOffice: OutOfOfficeInput, replace: boolean) =>
+  saveFilters('/out-of-office', replace ? { out_of_office: outOfOffice, replace } : { out_of_office: outOfOffice })
+
+export const setForwarding = (forwarding: ForwardingInput, replace: boolean) =>
+  saveFilters('/forwarding', replace ? { forwarding, replace } : { forwarding })
+
+export const setFilterRules = (filters: FilterRule[], replace: boolean) =>
+  saveFilters('/filters', replace ? { filters, replace } : { filters })

@@ -60,6 +60,9 @@ Version ids come from `get_site`; a version id starts with a UTC timestamp. Erro
 | `list_mail_imports` | `id` (mailbox) | Lists the imports of mail into a mailbox, newest first: `id`, `source` (user and server, or file name), `state`, `error`, counts of messages copied, skipped as already there and failed, `bytes`, `created`, `finished`. Read-only. |
 | `cancel_mail_import` | `id` (mailbox), `import_id` | Stops an import that has not finished (copied mail stays), or removes a finished one from the list. |
 | `set_mailbox_display_name` | `id`, `display_name` | Sets the name shown as the sender and in address books (at most 64 characters, no `<>"`); empty removes it. |
+| `get_mailbox_out_of_office` | `id` | Whether the mailbox has an out-of-office reply, whether it is being sent now, its dates and who set it (not the person's own text). Read-only. |
+| `set_mailbox_out_of_office` | `id`, `text`, `subject`, `start`, `end`, `zone`, `days`, `replace` (all but `id` and `text` optional) | Sets an out-of-office reply for a mailbox of your domains (for someone who left). The activity log records it and the person sees who set it. Fails while the person's filters were written in a mail program unless `replace` is set. |
+| `clear_mailbox_out_of_office` | `id` | Turns the out-of-office reply off. |
 | `list_mail_organisations` | none | Lists the organisations you manage (admins: all) with `id`, `name`, `owner` and `domains` (only the domains you may see). Read-only. |
 | `set_mail_organisation` | `id` (optional), `name` | Creates an organisation, or renames the one with `id`. |
 | `delete_mail_organisation` | `id`, `confirm_name` | Deletes an organisation; its domains stand alone again. `confirm_name` must equal its name. |

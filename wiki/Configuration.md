@@ -81,6 +81,7 @@ The mail service ([[E-Mail|E-Mail]]). `install.sh` runs it as `ownpanel-mail.ser
 | `-submission` | `:587` | Mail programs sending mail (STARTTLS before sign-in); `""` turns it off. |
 | `-submissions` | `:465` | Mail programs sending mail over TLS; `""` turns it off. |
 | `-imaps` | `:993` | Mail programs reading mail (IMAP over TLS); `""` turns it off. |
+| `-managesieve` | `:4190` | Mail programs editing a mailbox's filters (ManageSieve, STARTTLS before sign-in); `""` turns it off. |
 | `-ipv6-outbound` | off | Also deliver outgoing mail over IPv6. Only turn it on when the server's IPv6 address has the mail server name as reverse name. |
 | `-allow-private-mx` | off | **For test setups only.** Also deliver outgoing mail to mail servers whose addresses are loopback, private (e.g. `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`), link-local or otherwise not public. Off, mail to a domain whose mail servers have only such addresses is returned to the sender, so nobody can make the server connect into its own network. |
 

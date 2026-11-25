@@ -138,7 +138,7 @@ You can edit the file; apply a change with `systemctl restart ownpaneld`. The in
 
 ## Firewall
 
-If `ufw` is active, the installer allows 80, 443, 25, 465, 587 and 993 over TCP and says so. Otherwise it only reminds you; open them in your provider's firewall if it has one.
+If `ufw` is active, the installer allows 80, 443, 25, 465, 587, 993 and 4190 over TCP and says so. Otherwise it only reminds you; open them in your provider's firewall if it has one.
 
 | Port | Used for |
 |---|---|
@@ -147,6 +147,7 @@ If `ufw` is active, the installer allows 80, 443, 25, 465, 587 and 993 over TCP 
 | 25/tcp | mail from other mail servers; also outgoing, which many providers block until asked ([[E-Mail|E-Mail]]) |
 | 465/tcp, 587/tcp | mail programs sending mail |
 | 993/tcp | mail programs reading mail |
+| 4190/tcp | mail programs editing the mailbox's filters ([[E-Mail|E-Mail]]) |
 
 Do not open port 8600; the panel listens on the loopback address only and Caddy reaches it from the same machine.
 

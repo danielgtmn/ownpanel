@@ -3,7 +3,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { ChangePasswordForm, ShareForm } from './AccountDialogs.tsx'
 import { AccountPage } from './AccountPage.tsx'
-import type { Me } from './api.ts'
+import { FiltersSection, ForwardingSection, OutOfOfficeSection } from './AccountFilters.tsx'
+import type { Filters, Me } from './api.ts'
 import { SignInForm } from './SignInForm.tsx'
 
 const noop = () => undefined
@@ -37,6 +38,34 @@ const sharing: Me = {
       folder: 'Shared/info@example.com',
     },
   ],
+}
+
+const filters: Filters = {
+  rules: {
+    managed: false,
+    out_of_office: {
+      enabled: true,
+      subject: 'Away',
+      text: 'Back on Monday.',
+      start: '2026-12-01',
+      days: 7,
+      set_by: 'admin',
+      set_at: '2026-11-25T10:00:00Z',
+    },
+    forwarding: { enabled: false, to: '', keep_copy: false },
+    filters: [
+      {
+        name: 'Newsletters',
+        match_any: false,
+        conditions: [{ field: 'from', op: 'contains', value: 'news' }],
+        folder: 'Archive',
+      },
+    ],
+    active_script: 'roundcube',
+    script: 'require "fileinto";',
+  },
+  folders: ['INBOX', 'Archive'],
+  may_forward: true,
 }
 
 describe('account area', () => {
@@ -107,6 +136,30 @@ describe('account area', () => {
     expect(change).toContain('ben@example.com')
     // Read is ticked and locked because Write is on.
     expect(change.match(/data-disabled/g)?.length ?? 0).toBeGreaterThan(0)
+  })
+
+  it('shows who set the out-of-office reply and locks the editors for filters from a mail program', () => {
+    const save = async () => null
+    const html = renderToStaticMarkup(
+      <>
+        <OutOfOfficeSection data={filters} locked save={save} />
+        <ForwardingSection data={{ ...filters, may_forward: false }} locked={false} save={save} />
+      </>,
+    )
+    expect(html).toContain('Set by admin')
+    expect(html).toContain('Back on Monday.')
+    expect(html).toMatch(/<fieldset class="mailrules-fieldset" disabled=""/)
+    expect(html).toContain('Forwarding is turned off for this mailbox by the people who manage it.')
+    expect(html).not.toMatch(/sieve|\bscripts?\b/i)
+  })
+
+  it('lists filter rules with their conditions and shows what runs under Advanced', () => {
+    const html = renderToStaticMarkup(<FiltersSection data={filters} locked={false} save={async () => null} />)
+    expect(html).toContain('Newsletters')
+    expect(html).toContain('When from contains “news”')
+    expect(html).toContain('Move to Archive')
+    expect(html).toContain('Advanced')
+    expect(html).toContain('Up<span class="visually-hidden"> Newsletters</span>')
   })
 
   it('offers to sign out app password programs only when there are some', () => {
