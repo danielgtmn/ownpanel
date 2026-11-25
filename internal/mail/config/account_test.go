@@ -36,9 +36,14 @@ func TestAppPasswordToken(t *testing.T) {
 	if !CheckAppPassword(key, sid, ap, secret) {
 		t.Fatal("check")
 	}
-	// Bound to the key, the mailbox and the id.
+	// Bound to the key, the mailbox and the id. (The wrong secret differs
+	// in its last character whatever that is.)
+	wrong := secret[:31] + "a"
+	if wrong == secret {
+		wrong = secret[:31] + "b"
+	}
 	if CheckAppPassword(NewAppPasswordKey(), sid, ap, secret) || CheckAppPassword(key, strings.Repeat("b", 32), ap, secret) ||
-		CheckAppPassword(key, sid, AppPassword{ID: "aaaaaaaaaaaaaaaa", MAC: mac}, secret) || CheckAppPassword(key, sid, ap, secret[:31]+"a") {
+		CheckAppPassword(key, sid, AppPassword{ID: "aaaaaaaaaaaaaaaa", MAC: mac}, secret) || CheckAppPassword(key, sid, ap, wrong) {
 		t.Fatal("MAC not bound")
 	}
 	if AppPasswordMAC("zz", sid, id, secret) != "" || CheckAppPassword("", sid, ap, secret) {
