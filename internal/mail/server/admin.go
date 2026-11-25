@@ -20,6 +20,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST "+config.PathMailbox+"{id}/unblock", s.handleUnblock)
 	mux.HandleFunc("DELETE "+config.PathMailbox+"{id}", s.handleDelete)
 	mux.HandleFunc("POST "+config.PathOutbound, s.handleOutbound)
+	mux.HandleFunc("POST "+config.PathSend, s.handleSend)
 	return mux
 }
 
