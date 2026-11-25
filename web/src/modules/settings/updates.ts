@@ -74,6 +74,17 @@ export function channelRelease(info: UpdateInfo, channel: Channel): AvailableRel
   return info.available[channel]
 }
 
+// Looks again before asking, so the question names the version that gets installed: the newest release may have
+// changed since the page loaded (the nightly build does with every change). If the panel can't look right now, the
+// question is about the last result.
+export async function latestBeforeInstall(info: UpdateInfo, check: () => Promise<UpdateInfo>): Promise<UpdateInfo> {
+  try {
+    return await check()
+  } catch {
+    return info
+  }
+}
+
 // The question asked before installing; switching to an older version says so plainly.
 export function updateQuestion(info: UpdateInfo, channel: Channel): { title: string; description: string; confirmLabel: string } {
   const release = channelRelease(info, channel)

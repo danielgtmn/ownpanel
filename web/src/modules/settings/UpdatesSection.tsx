@@ -18,6 +18,7 @@ import {
   checkResult,
   isBusy,
   lastCheckedText,
+  latestBeforeInstall,
   needsReload,
   POLL_INTERVAL,
   progressText,
@@ -306,8 +307,10 @@ function Loaded({ initial }: { initial: UpdateInfo }) {
   }, [watching])
 
   async function install(channel: Channel) {
-    const release = info.available[channel]
-    const yes = await confirm({ ...updateQuestion(info, channel), cancelLabel: 'Cancel' })
+    const current = await latestBeforeInstall(info, checkForUpdates)
+    setInfo(current)
+    const release = current.available[channel]
+    const yes = await confirm({ ...updateQuestion(current, channel), cancelLabel: 'Cancel' })
     if (!yes) return
     try {
       const next = await requestUpdate({ channel, allow_downgrade: release?.older === true })

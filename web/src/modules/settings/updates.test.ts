@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   checkResult,
   lastCheckedText,
+  latestBeforeInstall,
   needsReload,
   progressText,
   resultNotice,
@@ -52,6 +53,25 @@ describe('updateQuestion', () => {
     const q = updateQuestion(info(), 'nightly')
     expect(q.title).toBe('Switch to nightly builds?')
     expect(q.description).not.toMatch(/older/)
+  })
+})
+
+describe('latestBeforeInstall', () => {
+  it('asks about the build that is newest now, not the one the page loaded with', async () => {
+    const newer = info({
+      available: {
+        ...info().available,
+        nightly: { version: 'nightly-20261125-bd26838', published_at: '2026-11-25T05:50:00Z', notes_url: 'https://y', older: false },
+      },
+    })
+    const current = await latestBeforeInstall(info({ installed: { version: 'v1.2.0', channel: 'stable' } }), async () => newer)
+    expect(updateQuestion(current, 'nightly').confirmLabel).toBe('Switch and install nightly-20261125-bd26838')
+  })
+
+  it('keeps what it had when the panel cannot look right now', async () => {
+    const before = info()
+    const current = await latestBeforeInstall(before, () => Promise.reject(new Error('offline')))
+    expect(current).toBe(before)
   })
 })
 

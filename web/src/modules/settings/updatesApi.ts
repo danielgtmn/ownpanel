@@ -6,6 +6,7 @@ export type UpdateState = 'idle' | 'requested' | 'running' | 'succeeded' | 'fail
 
 export type AvailableRelease = {
   version: string
+  // When it came out; for the nightly, when the current build was made.
   published_at: string
   notes_url: string
   older: boolean
