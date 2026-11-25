@@ -13,4 +13,4 @@ export {
   useRoute,
   type Route,
 } from './routing.ts'
-export { newMailHref, newRedirectHref, newSiteHref, prefilledDomain } from './prefill.ts'
+export { addDomainHref, connectAccountHref, newMailHref, newRedirectHref, newSiteHref, prefilledDomain } from './prefill.ts'

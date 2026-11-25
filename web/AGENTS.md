@@ -17,7 +17,9 @@ search `node_modules/@ui-sdk/react/docs/core.md` by heading, and read
   lookups), `session/` (signed-in person, `useSession()`, name and password
   rules), `format/` (dates), `routing/`, `hooks/`, `ui/` (small UI pieces and
   the inline icons; there is no icon library), `families/` (domain families,
-  their status and the row type of the sidebar).
+  their status and the row type of the sidebar), `dns/` (connected accounts
+  and the domains managed in the panel: requests, types and helpers used by
+  the DNS module, Settings and the domain page).
 - `src/modules/<name>/` is one self-contained area of the panel (for example
   `sites`). A module exports a single `PanelModule` from its `index.ts` and is
   listed in `src/modules/registry.ts`. Modules never import from each other.
@@ -58,7 +60,8 @@ Row order follows `registry.ts`. A family is a registrable domain
 comment there); `#/d/<family>` opens its overview. The sidebar reloads after
 every request that changed something (`onDataChange` in `src/shared/api`).
 Pages can be opened with a query that starts an action: `#/sites?new=1`,
-`#/redirects?new=1`, `#/dns?add=1`; `#/redirects?family=example.com` filters
+`#/redirects?new=1`, `#/dns?add=1` (with `&domain=` to fill it in),
+`#/settings?connect=1`; `#/redirects?family=example.com` filters
 the list. Call `clearQuery()` once such a query is used up.
 
 ## Rules

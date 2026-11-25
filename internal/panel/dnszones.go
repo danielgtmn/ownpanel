@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"slices"
 	"strings"
@@ -88,14 +89,28 @@ func (s *Service) CreateDNSZone(ctx context.Context, a Actor, connID int64, name
 	s.noteWrite(ctx, c, nil, nil)
 	s.dnsCache.dropAllChecks()
 	s.record(ctx, a, "dns.zone.create", z.Name, fmt.Sprintf("connection %q, nameservers %s", c.Name, strings.Join(z.Nameservers, ", ")))
-	return zoneView(c, z), nil
+	// A created zone is managed in the panel. It exists at the provider
+	// either way, so a failure here is only logged.
+	v := zoneView(c, z)
+	if _, err := s.store.AdoptDNSZone(context.WithoutCancel(ctx), c.ID, z.Name); err != nil {
+		slog.Error("could not mark a created DNS zone as managed", "connection", c.ID, "zone", z.Name, "err", err)
+	} else {
+		v.Adopted = true
+	}
+	return v, nil
 }
 
-// zoneUsers lists what uses a domain inside zone, across every person:
-// sites, redirects and the panel itself. Things the actor may not see are
-// described without their names.
-func (s *Service) zoneUsers(ctx context.Context, a Actor, zone string) ([]string, error) {
-	var uses []string
+// domainUse is one thing that uses a domain: a site, a redirect, a mail
+// domain or the panel itself. what describes it for the actor; things the
+// actor may not see are described without their names.
+type domainUse struct {
+	domains []string
+	what    func(in []string) string
+}
+
+// domainUses lists everything of every person that uses a domain.
+func (s *Service) domainUses(ctx context.Context, a Actor) ([]domainUse, error) {
+	var uses []domainUse
 	sites, err := s.store.Sites(ctx)
 	if err != nil {
 		return nil, storeError(err)
@@ -103,39 +118,79 @@ func (s *Service) zoneUsers(ctx context.Context, a Actor, zone string) ([]string
 	byName := map[string]store.Site{}
 	for _, site := range sites {
 		byName[site.Name] = site
-		var in []string
-		for _, d := range site.Domains {
-			if dns.InZone(d, zone) {
-				in = append(in, d)
-			}
-		}
-		if len(in) == 0 {
+		if len(site.Domains) == 0 {
 			continue
 		}
-		if a.canSee(site) {
-			uses = append(uses, fmt.Sprintf("the site %s (%s)", site.Name, strings.Join(in, ", ")))
-		} else {
-			uses = append(uses, fmt.Sprintf("a site of another person (%s)", strings.Join(in, ", ")))
-		}
+		name, visible := site.Name, a.canSee(site)
+		uses = append(uses, domainUse{domains: site.Domains, what: func(in []string) string {
+			if visible {
+				return fmt.Sprintf("the site %s (%s)", name, strings.Join(in, ", "))
+			}
+			return fmt.Sprintf("a site of another person (%s)", strings.Join(in, ", "))
+		}})
 	}
 	redirects, err := s.store.Redirects(ctx)
 	if err != nil {
 		return nil, storeError(err)
 	}
 	for _, r := range redirects {
-		if r.SourcePath != "" || !dns.InZone(r.SourceDomain, zone) {
+		if r.SourcePath != "" {
 			continue // path redirects are on site domains, listed above
 		}
-		if a.canSeeRedirect(r, byName) {
-			uses = append(uses, "the redirect of "+r.SourceDomain)
-		} else {
-			uses = append(uses, fmt.Sprintf("a redirect of another person (%s)", r.SourceDomain))
-		}
+		d, visible := r.SourceDomain, a.canSeeRedirect(r, byName)
+		uses = append(uses, domainUse{domains: []string{d}, what: func([]string) string {
+			if visible {
+				return "the redirect of " + d
+			}
+			return fmt.Sprintf("a redirect of another person (%s)", d)
+		}})
 	}
-	if pd := s.PanelDomain(); pd != "" && dns.InZone(pd, zone) {
-		uses = append(uses, "the panel itself ("+pd+")")
+	mailDomains, err := s.store.MailDomains(ctx)
+	if err != nil {
+		return nil, storeError(err)
+	}
+	for _, md := range mailDomains {
+		d, visible := md.Domain, a.canSeeMail(md.OwnerID)
+		uses = append(uses, domainUse{domains: []string{d}, what: func([]string) string {
+			if visible {
+				return "e-mail for " + d
+			}
+			return fmt.Sprintf("e-mail of another person (%s)", d)
+		}})
+	}
+	if pd := s.PanelDomain(); pd != "" {
+		uses = append(uses, domainUse{domains: []string{pd}, what: func([]string) string {
+			return "the panel itself (" + pd + ")"
+		}})
 	}
 	return uses, nil
+}
+
+// usersOf describes what of uses has a domain inside zone.
+func usersOf(uses []domainUse, zone string) []string {
+	out := []string{}
+	for _, u := range uses {
+		var in []string
+		for _, d := range u.domains {
+			if dns.InZone(d, zone) {
+				in = append(in, d)
+			}
+		}
+		if len(in) > 0 {
+			out = append(out, u.what(in))
+		}
+	}
+	return out
+}
+
+// zoneUsers lists what uses a domain inside zone, across every person:
+// sites, redirects, e-mail and the panel itself.
+func (s *Service) zoneUsers(ctx context.Context, a Actor, zone string) ([]string, error) {
+	uses, err := s.domainUses(ctx, a)
+	if err != nil {
+		return nil, err
+	}
+	return usersOf(uses, zone), nil
 }
 
 // DeleteDNSZone deletes a zone with all its records at the provider.
@@ -179,6 +234,85 @@ func (s *Service) DeleteDNSZone(ctx context.Context, a Actor, connID int64, zone
 	}
 	s.noteWrite(ctx, c, nil, nil)
 	s.dnsCache.dropAllChecks()
+	if err := s.store.ReleaseDNSZone(context.WithoutCancel(ctx), c.ID, z.Name); err != nil && !errors.Is(err, store.ErrNotFound) {
+		slog.Error("could not forget a deleted DNS zone", "connection", c.ID, "zone", z.Name, "err", err)
+	}
 	s.record(ctx, a, "dns.zone.delete", z.Name, fmt.Sprintf("connection %q", c.Name))
+	return nil
+}
+
+// ---- choosing which zones are managed in the panel ----
+
+type zoneKey struct {
+	conn int64
+	zone string
+}
+
+// adoptedZones are the zones the actor chose to manage in the panel.
+func (s *Service) adoptedZones(ctx context.Context, a Actor) (map[zoneKey]bool, error) {
+	list, err := s.store.AdoptedDNSZones(ctx, a.UserID)
+	if err != nil {
+		return nil, storeError(err)
+	}
+	out := make(map[zoneKey]bool, len(list))
+	for _, z := range list {
+		out[zoneKey{z.ConnectionID, z.Zone}] = true
+	}
+	return out, nil
+}
+
+// AdoptDNSZone starts managing a zone of one of the actor's own connections
+// in the panel. Nothing changes at the provider. Adopting a zone again is
+// fine.
+func (s *Service) AdoptDNSZone(ctx context.Context, a Actor, connID int64, zone string) (DNSZone, error) {
+	if err := needDNSManage(a); err != nil {
+		return DNSZone{}, err
+	}
+	c, err := s.usableConnection(ctx, a, connID)
+	if err != nil {
+		return DNSZone{}, err
+	}
+	z, err := s.zoneIn(ctx, c, zone)
+	if err != nil {
+		return DNSZone{}, err
+	}
+	created, err := s.store.AdoptDNSZone(ctx, c.ID, z.Name)
+	if err != nil {
+		return DNSZone{}, storeError(err)
+	}
+	if created {
+		s.record(ctx, a, "dns.zone.adopt", z.Name, fmt.Sprintf("connection %q", c.Name))
+	}
+	v := zoneView(c, z)
+	v.Adopted = true
+	if v.UsedBy, err = s.zoneUsers(ctx, a, z.Name); err != nil {
+		return DNSZone{}, err
+	}
+	return v, nil
+}
+
+// ReleaseDNSZone stops managing a zone in the panel; nothing is deleted at
+// the provider. A zone that something uses stays in the panel anyway, so it
+// is refused with what uses it.
+func (s *Service) ReleaseDNSZone(ctx context.Context, a Actor, connID int64, zone string) error {
+	if err := needDNSManage(a); err != nil {
+		return err
+	}
+	c, err := s.usableConnection(ctx, a, connID)
+	if err != nil {
+		return err
+	}
+	name := normalizeZoneName(zone)
+	uses, err := s.zoneUsers(ctx, a, name)
+	if err != nil {
+		return err
+	}
+	if len(uses) > 0 {
+		return errorf(Conflict, "the domain %s stays in the panel while it is used by %s", name, strings.Join(uses, ", "))
+	}
+	if err := s.store.ReleaseDNSZone(ctx, c.ID, name); err != nil {
+		return storeError(err)
+	}
+	s.record(ctx, a, "dns.zone.release", name, fmt.Sprintf("connection %q", c.Name))
 	return nil
 }

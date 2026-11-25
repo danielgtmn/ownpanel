@@ -160,6 +160,12 @@ type DNSZone struct {
 	// Nameservers are the provider's nameservers for the zone, to be set
 	// at the domain's registrar.
 	Nameservers []string `json:"nameservers"`
+	// Adopted: the person chose to manage the zone in the panel.
+	Adopted bool `json:"adopted"`
+	// UsedBy describes what uses a domain in the zone (sites, redirects,
+	// e-mail, the panel itself); such a zone is in the panel without being
+	// adopted, and stays while it is used.
+	UsedBy []string `json:"used_by"`
 }
 
 func zoneView(c store.DNSConnection, z dns.Zone) DNSZone {
@@ -167,7 +173,7 @@ func zoneView(c store.DNSConnection, z dns.Zone) DNSZone {
 	if ns == nil {
 		ns = []string{}
 	}
-	return DNSZone{ConnectionID: c.ID, ConnectionName: c.Name, Name: z.Name, ReadOnly: z.ReadOnly, Nameservers: ns}
+	return DNSZone{ConnectionID: c.ID, ConnectionName: c.Name, Name: z.Name, ReadOnly: z.ReadOnly, Nameservers: ns, UsedBy: []string{}}
 }
 
 // DNSProblem says why the zones of a connection could not be listed.
@@ -573,9 +579,23 @@ func (s *Service) zoneIn(ctx context.Context, c store.DNSConnection, zone string
 
 // ---- zones and records ----
 
-// DNSZones lists the zones of all the actor's own connections. A connection
-// that fails is reported in Problems; the others are still listed.
+// DNSZones lists the zones that are in the panel: of the actor's own
+// connections, those the actor adopted and those something uses (a site, a
+// redirect, e-mail or the panel itself). A connection that fails is reported
+// in Problems; the others are still listed.
 func (s *Service) DNSZones(ctx context.Context, a Actor) (DNSZones, error) {
+	return s.listZones(ctx, a, true)
+}
+
+// AvailableDNSZones lists the zones of the actor's own connections that are
+// not in the panel yet, to choose from when adding a domain.
+func (s *Service) AvailableDNSZones(ctx context.Context, a Actor) (DNSZones, error) {
+	return s.listZones(ctx, a, false)
+}
+
+// listZones lists the zones of the actor's own connections that are in the
+// panel (inPanel) or the others.
+func (s *Service) listZones(ctx context.Context, a Actor, inPanel bool) (DNSZones, error) {
 	if err := needDNS(a); err != nil {
 		return DNSZones{}, err
 	}
@@ -584,6 +604,17 @@ func (s *Service) DNSZones(ctx context.Context, a Actor) (DNSZones, error) {
 		return DNSZones{}, err
 	}
 	out := DNSZones{Zones: []DNSZone{}, Problems: []DNSProblem{}}
+	if len(conns) == 0 {
+		return out, nil
+	}
+	adopted, err := s.adoptedZones(ctx, a)
+	if err != nil {
+		return DNSZones{}, err
+	}
+	uses, err := s.domainUses(ctx, a)
+	if err != nil {
+		return DNSZones{}, err
+	}
 	for _, c := range conns {
 		zones, err := s.zonesOf(ctx, c)
 		if err != nil {
@@ -599,7 +630,12 @@ func (s *Service) DNSZones(ctx context.Context, a Actor) (DNSZones, error) {
 			continue
 		}
 		for _, z := range zones {
-			out.Zones = append(out.Zones, zoneView(c, z))
+			v := zoneView(c, z)
+			v.Adopted = adopted[zoneKey{c.ID, z.Name}]
+			v.UsedBy = usersOf(uses, z.Name)
+			if (v.Adopted || len(v.UsedBy) > 0) == inPanel {
+				out.Zones = append(out.Zones, v)
+			}
 		}
 	}
 	slices.SortStableFunc(out.Zones, func(x, y DNSZone) int {

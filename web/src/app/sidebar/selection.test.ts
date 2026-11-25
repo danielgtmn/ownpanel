@@ -94,7 +94,7 @@ describe('route to selection', () => {
 describe('rail entries', () => {
   it('shows administrators every entry', () => {
     expect(railEntries(visibleModules(modules, admin), null, null).map((entry) => entry.label)).toEqual([
-      'DNS connections',
+      'DNS domains',
       'Settings',
       'People',
       'Activity',
@@ -104,7 +104,8 @@ describe('rail entries', () => {
 
   it('hides administrator-only entries from members', () => {
     expect(railEntries(visibleModules(modules, member), null, null).map((entry) => entry.label)).toEqual([
-      'DNS connections',
+      'DNS domains',
+      'Settings',
       'Access tokens',
     ])
   })

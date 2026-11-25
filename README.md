@@ -131,7 +131,9 @@ made with the cookie must send `X-Ownpanel-Request: 1`.
 | `GET` `POST` | `/api/dns/connections` | DNS connections (yours; admins see all); add with `{"provider": "hetzner", "name", "token"}` |
 | `POST` | `/api/dns/connections/{id}/check` | list the zones again; the outcome is in `last_error` |
 | `DELETE` | `/api/dns/connections/{id}` | remove a connection (admins: anyone's) |
-| `GET` | `/api/dns/zones` | `{"zones": [..], "problems": [..]}` across your connections |
+| `GET` | `/api/dns/zones` | `{"zones": [..], "problems": [..]}`: zones of your connections that are in the panel (chosen or in use) |
+| `GET` | `/api/dns/zones/available` | the other zones of your connections, to choose from |
+| `PUT` `DELETE` | `/api/dns/connections/{id}/zones/{zone}/managed` | manage a zone in the panel, or stop (nothing changes at the provider) |
 | `GET` | `/api/dns/connections/{id}/zones/{zone}/records` | record sets of a zone (`ttl` null = zone default) |
 | `PUT` `DELETE` | `/api/dns/connections/{id}/zones/{zone}/records/{name}/{type}` | set with `{"ttl": 3600 \| null, "values": [..]}`, or delete; `name` is `@` for the zone itself |
 | `GET` | `/api/sites/{name}/domains/status` | per domain: `points_here`, `points_elsewhere`, `no_record` or `lookup_failed`, and the zone "point here" would use |
@@ -218,7 +220,16 @@ your zones, go to Security → API tokens and create a token with **Read &
 Write** access. A token covers exactly one project; for zones in several
 projects add one connection per project. The token is checked by listing
 the zones before it is saved. A Read-only token is accepted, but every change
-is then refused by Hetzner, and the connection shows that.
+is then refused by Hetzner, and the connection shows that. Accounts are
+connected under **Settings → Connected accounts**.
+
+**Choosing domains.** Connecting an account imports nothing. The panel shows
+the zones you choose under **DNS → Add domain** (from your accounts, or
+created new at Hetzner), plus every zone that a site, redirect, mail domain
+or the panel's own domain uses. **Stop managing here** takes a chosen zone out
+of the panel without touching it at Hetzner; deleting it at Hetzner is a
+separate action. After upgrading, zones in use stay visible and the others
+wait under **Add domain**; nothing is deleted.
 
 - Connections belong to the person who added them. Admins see everyone's
   connections (name and owner, never the token) and can remove them, but can
@@ -235,7 +246,8 @@ is then refused by Hetzner, and the connection shows that.
 - Zone lists are kept for 60 seconds and domain lookups for 30 seconds, to
   stay well below Hetzner's limit of 3600 requests per hour.
 - Changes are recorded in the activity log (`dns.connect`, `dns.disconnect`,
-  `dns.record.set`, `dns.record.delete`, `dns.point`); tokens never are, and
+  `dns.record.set`, `dns.record.delete`, `dns.point`, `dns.zone.adopt`,
+  `dns.zone.release`); tokens never are, and
   TXT values longer than 60 characters are left out.
 
 **Secrets.** API tokens are stored in the database encrypted (AES-256-GCM)

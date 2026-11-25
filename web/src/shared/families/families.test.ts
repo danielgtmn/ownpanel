@@ -143,7 +143,7 @@ describe('labels', () => {
       ],
       zones: [{ connectionId: 1, connectionName: 'H', name: 'example.com' }],
     })
-    expect(familySummary(family)).toBe('1 site · 2 redirects · DNS connected')
+    expect(familySummary(family)).toBe('1 site · 2 redirects · DNS managed here')
   })
 
   it('uses two letters of the name for a tile', () => {
@@ -187,7 +187,7 @@ describe('families with e-mail', () => {
     const families = buildFamilies({ ...empty, mailDomains: [{ domain: 'Shop.Example.org.', active: false }] })
     expect(families.map((family) => family.domain)).toEqual(['example.org'])
     expect(families[0].mailDomains).toEqual([{ domain: 'shop.example.org', active: false }])
-    expect(familySummary(families[0])).toBe('E-mail · DNS not connected')
+    expect(familySummary(families[0])).toBe('E-mail · DNS managed elsewhere')
   })
 
   it('needs attention while a mail domain waits for its records, and is fine once it receives mail', () => {
