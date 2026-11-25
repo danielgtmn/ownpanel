@@ -39,6 +39,5 @@ All planned work is tracked as [issues](https://github.com/danielgtmn/ownpanel/i
 - **The panel stays reachable by IP address** after setup when no panel domain is set ([#33](https://github.com/danielgtmn/ownpanel/issues/33)).
 - **No per-site system users or quotas:** all site files belong to one user.
 - **Sign-in throttling** trusts `X-Forwarded-For` from local connections.
-- **No Content Security Policy** for the web interface.
 - **Only Hetzner** is supported as a DNS provider ([#18](https://github.com/danielgtmn/ownpanel/issues/18)).
 - Details on known gaps: [[Security|Security]].
