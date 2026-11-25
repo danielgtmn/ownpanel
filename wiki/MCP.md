@@ -59,8 +59,13 @@ Version ids come from `get_site`; a version id starts with a UTC timestamp. Erro
 | `delete_mail_alias` | `id`, `confirm_address` | Deletes an alias. `confirm_address` must equal its address. |
 | `list_mail_imports` | `id` (mailbox) | Lists the imports of mail into a mailbox, newest first: `id`, `source` (user and server, or file name), `state`, `error`, counts of messages copied, skipped as already there and failed, `bytes`, `created`, `finished`. Read-only. |
 | `cancel_mail_import` | `id` (mailbox), `import_id` | Stops an import that has not finished (copied mail stays), or removes a finished one from the list. |
+| `set_mailbox_display_name` | `id`, `display_name` | Sets the name shown as the sender and in address books (at most 64 characters, no `<>"`); empty removes it. |
+| `list_mail_organisations` | none | Lists the organisations you manage (admins: all) with `id`, `name`, `owner` and `domains`. Read-only. |
+| `set_mail_organisation` | `id` (optional), `name` | Creates an organisation, or renames the one with `id`. |
+| `delete_mail_organisation` | `id`, `confirm_name` | Deletes an organisation; its domains stand alone again. `confirm_name` must equal its name. |
+| `set_mail_domain_organisation` | `domain`, `organisation` | Puts a mail domain into one of your organisations, or lets it stand alone (`organisation` empty). Grouping domains of different owners is for admins only. |
 
-Tools that change something need a `write` token. Read-only tools are `list_sites`, `get_site`, `check_site_domains`, `list_redirects`, `get_mail_status`, `get_mail_records`, `get_mail_health`, `list_mail_domains`, `list_mailboxes`, `list_mail_aliases` and `list_mail_imports`. Tokens limited to sites cannot use the e-mail tools.
+Tools that change something need a `write` token. Read-only tools are `list_sites`, `get_site`, `check_site_domains`, `list_redirects`, `get_mail_status`, `get_mail_records`, `get_mail_health`, `list_mail_domains`, `list_mailboxes`, `list_mail_aliases`, `list_mail_imports` and `list_mail_organisations`. `list_mail_domains` also shows each domain's `organisation`, `list_mailboxes` the `display_name` and `app_passwords_only`. Tokens limited to sites cannot use the e-mail tools.
 
 ### `publish_files`
 
@@ -92,4 +97,4 @@ curl --fail-with-body -X POST --data-binary @site.zip '<url>'
 
 DNS connections and records cannot be managed through MCP; use the web interface or the [[API|API]].
 
-Mailboxes cannot be created and their passwords cannot be set through MCP, on purpose: mailbox passwords should never pass through an AI agent. For the same reason imports of mail cannot be started (they take another account's password) and mailboxes cannot be downloaded (it reads all their mail); use the web interface or the [[API|API]]. Use the web interface or the [[API|API]] (`POST /api/mail/domains/{domain}/mailboxes`, `POST /api/mail/mailboxes/{id}/password`).
+Mailboxes cannot be created and their passwords cannot be set through MCP, on purpose: mailbox passwords should never pass through an AI agent. The same holds for app passwords: no tool creates, shows or revokes them, and "mail programs only with app passwords" is changed only in the web interface or the API. For the same reason imports of mail cannot be started (they take another account's password) and mailboxes cannot be downloaded (it reads all their mail); use the web interface or the [[API|API]]. Use the web interface or the [[API|API]] (`POST /api/mail/domains/{domain}/mailboxes`, `POST /api/mail/mailboxes/{id}/password`).

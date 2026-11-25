@@ -61,9 +61,13 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 
 **Zone:** `{"connection_id", "connection_name", "name", "read_only", "nameservers": [..]}`. `nameservers` are the provider's nameservers to enter at the domain's registrar.
 
-**Mail domain:** `{"domain", "owner", "active", "activated_at", "checked_at", "problem", "mailboxes", "aliases", "dkim_selector", "dkim_record", "created_at"}`. `active` turns true once the domain's MX record (asked at its authoritative nameservers) points to the mail host; only then is mail received for it. `problem` says why it is not active yet. `dkim_record` is the public TXT value for `<dkim_selector>._domainkey.<domain>`; the private key is never returned.
+**Mail domain:** `{"domain", "owner", "active", "activated_at", "checked_at", "problem", "mailboxes", "aliases", "dkim_selector", "dkim_record", "created_at", "organisation"}`. `organisation` is `null` when the domain stands alone, else `{"id", "name", "own", "domains": [..]}`: `own` is false when an administrator put the domain into someone else's organisation, `domains` are its other domains you may see. `active` turns true once the domain's MX record (asked at its authoritative nameservers) points to the mail host; only then is mail received for it. `problem` says why it is not active yet. `dkim_record` is the public TXT value for `<dkim_selector>._domainkey.<domain>`; the private key is never returned.
 
-**Mailbox:** `{"id", "address", "domain", "local_part", "owner", "quota_bytes", "send_per_hour", "send_per_day", "created_at", "usage"}`. `quota_bytes` `0` means no limit. `usage` is `{"used_bytes", "messages", "blocked", "blocked_reason", "blocked_at"}` as reported by the mail service, or `null` when it could not be asked. Password hashes are never returned.
+**Mailbox:** `{"id", "address", "domain", "local_part", "owner", "quota_bytes", "send_per_hour", "send_per_day", "created_at", "display_name", "app_passwords_only", "usage"}`. `quota_bytes` `0` means no limit. `display_name` (may be empty) is shown as the sender's name; with `app_passwords_only` mail programs sign in only with app passwords. `usage` is `{"used_bytes", "messages", "blocked", "blocked_reason", "blocked_at"}` as reported by the mail service, or `null` when it could not be asked. Password hashes are never returned.
+
+**Organisation:** `{"id", "name", "owner", "domains": [..], "created_at"}`. Groups mail domains; mailboxes will be able to share only within one organisation (see [[E-Mail|E-Mail]]).
+
+**App password:** `{"id", "name", "created_at", "last_used_at", "last_used_network"}`. `last_used_network` is the /24 (IPv4) or /48 (IPv6) of the last sign-in, never the full address. Only the answer to creating one also has `"password"`; it is never shown again.
 
 **Alias:** `{"id", "address", "domain", "local_part", "catch_all", "targets": [..], "owner", "created_at"}`. Local part `*` is the domain's catch-all.
 
@@ -172,14 +176,22 @@ Entries of `GET /api/dns/zones` are Zone objects, with `nameservers`.
 | `POST` | `/api/mail/domains/{domain}/records` | mail write, own, and the domain's zone in exactly one of your own DNS connections | `{"confirm": false}` (empty body is the same) | Mail record changes. Without `confirm`, nothing is written if a change needs confirmation; otherwise every `create`, `replace` and `add` is written through the DNS provider and the domain is checked for activation. `409` if no (or more than one) own connection holds the zone or the mail host is not set |
 | `DELETE` | `/api/mail/domains/{domain}` | mail write, own | `{"confirm": "<domain>"}` | `204`; deletes all mailboxes, aliases and stored mail of the domain |
 | `GET` | `/api/mail/domains/{domain}/mailboxes` | mail read, own | | list of Mailbox, in the order they were created |
-| `POST` | `/api/mail/domains/{domain}/mailboxes` | mail write, own | `{"local_part", "password", "quota_bytes", "send_per_hour", "send_per_day"}` (limits optional) | `201` Mailbox. Defaults: 5 GiB, 100 per hour, 500 per day; members can only choose lower values. `409` if the address is taken (also by an alias) or you have 200 mailboxes |
+| `POST` | `/api/mail/domains/{domain}/mailboxes` | mail write, own | `{"local_part", "password", "display_name", "quota_bytes", "send_per_hour", "send_per_day"}` (display name and limits optional) | `201` Mailbox. Defaults: 5 GiB, 100 per hour, 500 per day; members can only choose lower values. `409` if the address is taken (also by an alias) or you have 200 mailboxes |
 | `GET` | `/api/mail/mailboxes` | mail read | | list of every Mailbox you may see |
 | `GET` | `/api/mail/mailboxes/{id}` | mail read, own | | Mailbox |
-| `PATCH` | `/api/mail/mailboxes/{id}` | mail write, own; only admins raise values | `{"quota_bytes", "send_per_hour", "send_per_day"}`, missing fields stay | Mailbox |
-| `POST` | `/api/mail/mailboxes/{id}/password` | mail write, own | `{"password"}` (10 to 200 characters) | `204` |
+| `PATCH` | `/api/mail/mailboxes/{id}` | mail write, own; only admins raise limits | `{"quota_bytes", "send_per_hour", "send_per_day", "display_name", "app_passwords_only"}`, missing fields stay. Display name: at most 64 characters, no line breaks, none of `<>"`; `""` removes it | Mailbox |
+| `POST` | `/api/mail/mailboxes/{id}/password` | mail write, own | `{"password"}` (10 to 200 characters; one that looks like an app password is refused) | `204` |
+| `GET` | `/api/mail/mailboxes/{id}/app-passwords` | mail read, own | | list of App password, oldest first |
+| `POST` | `/api/mail/mailboxes/{id}/app-passwords` | mail write, own | `{"name": "Phone"}` (the device or program, at most 64 characters) | `201` App password with `"password"`, shown this once. `409` at 50 app passwords. Also `201` when the mail server could not be updated yet (it is retried) |
+| `DELETE` | `/api/mail/mailboxes/{id}/app-passwords/{app_id}` | mail write, own | | `204`; mail programs using it are signed out at once |
 | `POST` | `/api/mail/mailboxes/{id}/unblock` | admin | | `204`; lifts a sending block of the mail service |
 | `GET` | `/api/mail/mailboxes/{id}/apple-profile` | mail read, own | | An unsigned configuration profile (`application/x-apple-aspen-config`, attachment `<address>.mobileconfig`) with one IMAP/SMTP account (`com.apple.mail.managed`) for the mailbox; no password inside. Its identifiers are stable, so installing it again replaces it |
 | `DELETE` | `/api/mail/mailboxes/{id}` | mail write, own | | `204`; the mail service deletes the stored mail (retried later if it cannot be reached) |
+| `PUT` | `/api/mail/domains/{domain}/organisation` | mail write, own; the organisation must be yours (admins: any) | `{"organisation": "<id>"}`, `""` lets the domain stand alone | Mail domain. `403` for members when the organisation or its domains belong to someone else: only admins group domains of different owners (recorded as such) |
+| `GET` | `/api/mail/organisations` | mail read | | list of Organisation you manage (admins: all), by name |
+| `POST` | `/api/mail/organisations` | mail write | `{"name"}` | `201` Organisation, yours. `409` at 20 organisations (members) |
+| `PATCH` | `/api/mail/organisations/{id}` | mail write, own | `{"name"}` | Organisation |
+| `DELETE` | `/api/mail/organisations/{id}` | mail write, own | | `204`; its domains stand alone again |
 | `GET` | `/api/mail/domains/{domain}/aliases` | mail read, own | | list of Alias |
 | `POST` | `/api/mail/domains/{domain}/aliases` | mail write, own | `{"local_part", "targets": ["a@example.com", …]}` | `201` Alias. 1 to 50 targets; `409` if the address is a mailbox or an alias already |
 | `GET` | `/api/mail/aliases` | mail read | | list of every Alias you may see |

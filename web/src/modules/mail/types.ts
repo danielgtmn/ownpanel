@@ -12,6 +12,25 @@ export type MailDomain = {
   dkim_selector: string
   dkim_record: string
   created_at: string
+  // The group of domains whose mailboxes may share with each other; null: the domain stands alone.
+  organisation: MailDomainOrganisation | null
+}
+
+export type MailDomainOrganisation = {
+  id: string
+  name: string
+  // false: an administrator put the domain into someone else's organisation.
+  own: boolean
+  // The organisation's other domains this person may see.
+  domains: string[]
+}
+
+export type MailOrganisation = {
+  id: string
+  name: string
+  owner: string
+  domains: string[]
+  created_at: string
 }
 
 export type MailboxUsage = {
@@ -33,7 +52,23 @@ export type Mailbox = {
   send_per_day: number
   created_at: string
   usage: MailboxUsage | null
+  // The sender's name shown with the address; "" when none is set.
+  display_name: string
+  // Mail programs can sign in only with app passwords, not with the mailbox's own password.
+  app_passwords_only: boolean
 }
+
+export type AppPassword = {
+  id: string
+  name: string
+  created_at: string
+  last_used_at: string | null
+  // The network of the last sign-in, like 203.0.113.0/24.
+  last_used_network: string
+}
+
+// Only the answer to creating one carries the password, and only once.
+export type NewAppPassword = AppPassword & { password: string }
 
 export type MailAlias = {
   id: number
@@ -115,6 +150,8 @@ export type RecordChange = {
 export type ApplyResult = { changes: RecordChange[]; applied: boolean }
 
 export type LimitsChange = { quota_bytes?: number; send_per_hour?: number; send_per_day?: number }
+
+export type MailboxChange = LimitsChange & { display_name?: string; app_passwords_only?: boolean }
 
 // Import and export of a mailbox (internal/mail/config/api.go, internal/panel/mailtransfer.go).
 

@@ -168,6 +168,49 @@ resets it, as today.
 - The activity log records creation and revocation with the device name, never the token.
 - No MCP tool ever creates or shows app passwords.
 
+**Groundwork (built):** display names, organisations, app passwords and
+"mail programs only with app passwords" exist in the panel and the mail
+service; the self-service area and its account API come next. How it is
+built, where it is more precise than the plan above:
+
+- **Configuration:** `Domain.Organisation` (an opaque id: `org-<random>`
+  for a group, `dom-<domain>` for a domain that stands alone; never the
+  owner), `Mailbox.DisplayName`, `Mailbox.AppPasswords []{ID, Name, MAC,
+  Created}`, `Mailbox.AppPasswordsOnly`, `Mailbox.Revision` and
+  `Config.AppPasswordKey`.
+- **App password key:** one server key (32 random bytes), made by the panel
+  once, kept sealed with `secret.key` and pushed in the configuration, which
+  already carries secrets. The MAC is HMAC-SHA-256 under it of the secret
+  together with the mailbox's storage id and the app password's id, so a MAC
+  is worth nothing for another mailbox or id. The panel needs the key to
+  create app passwords; the mail service will need it for the self-service
+  area. Tokens are `op_` + 16 base32 characters of id + `_` + 32 of secret
+  (160 bits); anything of that form is only ever checked as an app password,
+  so the panel refuses main passwords of that form.
+- **Revisions (Decision 6):** the counter belongs to the mail service. Each
+  change a mailbox makes there gets `max(pushed revision, own revision) + 1`
+  and is kept as an **overlay** per field (password, display name, the
+  switch, app passwords added, app passwords revoked), each part with its own
+  revision, in `mail.db`, written in the same transaction as the event. The
+  panel applies an event only if its revision is higher than the mailbox's,
+  stores that revision and pushes it; the mail service drops every part of
+  the overlay the pushed revision reaches. Changes the panel makes itself do
+  not touch the counter. If the panel changed the password, display name or
+  switch itself at or after the moment of the mailbox's change, the panel's
+  value wins (the activity log says so) and the overlay part is dropped by
+  the next push; app passwords added or revoked always count.
+- **Events:** `mailbox.password-changed`, `mailbox.display-name-changed`,
+  `mailbox.app-passwords-only`, `mailbox.app-password-created`,
+  `mailbox.app-password-revoked` (each with `Event.Account`: revision and the
+  new hash, name, switch, app password with MAC, or revoked id) and
+  `mailbox.app-password-used` (id and network, at most once an hour per app
+  password, revision 0).
+- **Organisations** are owned by one panel user. An admin who groups
+  domains of different owners does it with an organisation of their own or
+  of one of the owners; the activity log notes "domains of different
+  owners". A member sees an organisation an admin put their domain into only
+  by name, and can take the domain out.
+
 **Known limits:** the new Outlook syncs IMAP through Microsoft's cloud, so
 many people share a few Microsoft addresses. The per-network throttle counts
 those addresses higher, and the docs mention it.

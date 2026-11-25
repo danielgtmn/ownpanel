@@ -4,7 +4,13 @@ import { parseRoute } from '../../shared/routing/index.ts'
 import { mailRows } from './index.ts'
 import {
   aliasTitle,
+  appPasswordUse,
   changeSentence,
+  organisationDomainsText,
+  organisationSentence,
+  validateAppPasswordName,
+  validateDisplayName,
+  validateOrganisationName,
   changesToConfirm,
   clientRows,
   domainState,
@@ -208,5 +214,43 @@ describe('sidebar rows', () => {
   it('needs no hint for the only mail domain of a family', () => {
     const [only] = buildFamilies({ sites: [], zones: [], redirects: [], mailDomains: [{ domain: 'example.org', active: true }] })
     expect(mailRows(only)[0].hint).toBeUndefined()
+  })
+})
+
+describe('sender names, app passwords and organisations', () => {
+  it('accepts what the mail server accepts as a sender name', () => {
+    expect(validateDisplayName('')).toBeNull()
+    expect(validateDisplayName('  Anna Muster  ')).toBeNull()
+    expect(validateDisplayName('a'.repeat(64))).toBeNull()
+    expect(validateDisplayName('a'.repeat(65))).toMatch(/64/)
+    expect(validateDisplayName('Anna\nMuster')).toBe('Use a single line.')
+    expect(validateDisplayName('Anna <a@x>')).toMatch(/Leave out/)
+    expect(validateDisplayName('Anna; Max')).toMatch(/Leave out/)
+    expect(validateDisplayName('"Anna"')).toMatch(/Leave out/)
+  })
+
+  it('needs a name for an app password and an organisation', () => {
+    expect(validateAppPasswordName(' ')).toMatch(/Enter/)
+    expect(validateAppPasswordName('Phone')).toBeNull()
+    expect(validateAppPasswordName('x'.repeat(65))).toMatch(/64/)
+    expect(validateOrganisationName('')).toMatch(/Enter/)
+    expect(validateOrganisationName('Acme')).toBeNull()
+  })
+
+  it('tells when an app password was last used', () => {
+    const format = (value: string) => `at ${value}`
+    expect(appPasswordUse({ last_used_at: null, last_used_network: '' }, format)).toBe('Not used yet')
+    expect(appPasswordUse({ last_used_at: 'T', last_used_network: '203.0.113.0/24' }, format)).toBe(
+      'Last used at T from 203.0.113.0/24',
+    )
+    expect(appPasswordUse({ last_used_at: 'T', last_used_network: '' }, format)).toBe('Last used at T')
+  })
+
+  it('describes the organisation of a domain', () => {
+    expect(organisationSentence(null)).toBe('This domain stands alone.')
+    const organisation = { id: 'o1', name: 'Acme', own: true, domains: ['acme.org', 'acme.net'] }
+    expect(organisationSentence(organisation)).toBe('Part of Acme.')
+    expect(organisationDomainsText(organisation)).toBe('Together with acme.org, acme.net.')
+    expect(organisationDomainsText({ ...organisation, domains: [] })).toBe('No other domains you can see belong to it.')
   })
 })

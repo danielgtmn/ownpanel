@@ -48,7 +48,9 @@ const (
 
 // displayName normalizes and checks a display name (empty allowed).
 func displayName(v string) (string, error) {
-	d := strings.Join(strings.Fields(v), " ")
+	// Runs of spaces fold into one; line breaks and other control
+	// characters are refused, not folded, so nobody is surprised.
+	d := strings.Join(strings.FieldsFunc(v, func(r rune) bool { return r == ' ' }), " ")
 	if !config.ValidDisplayName(d) {
 		return "", errorf(Invalid, "the name can have at most %d characters, without line breaks and without < > or \"", config.MaxDisplayName)
 	}
