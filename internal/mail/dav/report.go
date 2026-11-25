@@ -90,9 +90,18 @@ func (h *Handler) query(w http.ResponseWriter, r *http.Request, pc *propCtx, res
 			writeError(w, http.StatusForbidden, cn("valid-filter"), "")
 			return
 		}
+		if countFilterElements(filter, 0) > davobj.MaxFilterElements*2 {
+			writeError(w, http.StatusForbidden, cn("supported-filter"), "")
+			return
+		}
 		f, err := parseCompFilter(filter.kids[0])
 		if err != nil {
 			writeError(w, http.StatusForbidden, cn("valid-filter"), "")
+			return
+		}
+		if davobj.CheckFilter(f) != nil {
+			// Too many filters, or nested too deeply.
+			writeError(w, http.StatusForbidden, cn("supported-filter"), "")
 			return
 		}
 		calFilter = &f
@@ -149,7 +158,11 @@ func (h *Handler) query(w http.ResponseWriter, r *http.Request, pc *propCtx, res
 	}
 	ms := newMS(w)
 	matched := 0
+	matcher := davobj.NewMatcher(rq.ctx, h.opts.QueryBudget)
 	for _, c := range candidates {
+		if rq.ctx.Err() != nil {
+			return // the client is gone
+		}
 		data, err := pc.objectData(c)()
 		if errors.Is(err, storage.ErrNoObject) {
 			continue
@@ -160,7 +173,24 @@ func (h *Handler) query(w http.ResponseWriter, r *http.Request, pc *propCtx, res
 		}
 		if calFilter != nil {
 			cal, err := davobj.DecodeCalendar(data)
-			if err != nil || !davobj.MatchCalendar(cal, *calFilter) {
+			if err != nil {
+				continue
+			}
+			ok, err := matcher.Match(cal, *calFilter)
+			matcher.Forget()
+			switch {
+			case errors.Is(err, davobj.ErrQueryBudget):
+				// RFC 6578 section 3.6's way of saying "not all of it".
+				if !ms.started {
+					writeError(w, http.StatusInsufficientStorage, dn("number-of-matches-within-limits"), "")
+					return
+				}
+				ms.status(w, res.path, http.StatusInsufficientStorage)
+				ms.end(w, "")
+				return
+			case err != nil:
+				return // the client is gone
+			case !ok:
 				continue
 			}
 		} else {
@@ -182,6 +212,18 @@ func (h *Handler) query(w http.ResponseWriter, r *http.Request, pc *propCtx, res
 		ms.response(w, c.path, props)
 	}
 	ms.end(w, "")
+}
+
+// countFilterElements counts the elements of a filter, bounded early.
+func countFilterElements(n *node, acc int) int {
+	acc++
+	for _, k := range n.kids {
+		if acc > 1000 {
+			return acc
+		}
+		acc = countFilterElements(k, acc)
+	}
+	return acc
 }
 
 func (n *node) textOrEmpty() string {
@@ -369,6 +411,9 @@ func (h *Handler) multiget(w http.ResponseWriter, pc *propCtx, res *resource, ro
 	pr := parsePropRequest(root)
 	ms := newMS(w)
 	for _, hn := range root.children(dn("href")) {
+		if pc.rq.ctx.Err() != nil {
+			return // the client is gone
+		}
 		target, raw, err := h.resolveHref(pc.rq, hn.text.String())
 		if err != nil {
 			h.logOrFail(w, ms, err)

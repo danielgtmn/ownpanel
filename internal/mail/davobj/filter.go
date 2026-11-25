@@ -99,66 +99,6 @@ type CompFilter struct {
 	Props        []PropFilter
 }
 
-// MatchCalendar tells whether the calendar object cal matches the filter
-// (whose top comp-filter names VCALENDAR).
-func MatchCalendar(cal *ical.Calendar, f CompFilter) bool {
-	tz := newTZ(cal)
-	if cal.Name != f.Name {
-		return f.IsNotDefined
-	}
-	if f.IsNotDefined {
-		return false
-	}
-	return matchComp(cal.Component, f, tz)
-}
-
-// matchComp tells whether c (whose name is f.Name) meets f's tests.
-func matchComp(c *ical.Component, f CompFilter, tz *tzSet) bool {
-	if f.TimeRange != nil && (c.Name == CompEvent || c.Name == CompToDo) &&
-		!overlaps(c, tz, f.TimeRange.Start, f.TimeRange.End) {
-		return false
-	}
-	for _, cf := range f.Comps {
-		found := false
-		for _, child := range c.Children {
-			if child.Name != cf.Name {
-				continue
-			}
-			if cf.IsNotDefined {
-				found = true
-				break
-			}
-			if matchComp(child, cf, tz) {
-				found = true
-				break
-			}
-		}
-		if found == cf.IsNotDefined {
-			return false
-		}
-	}
-	for _, pf := range f.Props {
-		props := c.Props.Values(pf.Name)
-		if pf.IsNotDefined {
-			if len(props) > 0 {
-				return false
-			}
-			continue
-		}
-		found := false
-		for i := range props {
-			if matchProp(&props[i], pf) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	return true
-}
-
 func matchProp(p *ical.Prop, f PropFilter) bool {
 	// A time-range on a property (rarely asked) does not narrow the
 	// answer: clients filter again.

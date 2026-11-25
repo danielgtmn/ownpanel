@@ -78,6 +78,9 @@ type Options struct {
 	// Authorizer decides who sees what; nil means OwnOnly.
 	Authorizer Authorizer
 	Logger     *slog.Logger
+	// QueryBudget is the time one calendar query may spend expanding
+	// recurrences; 0 means davobj.DefaultQueryBudget.
+	QueryBudget time.Duration
 	// Now is the clock (tests); nil means time.Now.
 	Now func() time.Time
 }

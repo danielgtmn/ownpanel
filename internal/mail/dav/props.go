@@ -573,7 +573,14 @@ func (h *Handler) propfindChildren(w http.ResponseWriter, ms *msWriter, pc *prop
 
 // eachObject calls fn for the objects of a collection (only those listed
 // in objs when not nil).
-func (h *Handler) eachObject(rq *request, res *resource, objs []storage.DAVObject, fn func(*resource) error) error {
+func (h *Handler) eachObject(rq *request, res *resource, objs []storage.DAVObject, fn0 func(*resource) error) error {
+	// Stop as soon as the client is gone.
+	fn := func(r *resource) error {
+		if err := rq.ctx.Err(); err != nil {
+			return err
+		}
+		return fn0(r)
+	}
 	if res.dir != nil {
 		for _, card := range res.dir.cards {
 			child := &resource{typ: resObject, path: objectPath(res.owner, res.kind, directoryName, card.name), owner: res.owner, kind: res.kind,
