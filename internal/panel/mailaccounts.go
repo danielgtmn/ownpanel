@@ -229,33 +229,29 @@ func (s *Service) SetMailDomainOrganisation(ctx context.Context, a Actor, domain
 	if orgID == md.OrganisationID {
 		return s.mailDomainViewFor(ctx, a, md)
 	}
-	detail := "stands alone"
 	if orgID != "" {
-		o, err := s.visibleOrganisation(ctx, a, orgID)
-		if err != nil {
+		if _, err := s.visibleOrganisation(ctx, a, orgID); err != nil {
 			return MailDomain{}, err
 		}
-		cross := o.OwnerID != md.OwnerID
-		for _, d := range o.Domains {
-			other, err := s.store.MailDomain(ctx, d)
-			if err != nil {
-				return MailDomain{}, storeError(err)
-			}
-			cross = cross || other.OwnerID != md.OwnerID
-		}
-		if cross && !a.administers() {
-			return MailDomain{}, errorf(Forbidden, "only administrators can group domains of different owners")
-		}
+	}
+	// The check for domains of different owners and the change are one
+	// transaction, so nobody slips a domain in between.
+	o, cross, err := s.store.GroupMailDomain(ctx, md.Domain, orgID, a.administers())
+	if errors.Is(err, store.ErrMixedOwners) {
+		return MailDomain{}, errorf(Forbidden, "only administrators can group domains of different owners")
+	}
+	if err != nil {
+		return MailDomain{}, storeError(err)
+	}
+	detail := "stands alone"
+	if orgID != "" {
 		detail = "into " + o.Name
-		if len(o.Domains) > 0 {
-			detail += " with " + strings.Join(o.Domains, ", ")
+		if others := visibleDomains(a, o); len(others) > 0 {
+			detail += " with " + strings.Join(others, ", ")
 		}
 		if cross {
 			detail += " (domains of different owners)"
 		}
-	}
-	if err := s.store.SetMailDomainOrganisation(ctx, md.Domain, orgID); err != nil {
-		return MailDomain{}, storeError(err)
 	}
 	s.record(ctx, a, "mail.domain.organisation", md.Domain, detail)
 	md, err = s.store.MailDomain(ctx, md.Domain)

@@ -127,21 +127,68 @@ func (s *Store) DeleteOrganisation(ctx context.Context, id string) error {
 	return nil
 }
 
-// SetMailDomainOrganisation puts a domain into an organisation ("": the
-// domain stands alone).
-func (s *Store) SetMailDomainOrganisation(ctx context.Context, domain, orgID string) error {
-	var v any
-	if orgID != "" {
-		v = orgID
-	}
-	res, err := s.db.ExecContext(ctx, `UPDATE mail_domains SET organisation_id = ? WHERE domain = ?`, v, domain)
-	if err != nil {
+// ErrMixedOwners: the organisation has, or would get, domains of
+// different owners (only admins may group those).
+var ErrMixedOwners = errors.New("the organisation holds domains of different owners")
+
+// GroupMailDomain puts a domain into organisation orgID ("": the domain
+// stands alone again). In the same transaction it checks whether the
+// organisation then holds domains of different owners (its owner counts
+// too): mixed reports it, and without allowMixed that is refused with
+// ErrMixedOwners. before is the organisation as it was (zero for "").
+func (s *Store) GroupMailDomain(ctx context.Context, domain, orgID string, allowMixed bool) (before Organisation, mixed bool, err error) {
+	err = s.tx(ctx, func(tx *sql.Tx) error {
+		var owner int64
+		if err := tx.QueryRow(`SELECT owner_id FROM mail_domains WHERE domain = ?`, domain).Scan(&owner); err != nil {
+			if noRows(err) {
+				return notFoundf("mail domain not found")
+			}
+			return err
+		}
+		var v any
+		if orgID != "" {
+			v = orgID
+			var created int64
+			err := tx.QueryRow(`SELECT o.id, o.owner_id, coalesce(u.name, ''), o.name, o.created_at
+				FROM organisations o LEFT JOIN users u ON u.id = o.owner_id WHERE o.id = ?`, orgID).
+				Scan(&before.ID, &before.OwnerID, &before.Owner, &before.Name, &created)
+			if noRows(err) {
+				return notFoundf("organisation not found")
+			}
+			if err != nil {
+				return err
+			}
+			before.CreatedAt, before.Domains, before.DomainOwners = unix(created), []string{}, map[string]int64{}
+			rows, err := tx.Query(`SELECT domain, owner_id FROM mail_domains WHERE organisation_id = ? ORDER BY domain`, orgID)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			mixed = before.OwnerID != owner
+			for rows.Next() {
+				var d string
+				var o int64
+				if err := rows.Scan(&d, &o); err != nil {
+					return err
+				}
+				before.Domains = append(before.Domains, d)
+				before.DomainOwners[d] = o
+				mixed = mixed || (o != owner && d != domain)
+			}
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			if mixed && !allowMixed {
+				return ErrMixedOwners
+			}
+		}
+		_, err := tx.Exec(`UPDATE mail_domains SET organisation_id = ? WHERE domain = ?`, v, domain)
 		return err
+	})
+	if err != nil {
+		return Organisation{}, false, err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return notFoundf("mail domain not found")
-	}
-	return nil
+	return before, mixed, nil
 }
 
 // ---- app passwords ----
