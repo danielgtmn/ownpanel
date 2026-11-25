@@ -159,13 +159,15 @@ func (c *Checker) Check(dir *directory.Directory, ip netip.Addr, address, passwo
 	now := c.opts.Now()
 
 	// Charge the attempt as a failure before any hashing, so parallel
-	// attempts cannot get past the limits; a success refunds it.
+	// attempts cannot get past the limits; a success refunds exactly this
+	// charge, never one of another attempt.
 	c.mu.Lock()
 	c.sweepLocked(now)
 	throttled := over(c.ips, ipk, now, IPLimit) || over(c.pairs, pk, now, PairLimit) ||
 		full(c.ips, ipk, c.max) || full(c.pairs, pk, c.max)
+	var ipw *window
 	if !throttled {
-		charge(c.ips, ipk, now)
+		ipw = charge(c.ips, ipk, now)
 		charge(c.pairs, pk, now)
 	}
 	c.mu.Unlock()
@@ -186,8 +188,11 @@ func (c *Checker) Check(dir *directory.Directory, ip netip.Addr, address, passwo
 				c.cache[ck] = now.Add(CacheTTL)
 			}
 			delete(c.pairs, pk)
-			if w := c.ips[ipk]; w != nil && w.n > 0 {
-				w.n--
+			// Only in the window this attempt was charged to: when that has
+			// expired meanwhile (the hash waited for a slot), the new one
+			// holds only failures of other attempts.
+			if c.ips[ipk] == ipw && ipw.n > 0 {
+				ipw.n--
 			}
 			c.mu.Unlock()
 			return *m, nil
@@ -254,13 +259,15 @@ func full[K comparable](m map[K]*window, k K, max int) bool {
 	return !ok && len(m) >= max
 }
 
-func charge[K comparable](m map[K]*window, k K, now time.Time) {
+// charge counts a failure for k and returns the window it went into.
+func charge[K comparable](m map[K]*window, k K, now time.Time) *window {
 	w := m[k]
 	if w == nil || now.Sub(w.start) >= Window {
 		w = &window{start: now}
 		m[k] = w
 	}
 	w.n++
+	return w
 }
 
 // addressFailed tracks failures of an existing mailbox across IPs and

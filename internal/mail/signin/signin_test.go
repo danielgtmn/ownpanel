@@ -2,7 +2,9 @@ package signin
 
 import (
 	"errors"
+	"fmt"
 	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -169,5 +171,79 @@ func TestEvent(t *testing.T) {
 	attempt(30)
 	if len(events) != 1 {
 		t.Fatalf("second event within the hour: %+v", events)
+	}
+}
+
+// A success refunds only its own charge: wrong guesses mixed with correct
+// sign-ins still reach IPLimit.
+func TestSuccessDoesNotResetIPLimit(t *testing.T) {
+	t.Parallel()
+	clk := &clock{t: time.Unix(1_800_000_000, 0)}
+	c := New(Options{Slots: slots, Now: clk.now})
+	dir := dirWith(t, "pw")
+	a := ip("192.0.2.1")
+	long := strings.Repeat("x", MaxPasswordBytes+1) // fails without hashing
+	for i := 0; i < IPLimit; i++ {
+		if _, err := c.Check(dir, a, fmt.Sprintf("victim%d@example.org", i), long); !errors.Is(err, ErrFailed) {
+			t.Fatalf("guess %d: %v", i, err)
+		}
+		if i < IPLimit-1 {
+			if _, err := c.Check(dir, a, "alice@example.org", "pw"); err != nil {
+				t.Fatalf("sign-in %d: %v", i, err)
+			}
+		}
+	}
+	if _, err := c.Check(dir, a, "victim@example.org", long); !errors.Is(err, ErrThrottled) {
+		t.Fatalf("mixed: %v", err)
+	}
+}
+
+// A success whose hash waited until its window had expired does not refund
+// a failure counted in the next window.
+func TestSlowSuccessRefundsOwnWindowOnly(t *testing.T) {
+	t.Parallel()
+	clk := &clock{t: time.Unix(1_800_000_000, 0)}
+	s := passwd.NewSlots(1)
+	h, err := s.Hash("pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := directory.New(&config.Config{
+		Hostname:  "mail.example.net",
+		Domains:   []config.Domain{{Name: "example.org"}},
+		Mailboxes: []config.Mailbox{{StorageID: mailtest.ID('a'), Address: "alice@example.org", PasswordHash: h}},
+	})
+	c := New(Options{Slots: s, Now: clk.now})
+	a := ip("192.0.2.1")
+	k := ipKey(a)
+	s <- struct{}{} // hold the only hash slot: the sign-in waits after its charge
+	done := make(chan error)
+	go func() {
+		_, err := c.Check(dir, a, "alice@example.org", "pw")
+		done <- err
+	}()
+	for {
+		c.mu.Lock()
+		charged := c.ips[k] != nil
+		c.mu.Unlock()
+		if charged {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	clk.add(Window)
+	long := strings.Repeat("x", MaxPasswordBytes+1)
+	for i := 0; i < 3; i++ {
+		c.Check(dir, a, "victim@example.org", long)
+	}
+	<-s
+	if err := <-done; err != nil {
+		t.Fatalf("sign-in: %v", err)
+	}
+	c.mu.Lock()
+	n := c.ips[k].n
+	c.mu.Unlock()
+	if n != 3 {
+		t.Fatalf("failures in the new window: %d, want 3", n)
 	}
 }
