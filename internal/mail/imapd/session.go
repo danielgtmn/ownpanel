@@ -207,10 +207,13 @@ func (s *session) Create(name string, options *imap.CreateOptions) error {
 	name = strings.TrimRight(name, string(delim))
 	t, err := s.resolve(s.srv.opts.Directory(), name)
 	if err != nil {
-		if _, _, _, ok := sharedName(name); ok {
+		if reserved(name) {
 			return errReserved
 		}
 		return err
+	}
+	if !t.shared && reserved(name) {
+		return errReserved
 	}
 	if err := t.need(config.Write); err != nil {
 		return err
@@ -244,7 +247,7 @@ func (s *session) Rename(from, to string, _ *imap.RenameOptions) error {
 	}
 	dst, err := s.resolve(dir, to)
 	if err != nil {
-		if _, _, _, ok := sharedName(to); ok && !src.shared {
+		if reserved(to) && !src.shared {
 			return errReserved
 		}
 		return err
@@ -254,6 +257,21 @@ func (s *session) Rename(from, to string, _ *imap.RenameOptions) error {
 	}
 	if err := src.need(config.Write); err != nil {
 		return err
+	}
+	if !src.shared {
+		// Neither the folder nor any folder below it may end up under the
+		// names kept for other mailboxes.
+		folders, err := s.srv.opts.Store.ListFolders(s.ctx, src.sid)
+		if err != nil {
+			return s.fail(err)
+		}
+		for _, f := range folders {
+			if f.Name == src.folder || strings.HasPrefix(f.Name, src.folder+string(delim)) {
+				if reserved(dst.folder + strings.TrimPrefix(f.Name, src.folder)) {
+					return errReserved
+				}
+			}
+		}
 	}
 	return s.fail(s.srv.opts.Store.RenameFolder(s.ctx, src.sid, src.folder, dst.folder))
 }
@@ -348,6 +366,11 @@ func (s *session) List(w *imapserver.ListWriter, ref string, patterns []string, 
 		return s.fail(err)
 	}
 	for _, f := range folders {
+		// An own folder named like a folder of a mailbox shared with the
+		// session is hidden by it (resolve gives the shared one).
+		if e, taken := byName[f.Name]; taken && !e.noSelect {
+			continue
+		}
 		byName[f.Name] = listEntry{folder: f, t: target{sid: s.id(), folder: f.Name, name: f.Name, rights: config.AllRights}}
 	}
 	// Parents that do not exist themselves (the hierarchy is only a naming

@@ -78,21 +78,38 @@ func sharedName(name string) (addr, rest string, hasRest, ok bool) {
 	return strings.ToLower(addr), rest, hasRest, true
 }
 
-// resolve maps a folder name to the mailbox and folder it means. Names of
-// mailboxes the session may not read answer like folders that do not
-// exist; "Shared/<address>" itself is not selectable (errNoSelect, with the
-// target filled in).
+// resolve maps a folder name to the mailbox and folder it means.
+// "Shared/<address>/…" of a mailbox the session may read is that mailbox;
+// "Shared/<address>" itself is not selectable (errNoSelect, with the target
+// filled in). Any other name is an own folder: names under Shared/ with an
+// address cannot be created or renamed to (reserved), but own folders of
+// such names from before (an import, another server) stay reachable as
+// long as no mailbox of that address is shared with the session.
 func (s *session) resolve(dir *directory.Directory, name string) (target, error) {
 	own := s.id()
 	if addr, rest, hasRest, ok := sharedName(name); ok {
-		m, found := dir.Mailbox(addr)
-		if !found || m.StorageID == own {
-			return target{}, errNoSuchFolder
+		if m, found := dir.Mailbox(addr); found && m.StorageID != own && dir.Rights(m.StorageID, own).Has(config.Read) {
+			return s.sharedTarget(dir, m, rest, hasRest)
 		}
-		r := dir.Rights(m.StorageID, own)
-		if !r.Has(config.Read) {
-			return target{}, errNoSuchFolder
-		}
+	}
+	folder, err := storage.NormalizeFolderName(name)
+	if err != nil {
+		return target{}, s.fail(err)
+	}
+	return target{sid: own, folder: folder, name: folder, rights: config.AllRights}, nil
+}
+
+// reserved tells whether name is kept for the folders of other mailboxes.
+func reserved(name string) bool {
+	_, _, _, ok := sharedName(name)
+	return ok
+}
+
+// sharedTarget is the folder rest of mailbox m, readable by the session.
+func (s *session) sharedTarget(dir *directory.Directory, m *config.Mailbox, rest string, hasRest bool) (target, error) {
+	own, addr := s.id(), m.Address
+	r := dir.Rights(m.StorageID, own)
+	{
 		t := target{sid: m.StorageID, shared: true, addr: addr, rights: r, keepSent: m.KeepSentCopy,
 			name: sharedRoot + "/" + addr}
 		if m.Shared() {
@@ -108,11 +125,6 @@ func (s *session) resolve(dir *directory.Directory, name string) (target, error)
 		t.folder, t.name = folder, t.name+"/"+folder
 		return t, nil
 	}
-	folder, err := storage.NormalizeFolderName(name)
-	if err != nil {
-		return target{}, s.fail(err)
-	}
-	return target{sid: own, folder: folder, name: folder, rights: config.AllRights}, nil
 }
 
 // need refuses with NO [NOPERM] unless t has right r.
