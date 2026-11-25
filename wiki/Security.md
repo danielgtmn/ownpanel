@@ -7,10 +7,11 @@ This page describes what ownpanel does to protect your server, in plain words, a
 ### Sign-in and sessions
 
 - Passwords are stored as **argon2id** hashes. Passwords must be 10 to 200 characters.
-- Sign-in sessions last 30 days. The cookie is `HttpOnly` and `SameSite=Strict`, and `Secure` when the request came over HTTPS. Only a SHA-256 hash of the session secret is stored.
-- Changing a password ends the person's other sessions.
+- A sign-in session ends after **3 days without use**, and in any case **30 days** after signing in. Only a SHA-256 hash of the session secret is stored.
+- Over HTTPS the cookie is `__Host-ownpanel_session`: `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/` and no `Domain`, so no other host and no plain-HTTP page can set or overwrite it. A cookie under the old name `ownpanel_session` is ignored over HTTPS and removed. Plain HTTP (local development) uses `ownpanel_session`.
+- Changing a password ends the person's other sessions. **Sign out everywhere** (account menu, or `POST /api/account/logout-everywhere`) ends all of them, the current one included.
 - A sign-in for a name that does not exist takes as long as one with a wrong password, and the message is the same.
-- Failed sign-ins are throttled: 5 per name and address in 15 minutes ([[Users and Access|Users-and-Access]]).
+- Failed sign-ins are throttled: 5 per name and address, and 20 per address across all names, in 15 minutes. The attempts are kept in the database, so a restart does not reset them. At most 16 password checks run at the same time; further sign-ins are turned away (`429`) instead of piling up memory ([[Users and Access|Users-and-Access]]).
 - The first admin can only be created with a one-time setup code, kept in a file only the daemon's user can read, and compared in constant time. Once someone exists, setup is closed.
 
 ### Requests from browsers
@@ -23,6 +24,7 @@ This page describes what ownpanel does to protect your server, in plain words, a
 
 - Tokens start with `op_` and are shown once. Only their SHA-256 hash is stored.
 - A token can be read-only and limited to chosen sites, and never has more rights than its user. Revoking works at once.
+- A token can expire (30, 90 or 365 days, or never; the web interface suggests 90 days). An expired token is refused exactly like an unknown one.
 - Tokens cannot create tokens or change passwords, and managing users needs an admin with a password sign-in or an unrestricted `write` token ([[Users and Access|Users-and-Access]]).
 - Sites you may not see answer "not found", so names do not leak.
 - Permission checks live in one place, `internal/panel`; the API and MCP only authenticate and translate ([[Architecture|Architecture]]).
@@ -60,13 +62,13 @@ One-time links are valid for 15 minutes, for one site, and work once. They are r
 
 ## Known gaps
 
-- **Sign-in throttling is in memory.** It resets when ownpaneld restarts. It also trusts `X-Forwarded-For` from local connections (that is how it sees the visitor's address behind Caddy), so a local user can get around it.
+- **Sign-in throttling trusts `X-Forwarded-For` from local connections** (that is how it sees the visitor's address behind Caddy), so a local user can get around the per-address limits.
 - **The panel listens on plain HTTP** on a loopback port (`127.0.0.1:8600` by default). HTTPS exists only through Caddy with `-panel-domain`. Do not expose the port directly. Local users on the server can reach it.
 - **No Content Security Policy** for the web interface yet (a test asserts the header is not set).
 - **No per-site system users or quotas.** All site files belong to one user, and there is no limit on how many sites or how much disk space a person can use, beyond the per-upload limits.
 - **Upload links are kept in memory**, so a restart invalidates them (safe, but surprising).
-- **No second factor** for sign-in, and no list of a person's sessions to end them one by one; changing the password ends the others.
-- **Access tokens do not expire.** Revoke them when they are no longer needed.
+- **No second factor** for sign-in, and no list of a person's sessions to end them one by one; "sign out everywhere" ends all of them.
+- **Access tokens may be created without expiry.** Revoke those when they are no longer needed.
 - **Not tested on a real server yet:** the installer, the updater and the hardening of the systemd units have not been verified in production ([[Roadmap|Roadmap]]).
 - **A rollback does not restore the database.** If a new version migrated it and the old one cannot read it, restore the backup made before the update.
 

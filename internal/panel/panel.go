@@ -80,9 +80,14 @@ type Service struct {
 	opts          caddy.Options
 	setupCodeFile string
 
-	now     func() time.Time
-	limiter *limiter
-	uploads uploads
+	now func() time.Time
+	// limiter throttles failed attempts per address and name (or setup
+	// code), clientLimiter per address; passwordChecks bounds the password
+	// checks in flight.
+	limiter        *limiter
+	clientLimiter  *limiter
+	passwordChecks chan struct{}
+	uploads        uploads
 
 	// syncMu serializes Sync so concurrent changes cannot load configs out
 	// of order.
@@ -121,7 +126,9 @@ func New(cfg Config) (*Service, error) {
 		opts:           cfg.Caddy,
 		setupCodeFile:  cfg.SetupCodeFile,
 		now:            time.Now,
-		limiter:        newLimiter(5, 15*time.Minute),
+		limiter:        newLimiter(cfg.Store, loginMaxPerName, loginWindow),
+		clientLimiter:  newLimiter(cfg.Store, loginMaxPerClient, loginWindow),
+		passwordChecks: make(chan struct{}, maxPasswordChecks),
 		unhealthyRetry: 2 * time.Second,
 		secrets:        cfg.Secrets,
 		serverIPs:      slices.Clone(cfg.ServerIPs),
@@ -137,6 +144,7 @@ func New(cfg Config) (*Service, error) {
 		s.interfaces = DetectAddresses
 	}
 	s.limiter.now = func() time.Time { return s.now() }
+	s.clientLimiter.now = s.limiter.now
 	if s.newProvider == nil {
 		s.newProvider = DefaultDNSProvider
 	}

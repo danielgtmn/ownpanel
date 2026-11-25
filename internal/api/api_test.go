@@ -103,7 +103,11 @@ func (e *env) do(r req) *httptest.ResponseRecorder {
 	e.t.Helper()
 	hr := httptest.NewRequest(r.method, r.path, strings.NewReader(r.body))
 	if r.cookie != "" {
-		hr.AddCookie(&http.Cookie{Name: SessionCookie, Value: r.cookie})
+		name := SessionCookie
+		if r.tls || r.headers["X-Forwarded-Proto"] == "https" {
+			name = SecureSessionCookie
+		}
+		hr.AddCookie(&http.Cookie{Name: name, Value: r.cookie})
 	}
 	if r.token != "" {
 		hr.Header.Set("Authorization", "Bearer "+r.token)
@@ -136,7 +140,7 @@ func (e *env) as(method, path, body string) *httptest.ResponseRecorder {
 func sessionCookie(t *testing.T, rec *httptest.ResponseRecorder) string {
 	t.Helper()
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == SessionCookie {
+		if (c.Name == SessionCookie || c.Name == SecureSessionCookie) && c.Value != "" {
 			return c.Value
 		}
 	}
@@ -287,10 +291,13 @@ func TestSessionLifecycleOverHTTP(t *testing.T) {
 		t.Fatalf("login: %d %s", rec.Code, rec.Body)
 	}
 	c := rec.Result().Cookies()[0]
-	if !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteStrictMode || c.Path != "/" || c.MaxAge != 30*24*3600 {
+	if c.Name != SecureSessionCookie || !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteStrictMode || c.Path != "/" || c.Domain != "" || c.MaxAge != 30*24*3600 {
 		t.Fatalf("cookie attributes: %+v", c)
 	}
 	other := c.Value
+	if rec := e.do(req{method: "GET", path: "/api/sites", cookie: other, tls: true}); rec.Code != 200 {
+		t.Fatalf("secure cookie over https: %d", rec.Code)
+	}
 
 	rec = e.as("PUT", "/api/account/password", `{"current":"root-password-1","new":"root-password-2"}`)
 	if rec.Code != 204 {
@@ -520,5 +527,83 @@ func TestUnknownAPIPathIsJSON404(t *testing.T) {
 	if rec.Code != 404 || rec.Header().Get("Content-Type") != "application/json" ||
 		rec.Body.String() != `{"error":"No such API endpoint"}`+"\n" {
 		t.Fatalf("got %d %q %q", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
+	}
+}
+
+// Over HTTPS only the prefixed cookie counts; one under the old name is
+// ignored and removed.
+func TestOldSessionCookieOverHTTPS(t *testing.T) {
+	e := newEnv(t) // e.cookie was set over plain HTTP, under the old name
+	hr := httptest.NewRequest("GET", "/api/sites", nil)
+	hr.TLS = &tls.ConnectionState{}
+	hr.AddCookie(&http.Cookie{Name: SessionCookie, Value: e.cookie})
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, hr)
+	if rec.Code != 401 {
+		t.Fatalf("old cookie over https: %d", rec.Code)
+	}
+	cs := rec.Result().Cookies()
+	if len(cs) != 1 || cs[0].Name != SessionCookie || cs[0].MaxAge != -1 {
+		t.Fatalf("old cookie not removed: %+v", cs)
+	}
+	// Over plain HTTP the prefixed name is not read.
+	hr = httptest.NewRequest("GET", "/api/sites", nil)
+	hr.AddCookie(&http.Cookie{Name: SecureSessionCookie, Value: e.cookie})
+	rec = httptest.NewRecorder()
+	e.h.ServeHTTP(rec, hr)
+	if rec.Code != 401 {
+		t.Fatalf("prefixed cookie over http: %d", rec.Code)
+	}
+}
+
+func TestSignOutEverywhere(t *testing.T) {
+	e := newEnv(t)
+	rec := e.do(req{method: "POST", path: "/api/login", body: `{"name":"root","password":"root-password-1"}`, tls: true})
+	other := sessionCookie(t, rec)
+	_, token := e.createToken("read", "null")
+
+	if rec := e.do(req{method: "POST", path: "/api/account/logout-everywhere", cookie: e.cookie}); rec.Code != 403 {
+		t.Fatalf("needs the CSRF header: %d", rec.Code)
+	}
+	if rec := e.do(req{method: "POST", path: "/api/account/logout-everywhere", token: token}); rec.Code != 403 {
+		t.Fatalf("not with a token: %d %s", rec.Code, rec.Body)
+	}
+	rec = e.as("POST", "/api/account/logout-everywhere", "")
+	if rec.Code != 204 || rec.Result().Cookies()[0].MaxAge != -1 {
+		t.Fatalf("logout everywhere: %d %+v", rec.Code, rec.Result().Cookies())
+	}
+	if rec := e.do(req{method: "GET", path: "/api/sites", cookie: e.cookie}); rec.Code != 401 {
+		t.Fatalf("this session must end: %d", rec.Code)
+	}
+	if rec := e.do(req{method: "GET", path: "/api/sites", cookie: other, tls: true}); rec.Code != 401 {
+		t.Fatalf("other session must end: %d", rec.Code)
+	}
+	if rec := e.do(req{method: "GET", path: "/api/sites", token: token}); rec.Code != 200 {
+		t.Fatalf("access tokens keep working: %d", rec.Code)
+	}
+}
+
+func TestTokenExpiryOverAPI(t *testing.T) {
+	e := newEnv(t)
+	rec := e.as("POST", "/api/tokens", `{"name":"ci","access":"read","sites":null,"expires_in_days":30}`)
+	if rec.Code != 201 {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	created := decode[struct {
+		ExpiresAt *string `json:"expires_at"`
+		Expired   bool    `json:"expired"`
+	}](t, rec)
+	if created.ExpiresAt == nil || created.Expired {
+		t.Fatalf("expiry missing: %s", rec.Body)
+	}
+	rec = e.as("POST", "/api/tokens", `{"name":"ci","access":"read","sites":null}`)
+	if rec.Code != 201 || !strings.Contains(rec.Body.String(), `"expires_at":null`) {
+		t.Fatalf("never: %d %s", rec.Code, rec.Body)
+	}
+	for _, days := range []string{"-1", "3651", `"30"`} {
+		rec = e.as("POST", "/api/tokens", `{"name":"ci","access":"read","sites":null,"expires_in_days":`+days+`}`)
+		if rec.Code != 400 {
+			t.Fatalf("days %s: %d %s", days, rec.Code, rec.Body)
+		}
 	}
 }

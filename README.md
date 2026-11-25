@@ -68,9 +68,13 @@ locked in the panel).
   scripts and CI (`Authorization: Bearer op_…`). A token is shown once. It has
   `read` or `write` access and either covers all of the user's sites or a
   chosen list (a limited token can publish to those sites but not create or
-  delete sites). It never has more rights than its user has at that moment.
-- Sign-ins last 30 days. After 5 failed sign-ins for a name from one address
-  within 15 minutes, further attempts are refused until the window passes.
+  delete sites). It never has more rights than its user has at that moment,
+  and can expire after 30, 90 or 365 days, or never.
+- A sign-in ends after 3 days without use and at the latest after 30 days;
+  "sign out everywhere" ends all of a person's sign-ins. After 5 failed
+  sign-ins for a name from one address (or 20 for any names) within 15
+  minutes, further attempts are refused until the window passes, also across
+  restarts.
 - Every change is recorded in the activity log, with the token's name when a
   token was used.
 

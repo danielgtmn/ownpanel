@@ -8,6 +8,7 @@ import {
   loadSession,
   markSetupComplete,
   signIn,
+  signOutEverywhereNow,
   signOutNow,
   SIGNED_OUT_NOTICE,
   toSessionState,
@@ -121,6 +122,16 @@ describe('signing in and out', () => {
     const fetchMock = mockFetch(new Response(null, { status: 204 }))
     await signOutNow()
     expect(call(fetchMock, 0)[0]).toBe('/api/logout')
+    expect(getSessionState()).toEqual({ status: 'signedOut', notice: null })
+  })
+
+  it('signs out everywhere', async () => {
+    mockFetch(json(anna))
+    await signIn('anna', 'correct horse battery')
+    const fetchMock = mockFetch(new Response(null, { status: 204 }))
+    await signOutEverywhereNow()
+    expect(call(fetchMock, 0)[0]).toBe('/api/account/logout-everywhere')
+    expect(call(fetchMock, 0)[1].method).toBe('POST')
     expect(getSessionState()).toEqual({ status: 'signedOut', notice: null })
   })
 })

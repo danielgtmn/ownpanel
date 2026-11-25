@@ -102,7 +102,7 @@ func newEnv(t *testing.T, panelDomain string, opts ...Option) *env {
 
 func (e *env) token(t *testing.T, access, name string, sites []string) string {
 	t.Helper()
-	tok, err := e.svc.CreateToken(context.Background(), e.admin, name, access, sites)
+	tok, err := e.svc.CreateToken(context.Background(), e.admin, name, access, sites, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

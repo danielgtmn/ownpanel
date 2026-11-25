@@ -15,6 +15,7 @@ func (s *Server) sessionRoutes(mux *http.ServeMux) {
 
 func (s *Server) accountRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/account/password", s.changePassword)
+	mux.HandleFunc("POST /api/account/logout-everywhere", s.logoutEverywhere)
 }
 
 func (s *Server) session(w http.ResponseWriter, r *http.Request) {
@@ -81,11 +82,21 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(SessionCookie); err == nil {
+	if c, err := r.Cookie(sessionCookieName(r)); err == nil {
 		if err := s.Panel.Logout(r.Context(), c.Value); err != nil {
 			writeFailure(w, err)
 			return
 		}
+	}
+	clearSessionCookie(w, r)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// logoutEverywhere ends all of the person's sessions, this one included.
+func (s *Server) logoutEverywhere(w http.ResponseWriter, r *http.Request) {
+	if err := s.Panel.SignOutEverywhere(r.Context(), actorOf(r)); err != nil {
+		writeFailure(w, err)
+		return
 	}
 	clearSessionCookie(w, r)
 	w.WriteHeader(http.StatusNoContent)

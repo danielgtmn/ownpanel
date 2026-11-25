@@ -47,7 +47,7 @@ func TestComposeKeepsAPIProtectedAndWebPublic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tok, err := svc.CreateToken(context.Background(), actor, "t", "write", nil)
+	tok, err := svc.CreateToken(context.Background(), actor, "t", "write", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
