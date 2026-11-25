@@ -18,6 +18,9 @@ type selected struct {
 	// the client asked for it, so not even its own read state changes.
 	readOnly bool
 	examine  bool
+	// lostWrite: the write right went away while the folder was open (the
+	// library still treats it as read-write).
+	lostWrite bool
 	// uids is the folder as the client knows it: sequence number i+1 is
 	// uids[i]. Only the session's goroutine changes it, and outside poll
 	// the client has been told about every entry (EXISTS).
@@ -484,6 +487,11 @@ func (s *session) Expunge(_ *imapserver.ExpungeWriter, uids *imap.UIDSet) error 
 		return err
 	}
 	sel := s.sel
+	if sel.lostWrite && uids == nil {
+		// CLOSE (or EXPUNGE) after the write right went away: as for a
+		// read-only folder, nothing is expunged, and CLOSE closes it.
+		return nil
+	}
 	if err := sel.mayChange(); err != nil {
 		return err
 	}

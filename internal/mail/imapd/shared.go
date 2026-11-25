@@ -184,7 +184,7 @@ func (s *session) reconfigure(dir *directory.Directory) {
 	s.mu.Lock()
 	sel := s.sel
 	s.mu.Unlock()
-	if sel != nil && sel.t.shared && !dir.Rights(sel.t.sid, s.id()).Has(config.Read) {
+	if sel != nil && sel.t.shared && !stillFits(dir, sel.t.sid, sel.t.reader, s.id()) {
 		s.revoked()
 	}
 }
@@ -197,30 +197,44 @@ func (s *session) revoked() {
 	s.ended = true
 	s.mu.Unlock()
 	if !ended {
-		s.conn.Bye("Access to this shared mailbox was removed")
+		s.conn.Bye("Access to this shared mailbox was removed or changed")
 	}
 }
 
 var errRevoked = &imap.Error{Type: imap.StatusResponseTypeNo, Code: imap.ResponseCodeNoPerm,
-	Text: "Access to this shared mailbox was removed"}
+	Text: "Access to this shared mailbox was removed or changed"}
 
 // checkSelected re-reads the rights on the selected folder: gone ends the
-// session, write taken away makes the selection read-only.
+// session, write taken away makes the selection read-only (lostWrite). A
+// change of the mailbox's kind ends the session too: the read state the
+// client was shown (the mailbox's or each reader's own) changes meaning.
 func (s *session) checkSelected(dir *directory.Directory) error {
 	sel := s.sel
 	if sel == nil || !sel.t.shared {
 		return nil
 	}
-	r := dir.Rights(sel.t.sid, s.id())
-	if !r.Has(config.Read) {
+	if !stillFits(dir, sel.t.sid, sel.t.reader, s.id()) {
 		s.revoked()
 		return errRevoked
 	}
-	sel.t.rights = r
-	if !r.Has(config.Write) {
-		sel.readOnly = true
+	m, _ := dir.MailboxByStorageID(sel.t.sid)
+	r := dir.Rights(sel.t.sid, s.id())
+	sel.t.rights, sel.t.keepSent = r, m.KeepSentCopy
+	if !r.Has(config.Write) && !sel.readOnly {
+		sel.readOnly, sel.lostWrite = true, true
 	}
 	return nil
+}
+
+// stillFits tells whether the selected folder of another mailbox sid may stay
+// open for the session's mailbox own: the read right is there and the
+// mailbox's kind (who keeps the read state) did not change.
+func stillFits(dir *directory.Directory, sid, reader, own string) bool {
+	m, ok := dir.MailboxByStorageID(sid)
+	if !ok || !dir.Rights(sid, own).Has(config.Read) {
+		return false
+	}
+	return m.Shared() == (reader != "")
 }
 
 // sharedFolders lists the folders of the mailboxes the session may read,
