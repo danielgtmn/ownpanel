@@ -2,6 +2,7 @@ package directory
 
 import (
 	"testing"
+	"time"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 )
@@ -30,10 +31,10 @@ func TestOverlayKeepsLocalChangesUntilPushed(t *testing.T) {
 	if r != 6 {
 		t.Fatalf("next %d", r)
 	}
-	o.Apply(config.AccountChange{Revision: r, PasswordHash: "new"})
+	o.Apply(config.AccountChange{Revision: r, PasswordHash: "new"}, time.Now())
 	// Then creates an app password (rev 7) and names itself (rev 8).
-	o.Apply(config.AccountChange{Revision: o.NextRevision(5), AppPassword: &config.AppPassword{ID: "local", Name: "Phone"}})
-	o.Apply(config.AccountChange{Revision: o.NextRevision(5), DisplayName: strp("Anna")})
+	o.Apply(config.AccountChange{Revision: o.NextRevision(5), AppPassword: &config.AppPassword{ID: "local", Name: "Phone"}}, time.Now())
+	o.Apply(config.AccountChange{Revision: o.NextRevision(5), DisplayName: strp("Anna")}, time.Now())
 	if o.Revision != 8 {
 		t.Fatalf("revision %d", o.Revision)
 	}
@@ -64,14 +65,14 @@ func TestOverlayKeepsLocalChangesUntilPushed(t *testing.T) {
 	}
 
 	// Revoking hides an app password the push still carries.
-	o.Apply(config.AccountChange{Revision: o.NextRevision(7), AppPasswordID: "p1"})
+	o.Apply(config.AccountChange{Revision: o.NextRevision(7), AppPasswordID: "p1"}, time.Now())
 	m = Merge(cfg, map[string]*Overlay{sidA: o}).Mailboxes[0]
 	if len(m.AppPasswords) != 1 || m.AppPasswords[0].ID != "local" {
 		t.Fatalf("after revoke %+v", m.AppPasswords)
 	}
 	// Creating and revoking before any push leaves nothing behind.
-	o.Apply(config.AccountChange{Revision: o.NextRevision(7), AppPassword: &config.AppPassword{ID: "tmp", Name: "x"}})
-	o.Apply(config.AccountChange{Revision: o.NextRevision(7), AppPasswordID: "tmp"})
+	o.Apply(config.AccountChange{Revision: o.NextRevision(7), AppPassword: &config.AppPassword{ID: "tmp", Name: "x"}}, time.Now())
+	o.Apply(config.AccountChange{Revision: o.NextRevision(7), AppPasswordID: "tmp"}, time.Now())
 	m = Merge(cfg, map[string]*Overlay{sidA: o}).Mailboxes[0]
 	if len(m.AppPasswords) != 1 {
 		t.Fatalf("tmp %+v", m.AppPasswords)

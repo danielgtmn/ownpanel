@@ -49,27 +49,28 @@ func loadOverlays(st *storage.Store) (map[string]*directory.Overlay, error) {
 }
 
 // pruneOverlays drops the overlay parts cfg includes (by each mailbox's
-// Revision) and the overlays of mailboxes cfg no longer has. Caller holds
+// Revision and the fields the panel set itself, see Overlay.PruneFor) and
+// the overlays of mailboxes cfg no longer has. Caller holds
 // loadMu.
 func (s *Server) pruneOverlays(ctx context.Context, cfg *config.Config) error {
 	if len(s.overlays) == 0 {
 		return nil
 	}
-	revs := make(map[string]int64, len(cfg.Mailboxes))
+	pushed := make(map[string]config.Mailbox, len(cfg.Mailboxes))
 	for _, m := range cfg.Mailboxes {
-		revs[m.StorageID] = m.Revision
+		pushed[m.StorageID] = m
 	}
 	next := maps.Clone(s.overlays)
 	changes := map[string][]byte{}
 	for id, o := range s.overlays {
-		rev, ok := revs[id]
+		m, ok := pushed[id]
 		if !ok {
 			delete(next, id)
 			changes[id] = nil
 			continue
 		}
 		cp := cloneOverlay(o)
-		cp.Prune(rev)
+		cp.PruneFor(m)
 		if cp.Empty() {
 			delete(next, id)
 			changes[id] = nil
@@ -138,12 +139,15 @@ func (s *Server) ApplyAccountChange(ctx context.Context, storageID string, ch co
 	}
 	ch.Revision = o.NextRevision(pushed.Revision)
 	ch.Network = ""
-	o.Apply(ch)
+	// The overlay keeps the event's time: the panel compares the same time
+	// with when it set the field itself (Overlay.PruneFor).
+	now := time.Now()
+	o.Apply(ch, now)
 	data, err := json.Marshal(o)
 	if err != nil {
 		return ch, err
 	}
-	ev := config.Event{At: time.Now(), Kind: kind, StorageID: storageID, Address: cur.Address, Detail: detail, Account: &ch}
+	ev := config.Event{At: now, Kind: kind, StorageID: storageID, Address: cur.Address, Detail: detail, Account: &ch}
 	if err := s.store.SaveAccountChange(ctx, storageID, data, ev); err != nil {
 		return ch, err
 	}

@@ -318,6 +318,9 @@ func (s *Service) SetMailboxPassword(ctx context.Context, a Actor, id int64, pas
 	if err != nil {
 		return newError(Internal, err)
 	}
+	// What the mailbox changed itself is recorded first, so the push below
+	// includes it and the reset takes effect at once (catchUpMailEvents).
+	s.catchUpMailEvents(ctx)
 	if err := s.store.SetMailboxPassword(ctx, id, hash); err != nil {
 		return storeError(err)
 	}

@@ -2,6 +2,7 @@ package directory
 
 import (
 	"slices"
+	"time"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 )
@@ -18,7 +19,11 @@ import (
 // value is the truth, also when the panel decided otherwise (an admin
 // changed the same field at the same time). Until then the overlay wins
 // over what a push says, so a push built before the panel saw the change
-// cannot undo it.
+// cannot undo it, with one exception: a field the panel set itself at or
+// after the time of the mailbox's change (config.Mailbox.PasswordSetAt and
+// the like) drops that part at once (PruneFor), so an admin's reset takes
+// effect with the push even before the panel saw the mailbox's change. The
+// panel decides the same way when it sees the change (the same times).
 type Overlay struct {
 	// Revision is the highest revision of any change in the overlay.
 	Revision         int64                `json:"revision"`
@@ -29,10 +34,12 @@ type Overlay struct {
 	Revoked          []Stamped[string]    `json:"revoked,omitempty"`
 }
 
-// Stamped is a value with the revision of the change that set it.
+// Stamped is a value with the revision and time (Unix seconds) of the
+// change that set it.
 type Stamped[T any] struct {
 	Value    T     `json:"value"`
 	Revision int64 `json:"revision"`
+	At       int64 `json:"at,omitempty"`
 }
 
 // StampedAppPassword is an app password created in the mail service.
@@ -50,19 +57,20 @@ func (o *Overlay) Empty() bool {
 // configuration has revision pushed.
 func (o *Overlay) NextRevision(pushed int64) int64 { return max(o.Revision, pushed) + 1 }
 
-// Apply records a change with its revision (ch.Revision must be
-// NextRevision). Only the fields of the change are touched.
-func (o *Overlay) Apply(ch config.AccountChange) {
-	r := ch.Revision
+// Apply records a change made at at (the time of its event) with its
+// revision (ch.Revision must be NextRevision). Only the fields of the
+// change are touched.
+func (o *Overlay) Apply(ch config.AccountChange, at time.Time) {
+	r, sec := ch.Revision, at.Unix()
 	o.Revision = max(o.Revision, r)
 	if ch.PasswordHash != "" {
-		o.PasswordHash = &Stamped[string]{ch.PasswordHash, r}
+		o.PasswordHash = &Stamped[string]{ch.PasswordHash, r, sec}
 	}
 	if ch.DisplayName != nil {
-		o.DisplayName = &Stamped[string]{*ch.DisplayName, r}
+		o.DisplayName = &Stamped[string]{*ch.DisplayName, r, sec}
 	}
 	if ch.AppPasswordsOnly != nil {
-		o.AppPasswordsOnly = &Stamped[bool]{*ch.AppPasswordsOnly, r}
+		o.AppPasswordsOnly = &Stamped[bool]{*ch.AppPasswordsOnly, r, sec}
 	}
 	if ch.AppPassword != nil {
 		o.Added = append(o.Added, StampedAppPassword{*ch.AppPassword, r})
@@ -71,7 +79,7 @@ func (o *Overlay) Apply(ch config.AccountChange) {
 		id := ch.AppPasswordID
 		// Created here and not pushed yet: forget it altogether.
 		o.Added = slices.DeleteFunc(o.Added, func(a StampedAppPassword) bool { return a.ID == id })
-		o.Revoked = append(o.Revoked, Stamped[string]{id, r})
+		o.Revoked = append(o.Revoked, Stamped[string]{id, r, sec})
 	}
 }
 
@@ -88,6 +96,23 @@ func (o *Overlay) Prune(pushed int64) {
 	}
 	o.Added = slices.DeleteFunc(o.Added, func(a StampedAppPassword) bool { return a.Revision <= pushed })
 	o.Revoked = slices.DeleteFunc(o.Revoked, func(r Stamped[string]) bool { return r.Revision <= pushed })
+}
+
+// PruneFor is Prune for the pushed mailbox m, and also drops the password,
+// display name or switch the panel set itself at or after the time of the
+// mailbox's change (m.PasswordSetAt and the like).
+func (o *Overlay) PruneFor(m config.Mailbox) {
+	o.Prune(m.Revision)
+	setByPanel := func(at, set int64) bool { return set > 0 && at <= set }
+	if o.PasswordHash != nil && setByPanel(o.PasswordHash.At, m.PasswordSetAt) {
+		o.PasswordHash = nil
+	}
+	if o.DisplayName != nil && setByPanel(o.DisplayName.At, m.DisplayNameSetAt) {
+		o.DisplayName = nil
+	}
+	if o.AppPasswordsOnly != nil && setByPanel(o.AppPasswordsOnly.At, m.AppPasswordsOnlySetAt) {
+		o.AppPasswordsOnly = nil
+	}
 }
 
 // MergeInto applies the overlay to m (the mailbox as pushed).

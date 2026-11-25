@@ -170,6 +170,15 @@ type Mailbox struct {
 	// mail service keeps newer changes of its own over what this
 	// configuration says until a push carries a Revision that includes them.
 	Revision int64 `json:"revision,omitempty"`
+	// PasswordSetAt, DisplayNameSetAt and AppPasswordsOnlySetAt are when
+	// the panel last set that field itself (an admin; Unix seconds, 0:
+	// never). A change of the same field the mailbox made in the mail
+	// service at or before that time is dropped even if Revision does not
+	// include it yet, so a reset by an admin takes effect with this push.
+	// The panel decides the same way when it records the change.
+	PasswordSetAt         int64 `json:"password_set_at,omitempty"`
+	DisplayNameSetAt      int64 `json:"display_name_set_at,omitempty"`
+	AppPasswordsOnlySetAt int64 `json:"app_passwords_only_set_at,omitempty"`
 }
 
 // Alias delivers mail for Address to Targets.
@@ -419,7 +428,8 @@ func validateMailbox(m Mailbox) error {
 	if !passwd.WellFormed(m.PasswordHash) {
 		return fmt.Errorf("mailbox %s: password hash is not an argon2id hash", m.Address)
 	}
-	if m.QuotaBytes < 0 || m.SendPerHour < 0 || m.SendPerDay < 0 || m.Revision < 0 {
+	if m.QuotaBytes < 0 || m.SendPerHour < 0 || m.SendPerDay < 0 || m.Revision < 0 ||
+		m.PasswordSetAt < 0 || m.DisplayNameSetAt < 0 || m.AppPasswordsOnlySetAt < 0 {
 		return fmt.Errorf("mailbox %s: negative limit", m.Address)
 	}
 	if !ValidDisplayName(m.DisplayName) {

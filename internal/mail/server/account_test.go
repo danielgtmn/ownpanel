@@ -210,3 +210,59 @@ func TestAccountChangeChecks(t *testing.T) {
 		t.Fatalf("organisation %q", o)
 	}
 }
+
+// TestAdminSetFieldDropsOverlay: an admin resets the password (and turns
+// the switch off) in the panel after the mailbox changed them here, before
+// the panel saw the change. The push carries when the panel set the
+// fields, so the admin's values take effect at once, without waiting for
+// the panel to record the event; a later change of the mailbox stays.
+func TestAdminSetFieldDropsOverlay(t *testing.T) {
+	ctx := context.Background()
+	in := run(t, t.TempDir(), socketDir(t))
+	defer in.stop(t)
+	cfg := testConfig(t)
+	cfg.Mailboxes[0].PasswordHash = mailtest.CheapHash("old-password")
+	if err := in.client.Load(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	leaked := mailtest.CheapHash("self-chosen")
+	if _, err := in.srv.ApplyAccountChange(ctx, idAlice, config.AccountChange{PasswordHash: leaked}); err != nil {
+		t.Fatal(err)
+	}
+	on := true
+	if _, err := in.srv.ApplyAccountChange(ctx, idAlice, config.AccountChange{AppPasswordsOnly: &on}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := in.srv.ApplyAccountChange(ctx, idAlice, config.AccountChange{DisplayName: strp("Mine")}); err != nil {
+		t.Fatal(err)
+	}
+	// The panel's push: still revision 0, but the password and the switch
+	// were set by an admin now (the display name was not).
+	adminHash := mailtest.CheapHash("admin-reset")
+	set := time.Now().Add(time.Second).Unix()
+	cfg.Mailboxes[0].PasswordHash, cfg.Mailboxes[0].PasswordSetAt = adminHash, set
+	cfg.Mailboxes[0].AppPasswordsOnly, cfg.Mailboxes[0].AppPasswordsOnlySetAt = false, set
+	if err := in.client.Load(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := in.srv.Directory().MailboxByStorageID(idAlice)
+	if m.PasswordHash != adminHash || m.AppPasswordsOnly {
+		t.Fatalf("admin's reset waits for the event: %+v", m)
+	}
+	if m.DisplayName != "Mine" {
+		t.Fatalf("other field dropped: %q", m.DisplayName)
+	}
+	// A change after the admin's reset is kept.
+	time.Sleep(time.Until(time.Unix(set+1, 0)))
+	later := mailtest.CheapHash("after-reset")
+	if _, err := in.srv.ApplyAccountChange(ctx, idAlice, config.AccountChange{PasswordHash: later}); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Limits.MaxRecipients = 9
+	if err := in.client.Load(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := in.srv.Directory().MailboxByStorageID(idAlice); m.PasswordHash != later {
+		t.Fatal("a change after the reset was dropped")
+	}
+}

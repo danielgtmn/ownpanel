@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -527,5 +528,99 @@ func TestAdminChangeKeepsOtherFields(t *testing.T) {
 	}
 	if got.DisplayName != "Team" || !got.AppPasswordsOnly || got.Revision != 2 {
 		t.Fatalf("mailbox %+v", got)
+	}
+}
+
+// TestAdminResetCatchesUpEvents: before an admin's password reset is
+// pushed, the panel records what the mailbox changed in the mail service,
+// so the push carries a revision that includes it and the reset takes
+// effect at once. The push also says when the admin set the password.
+func TestAdminResetCatchesUpEvents(t *testing.T) {
+	ctx := context.Background()
+	w := newMailWorld(t)
+	svc := w.svc
+	box, _ := svc.store.Mailbox(ctx, w.bobBox)
+	selfHash, _ := hashPassword("chosen-by-the-mailbox")
+	w.mail.set(func(f *fakeMail) {
+		f.events = []config.Event{{ID: 1, At: w.now.Add(-time.Minute), Kind: config.EventPasswordChanged, StorageID: box.StorageID,
+			Account: &config.AccountChange{Revision: 3, PasswordHash: selfHash}}}
+	})
+	if err := svc.SetMailboxPassword(ctx, bob, w.bobBox, "admin-password-1"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := svc.store.Mailbox(ctx, w.bobBox)
+	pm := pushedMailbox(t, w.mail.last(), "info@bobsite.example.com")
+	if pm.Revision != 3 || pm.PasswordHash != got.PasswordHash || got.PasswordHash == selfHash {
+		t.Fatalf("pushed revision %d", pm.Revision)
+	}
+	if pm.PasswordSetAt != w.now.Unix() || pm.DisplayNameSetAt != 0 {
+		t.Fatalf("set at %d %d", pm.PasswordSetAt, pm.DisplayNameSetAt)
+	}
+	// The mailbox's earlier change is in the activity log as taken, before
+	// the reset.
+	if !strings.Contains(activityText(t, w), "mail.mailbox.password-changed") {
+		t.Fatal("event not recorded")
+	}
+	if act, _, _, _ := lastActivity(t, w); act != "mail.mailbox.password" {
+		t.Fatalf("last %s", act)
+	}
+}
+
+// TestFailingAccountEventDoesNotBlock: an account event that cannot be
+// recorded holds back only the later events of the same mailbox; the rest
+// goes on, and the held back ones are recorded in order later.
+func TestFailingAccountEventDoesNotBlock(t *testing.T) {
+	ctx := context.Background()
+	w := newMailWorld(t)
+	svc := w.svc
+	bobBox, _ := svc.store.Mailbox(ctx, w.bobBox)
+	rootBox, _ := svc.store.Mailbox(ctx, w.rootBox)
+	fail := true
+	svc.failAccountEvent = func(e config.Event) error {
+		if fail && e.StorageID == bobBox.StorageID {
+			return errors.New("disk full")
+		}
+		return nil
+	}
+	ev := func(id int64, sid string, rev int64, name string) config.Event {
+		return config.Event{ID: id, At: w.now, Kind: config.EventDisplayNameChanged, StorageID: sid,
+			Account: &config.AccountChange{Revision: rev, DisplayName: strp(name)}}
+	}
+	w.mail.set(func(f *fakeMail) {
+		f.events = []config.Event{
+			ev(1, bobBox.StorageID, 1, "First"),
+			ev(2, rootBox.StorageID, 1, "Root"),
+			ev(3, bobBox.StorageID, 2, "Second"),
+			{ID: 4, At: w.now, Kind: "listener.failed", Detail: "port 25"},
+		}
+	})
+	if err := svc.recordMailEvents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := svc.store.Mailbox(ctx, w.rootBox); got.DisplayName != "Root" {
+		t.Fatal("a failing event of another mailbox blocked this one")
+	}
+	if !strings.Contains(activityText(t, w), "port 25") {
+		t.Fatal("a failing account event blocked other events")
+	}
+	if got, _ := svc.store.Mailbox(ctx, w.bobBox); got.Revision != 0 {
+		t.Fatalf("bob %+v", got)
+	}
+	// Still failing: nothing changes, nothing is lost.
+	if err := svc.recordMailEvents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fail = false
+	if err := svc.recordMailEvents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := svc.store.Mailbox(ctx, w.bobBox); got.DisplayName != "Second" || got.Revision != 2 {
+		t.Fatalf("held back events not recorded in order: %+v", got)
+	}
+	if pm := pushedMailbox(t, w.mail.last(), "info@bobsite.example.com"); pm.Revision != 2 {
+		t.Fatalf("pushed revision %d", pm.Revision)
+	}
+	if m, _ := svc.store.Settings(ctx); m[keyMailEventsPending] != "" {
+		t.Fatalf("pending left: %s", m[keyMailEventsPending])
 	}
 }

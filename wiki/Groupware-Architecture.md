@@ -232,6 +232,20 @@ service. How it is built, where it is more precise than the plan above:
   part is dropped by the next push; the panel keeps one such time per
   field, so an admin renaming a mailbox never undoes the mailbox's own
   password change. App passwords added or revoked always count.
+- **Admin changes take effect at once:** before the panel saves a password
+  reset, a display name or the switch, it records the mail service's
+  pending events, so the push that follows carries a revision that
+  includes the mailbox's own changes. The push also carries when the panel
+  set each field (`Mailbox.PasswordSetAt`, `DisplayNameSetAt`,
+  `AppPasswordsOnlySetAt`, Unix seconds); overlay parts keep the time of
+  their event, and the mail service drops a part of the same field that is
+  not newer, even before the panel saw the event. Both sides compare the
+  same two times, so they agree on who won.
+- **Events that cannot be recorded** (the panel's database failed) do not
+  stop the others: such an event and every later account event of the same
+  mailbox wait in the setting `mail_events_pending` and are tried again,
+  in order, first on every round; events of other mailboxes and all other
+  events go on. Until then the mail service keeps the mailbox's change.
 - **Events:** `mailbox.password-changed`, `mailbox.display-name-changed`,
   `mailbox.app-passwords-only`, `mailbox.app-password-created`,
   `mailbox.app-password-revoked` (each with `Event.Account`: revision and the

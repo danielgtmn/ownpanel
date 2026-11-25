@@ -2,6 +2,7 @@ package panel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -106,7 +107,8 @@ func (s *Service) buildMailConfig(ctx context.Context) (*config.Config, error) {
 				StorageID: m.StorageID, Address: m.LocalPart + "@" + m.Domain, PasswordHash: m.PasswordHash,
 				QuotaBytes: m.QuotaBytes, SendPerHour: m.SendPerHour, SendPerDay: m.SendPerDay,
 				DisplayName: m.DisplayName, AppPasswords: byMailbox[m.ID], AppPasswordsOnly: m.AppPasswordsOnly,
-				Revision: m.Revision,
+				Revision: m.Revision, PasswordSetAt: unixOrZero(m.AdminPasswordAt),
+				DisplayNameSetAt: unixOrZero(m.AdminDisplayNameAt), AppPasswordsOnlySetAt: unixOrZero(m.AdminAppPasswordsOnlyAt),
 			})
 		}
 	}
@@ -126,6 +128,13 @@ func (s *Service) buildMailConfig(ctx context.Context) (*config.Config, error) {
 		return nil, fmt.Errorf("the mail configuration is not valid: %w", err)
 	}
 	return cfg, nil
+}
+
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
 }
 
 // logLeftOut logs what buildMailConfig left out of the configuration, once
@@ -236,42 +245,82 @@ var importEventActions = map[string]string{
 	config.EventImportInterrupted: "mail.mailbox.import-interrupted",
 }
 
+// keyMailEventsPending holds the account events that could not be
+// recorded yet (JSON), oldest first; see recordMailEvents.
+const keyMailEventsPending = "mail_events_pending"
+
+// maxPendingAccountEvents bounds keyMailEventsPending.
+const maxPendingAccountEvents = 1000
+
 // recordMailEvents copies new events of the mail service into the
 // activity log and remembers how far it got.
+//
+// Account events (applyAccountEvent) of one mailbox must be recorded in
+// order. One that cannot be recorded (the database failed) is kept in
+// keyMailEventsPending together with every later account event of the
+// same mailbox, and tried again first on every round; events of other
+// mailboxes and all other events go on. Until then the mail service keeps
+// the mailbox's change (its overlay), so nothing is lost.
 func (s *Service) recordMailEvents(ctx context.Context) error {
 	if s.mail == nil {
 		return nil
 	}
+	s.mailEventsMu.Lock()
+	defer s.mailEventsMu.Unlock()
 	m, err := s.store.Settings(ctx)
 	if err != nil {
 		return err
 	}
 	cursor, _ := strconv.ParseInt(m[keyMailEventsCursor], 10, 64)
+	var pending []config.Event
+	if v := m[keyMailEventsPending]; v != "" {
+		if err := json.Unmarshal([]byte(v), &pending); err != nil {
+			slog.Error("dropping damaged pending mailbox changes", "err", err)
+			pending = nil
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, mailTimeout)
 	defer cancel()
-	events, err := s.mail.Events(ctx, cursor)
-	if err != nil {
-		return err
+	events, fetchErr := s.mail.Events(ctx, cursor)
+
+	held := map[string]bool{} // storage ids whose account events wait
+	var still []config.Event
+	accountChanged := false
+	apply := func(e config.Event, retry bool) {
+		if held[e.StorageID] {
+			still = append(still, e)
+			return
+		}
+		changed, err := s.applyAccountEvent(ctx, e)
+		if err != nil {
+			held[e.StorageID] = true
+			still = append(still, e)
+			if !retry {
+				slog.Error("recording a mailbox change failed; it is tried again", "kind", e.Kind, "err", err)
+			}
+			return
+		}
+		accountChanged = accountChanged || changed
 	}
+	for _, e := range pending {
+		apply(e, true)
+	}
+	if len(still) > 0 && len(pending) > 0 {
+		slog.Warn("mailbox changes of the mail server are still not recorded", "count", len(still))
+	}
+
 	last := cursor
 	refusals := blocklistRefusals(m)
-	refused, accountChanged := false, false
+	refused := false
 	for _, e := range events {
 		if e.ID <= last {
 			continue
 		}
+		last = e.ID
 		if accountEventKinds[e.Kind] {
-			changed, err := s.applyAccountEvent(ctx, e)
-			if err != nil {
-				// Stop before this event: it is applied on the next round.
-				slog.Error("recording a mailbox change failed", "kind", e.Kind, "err", err)
-				break
-			}
-			last = e.ID
-			accountChanged = accountChanged || changed
+			apply(e, false)
 			continue
 		}
-		last = e.ID
 		target := maskSecretZones(e.Address)
 		if target == "" {
 			target = e.StorageID
@@ -306,22 +355,48 @@ func (s *Service) recordMailEvents(ctx context.Context) error {
 		}
 		s.record(ctx, mailActor, action, target, detail)
 	}
-	if last == cursor {
-		return nil
+	if len(still) > maxPendingAccountEvents {
+		slog.Error("too many mailbox changes of the mail server not recorded; dropping the newest", "dropped", len(still)-maxPendingAccountEvents)
+		still = still[:maxPendingAccountEvents]
 	}
-	values := map[string]string{keyMailEventsCursor: strconv.FormatInt(last, 10)}
-	if refused {
-		values[keyBlocklistRefused] = encodeRefusals(refusals, s.now())
+	pendingValue := ""
+	if len(still) > 0 {
+		b, err := json.Marshal(still)
+		if err != nil {
+			return err
+		}
+		pendingValue = string(b)
 	}
-	if err := s.store.PutSettings(ctx, values); err != nil {
-		return err
+	if last != cursor || pendingValue != m[keyMailEventsPending] || refused {
+		values := map[string]string{keyMailEventsCursor: strconv.FormatInt(last, 10), keyMailEventsPending: pendingValue}
+		if refused {
+			values[keyBlocklistRefused] = encodeRefusals(refusals, s.now())
+		}
+		if err := s.store.PutSettings(ctx, values); err != nil {
+			return err
+		}
 	}
 	if accountChanged {
 		// The mail service keeps its own change until a push includes it;
 		// push now rather than on the next round.
-		return s.mailSync(ctx)
+		if err := s.mailSync(ctx); err != nil {
+			return err
+		}
 	}
-	return nil
+	return fetchErr
+}
+
+// catchUpMailEvents records what mailboxes changed themselves in the mail
+// service before an admin changes their password, display name or switch:
+// the push that follows then carries a revision that includes those
+// changes, and the admin's value takes effect at once rather than after
+// the next round of the background loop. (The push also says when the
+// admin set the field, so the mail service gives way even if this fails;
+// see config.Mailbox.PasswordSetAt.) Failures are logged only.
+func (s *Service) catchUpMailEvents(ctx context.Context) {
+	if err := s.recordMailEvents(ctx); err != nil && ctx.Err() == nil {
+		slog.Warn("reading the mail server's events before a change failed", "err", err)
+	}
 }
 
 // runMail is the mail part of Run: it activates domains whose MX record

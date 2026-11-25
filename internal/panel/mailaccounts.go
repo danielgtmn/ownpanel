@@ -313,6 +313,9 @@ func (s *Service) SetMailboxAccount(ctx context.Context, a Actor, id int64, in M
 	if next.DisplayName == m.DisplayName && next.AppPasswordsOnly == m.AppPasswordsOnly {
 		return mailboxView(m, nil), nil
 	}
+	// What the mailbox changed itself is recorded first, so the push below
+	// includes it (see catchUpMailEvents).
+	s.catchUpMailEvents(ctx)
 	// Only the fields that change are written (and get the admin's time),
 	// so the mailbox's own change of the other one is not discarded.
 	var dn *string
@@ -493,6 +496,11 @@ var accountEventKinds = map[string]bool{
 // the activity log gets an entry for every applied change (never a hash or
 // MAC).
 func (s *Service) applyAccountEvent(ctx context.Context, e config.Event) (bool, error) {
+	if s.failAccountEvent != nil {
+		if err := s.failAccountEvent(e); err != nil {
+			return false, err
+		}
+	}
 	ch := e.Account
 	if ch == nil || !config.ValidStorageID(e.StorageID) {
 		return false, nil
