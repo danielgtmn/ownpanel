@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -402,5 +403,68 @@ func TestQueueSurvivesRestart(t *testing.T) {
 			t.Fatal("still queued")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A stale list of due recipients (or two attempts at once) never delivers
+// a recipient twice: each attempt claims its rows first.
+func TestClaimPreventsDoubleDelivery(t *testing.T) {
+	e := newEnv(t, mailtest.SinkPlain)
+	e.enqueue("alice@example.org", "bob@remote.test")
+	ms, err := e.store.QueueDue(context.Background(), e.clock.Now(), 10)
+	if err != nil || len(ms) != 1 {
+		t.Fatalf("due %v %d", err, len(ms))
+	}
+	m := ms[0]
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		e.q.sem <- struct{}{}
+		e.q.wg.Add(1)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			e.q.work(groupKey{m.ID, "remote.test"}, m, slices.Clone(m.Rcpts))
+		}()
+	}
+	wg.Wait()
+	// And once more with the now stale list.
+	e.q.sem <- struct{}{}
+	e.q.wg.Add(1)
+	e.q.work(groupKey{m.ID, "remote.test"}, m, slices.Clone(m.Rcpts))
+	if got := e.sink.Messages(); len(got) != 1 {
+		t.Fatalf("delivered %d times", len(got))
+	}
+	if e.length() != 0 {
+		t.Fatal("still queued")
+	}
+}
+
+// The failed state is saved before the bounce goes out, so a crash in
+// between cannot bounce the same message again after the restart.
+func TestFailedStateSavedBeforeBounce(t *testing.T) {
+	e := newEnv(t, mailtest.SinkPlain)
+	e.sink.SetRcpt(func(string) error {
+		return &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 1, 1}, Message: "no"}
+	})
+	e.enqueue("alice@example.org", "nobody@remote.test")
+	ms, err := e.store.QueueDue(context.Background(), e.clock.Now(), 10)
+	if err != nil || len(ms) != 1 {
+		t.Fatal(err)
+	}
+	var state storage.RcptState = -1
+	e.q.opts.Event = func(config.Event) {
+		m, err := e.store.QueueMessage(context.Background(), ms[0].ID)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		state = m.Rcpts[0].State
+	}
+	e.q.Flush()
+	if state != storage.RcptFailed {
+		t.Fatalf("state when bouncing: %v", state)
+	}
+	if len(e.inbox()) != 1 || e.length() != 0 {
+		t.Fatal("bounce")
 	}
 }

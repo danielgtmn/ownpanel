@@ -23,6 +23,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -52,6 +53,9 @@ const (
 	connLimit = 30 * time.Minute
 	// dueBatch is how many messages one dispatch round looks at.
 	dueBatch = 200
+	// claimLease is how long a delivery attempt holds its recipients;
+	// should it never finish (crash), they are due again after it.
+	claimLease = connLimit
 )
 
 // Options configure a Queue.
@@ -341,9 +345,29 @@ func (q *Queue) work(key groupKey, m storage.QueuedMessage, rcpts []storage.Queu
 		q.Kick()
 	}()
 	ctx := q.workCtx
+	// Claim the recipients first: the list may be stale (another attempt
+	// finished after it was read), and a recipient must never be
+	// delivered by two attempts.
+	ids := make([]int64, len(rcpts))
+	for i, r := range rcpts {
+		ids[i] = r.ID
+	}
+	claimed, err := q.opts.Store.QueueClaim(context.Background(), ids, q.now(), q.now().Add(claimLease))
+	if err != nil {
+		q.log.Error("mail queue: claim", "err", err)
+		return
+	}
+	rcpts = slices.DeleteFunc(rcpts, func(r storage.QueuedRcpt) bool { return !slices.Contains(claimed, r.ID) })
+	if len(rcpts) == 0 {
+		return
+	}
 	results := q.deliverDomain(ctx, m, key.domain, rcpts)
 	if ctx.Err() != nil {
-		// Shutting down: the rows stay as they are and are tried again.
+		// Shutting down: give the claimed rows back as they were, so they
+		// are tried again right after the next start.
+		if err := q.opts.Store.QueueUpdate(context.Background(), rcpts); err != nil {
+			q.log.Error("mail queue: release", "err", err)
+		}
 		return
 	}
 	now := q.now()
@@ -379,12 +403,14 @@ func (q *Queue) work(key groupKey, m storage.QueuedMessage, rcpts []storage.Queu
 	if ok > 0 {
 		q.log.Info("mail queue: delivered", "domain", key.domain, "recipients", ok)
 	}
-	if len(failed) > 0 {
-		q.bounce(context.Background(), m, failed)
-	}
+	// Save the outcome before bouncing: a crash in between may lose a
+	// bounce, but can never send the same one again and again.
 	if err := q.opts.Store.QueueUpdate(context.Background(), rcpts); err != nil {
 		q.log.Error("mail queue: update", "err", err)
 		return
+	}
+	if len(failed) > 0 {
+		q.bounce(context.Background(), m, failed)
 	}
 	if _, err := q.opts.Store.QueueRemoveIfDone(context.Background(), m.ID); err != nil {
 		q.log.Error("mail queue: remove", "err", err)

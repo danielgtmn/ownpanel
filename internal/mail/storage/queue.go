@@ -182,6 +182,32 @@ func (s *Store) QueueNext(ctx context.Context) (t time.Time, ok bool, err error)
 	return time.Unix(next.Int64, 0), true, nil
 }
 
+// QueueClaim takes the recipients (by ID) that are still pending and due
+// at now for one delivery attempt: their next try moves to until, so no
+// other attempt picks them up meanwhile (and they are tried again after
+// until should the attempt never finish). It returns the IDs it claimed;
+// only those may be delivered.
+func (s *Store) QueueClaim(ctx context.Context, ids []int64, now, until time.Time) ([]int64, error) {
+	var claimed []int64
+	err := s.write(ctx, func(tx *sql.Tx, _ *changes) error {
+		claimed = claimed[:0]
+		for _, id := range ids {
+			res, err := tx.Exec(`UPDATE queue_rcpts SET next_try = ? WHERE id = ? AND state = 0 AND next_try <= ?`,
+				until.Unix(), id, now.Unix())
+			if err != nil {
+				return err
+			}
+			if n, err := res.RowsAffected(); err != nil {
+				return err
+			} else if n == 1 {
+				claimed = append(claimed, id)
+			}
+		}
+		return nil
+	})
+	return claimed, err
+}
+
 // QueueUpdate saves state, attempts, next try and last error of recipients
 // (by ID).
 func (s *Store) QueueUpdate(ctx context.Context, rcpts []QueuedRcpt) error {
