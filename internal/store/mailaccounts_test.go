@@ -9,8 +9,8 @@ import (
 // of the domain's owner and the change are one transaction.
 func TestGroupMailDomain(t *testing.T) {
 	s, _ := open(t)
-	root, _ := s.CreateUser(ctx, "root", "pw-hash", RoleAdmin, false)
-	bob, _ := s.CreateUser(ctx, "bob", "pw-hash", RoleMember, false)
+	root, _ := s.CreateUser(ctx, "root", "", RoleAdmin, false)
+	bob, _ := s.CreateUser(ctx, "bob", "", RoleMember, false)
 	for _, d := range []struct {
 		name  string
 		owner int64

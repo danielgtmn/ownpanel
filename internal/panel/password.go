@@ -1,18 +1,21 @@
 package panel
 
 import (
-	"sync"
-
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/passwd"
 )
 
-// hashSlots bounds concurrent hashing: each one takes 64 MiB.
-var hashSlots = passwd.NewSlots(4)
+// Password length of panel users, in characters (sesam is configured with
+// the same bounds; checking here first keeps the panel's wording). They are
+// the rules mailboxes get too (internal/passwd).
+const (
+	minPasswordLen = passwd.MinLength
+	maxPasswordLen = passwd.MaxLength
+)
 
-// validatePassword applies the rules for new passwords (shared with the
-// mail service's self-service area). Panel users get the same rules as
-// mailboxes, including the one against the form of app passwords.
+// validatePassword applies the rules for new passwords, shared with the
+// mail service's self-service area, including the one against the form of
+// app passwords.
 func validatePassword(pw string) error {
 	if err := config.CheckNewPassword(pw); err != nil {
 		return errorf(Invalid, "%s", err.Error())
@@ -20,18 +23,8 @@ func validatePassword(pw string) error {
 	return nil
 }
 
-func hashPassword(pw string) (string, error) { return hashSlots.Hash(pw) }
+// Mailbox passwords are hashed here (panel users' passwords by sesam).
+// mailboxHashSlots bounds concurrent hashing: each one takes 64 MiB.
+var mailboxHashSlots = passwd.NewSlots(4)
 
-// verifyPassword compares pw with an encoded argon2id hash in constant time.
-// Malformed hashes never match.
-func verifyPassword(encoded, pw string) bool { return hashSlots.Verify(encoded, pw) }
-
-// dummyHash is verified against when a user does not exist, so a login for
-// an unknown name takes as long as one with a wrong password.
-var dummyHash = sync.OnceValue(func() string {
-	h, err := hashPassword(randomString(32))
-	if err != nil {
-		panic(err)
-	}
-	return h
-})
+func hashPassword(pw string) (string, error) { return mailboxHashSlots.Hash(pw) }

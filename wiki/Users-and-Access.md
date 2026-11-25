@@ -5,9 +5,9 @@
 | Role | Can |
 |---|---|
 | **Admin** | see and manage all sites; manage users; read the activity log; plus everything a member can |
-| **Member** | create sites and see and manage only the sites they created; change their own password; create access tokens; connect their own DNS accounts |
+| **Member** | create sites and see and manage only the sites they created; change their own password and e-mail address; create access tokens; connect their own DNS accounts |
 
-The first admin is created during setup. Admins add further people under **People** (`POST /api/users`) with a name, a password and a role. Admins can change a person's role or set a new password, and delete a person.
+The first admin is created during setup. Admins add further people under **People** (`POST /api/users`) with a name, an optional e-mail address, a password and a role. Admins can change a person's role, e-mail address or password, and delete a person.
 
 Refused by design:
 
@@ -19,6 +19,18 @@ Refused by design:
 
 - **User name:** 3 to 32 characters: lowercase letters, digits, dots, underscores and hyphens. Input is trimmed and lowercased.
 - **Password:** 10 to 200 characters. No other rules. Stored as an argon2id hash.
+- **E-mail address:** optional. Each address can belong to one person only (compared without regard to case). People can sign in with it instead of their name, and a link to choose a new password goes only to it. Admins set it when adding or editing a person; everyone can set or remove their own under **E-mail address** in the account menu.
+
+## Forgot password
+
+The sign-in screen offers **Forgot your password?** only when the panel can send e-mail itself: the mail service is connected, the panel has a domain, and that domain or one of its parent domains is an active mail domain. The link is sent from `no-reply@` that mail domain, through the panel's own mail server.
+
+- Enter the e-mail address of your account. The answer is the same whether or not the address belongs to someone, so it does not reveal who has an account.
+- The e-mail contains a link to `https://<panel domain>/#/reset-password?token=…`, built from the panel domain at the time of the request. It works **once** and for **1 hour**.
+- Choosing a new password there ends all of that person's sessions; then they sign in with the new password.
+- At most 3 links per address and 20 requests per network address within an hour.
+- A person without an e-mail address cannot reset their password themselves; an admin sets a new one under **People**.
+- If the e-mail cannot be handed to the mail server, this is written to the log and to the activity log (`account.password_reset_failed`); the person still sees the same answer.
 
 ## Setup code
 
@@ -29,20 +41,21 @@ While no user exists, ownpaneld writes a one-time code to `<data>/setup-code` (m
 - Signing in with name and password starts a session. It ends after **3 days without use**; every use pushes that back, but never past **30 days** after signing in. Then you sign in again.
 - Over HTTPS the browser gets the cookie `__Host-ownpanel_session` (`Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, no `Domain`). Over plain HTTP, as in local development, it is `ownpanel_session` without `Secure`. After an update from a version that used `ownpanel_session` over HTTPS, the old cookie is removed and you sign in once more.
 - Only a hash of the session secret is stored.
-- Changing your password ends all your other sessions; an admin setting another person's password ends all of that person's sessions.
+- Changing your password ends all your other sessions. An admin setting a person's password, and choosing a new password with a link, ends all of that person's sessions (for an admin setting their own password under **People**: this one too).
 - Signing out ends the session. **Sign out everywhere** in the account menu ends all of your sessions on every device, this one included; access tokens keep working. Expired sessions are cleaned up whenever someone signs in.
 
 Requests made with the cookie that change something must send the header `X-Ownpanel-Request: 1`; see [[API|API]].
 
 ## Login throttling
 
-After 5 failed attempts for the same name from the same address within 15 minutes, further attempts are refused (`429`, "try again in N minutes") until the oldest failure leaves the window. A successful sign-in clears the count. The same limit applies to the setup code and to the "current password" check when changing a password. In addition, one address may fail at most 20 sign-ins within 15 minutes across all names. Attempts are stored (hashed) in the database, so restarting ownpaneld does not reset them.
+After 5 failed attempts for the same account within 15 minutes, from whatever address, further attempts are refused (`429`, "try again in N minutes") until the window passes. A successful sign-in clears the count. The same limit applies to the "current password" check when changing a password, and to the setup code (per address). In addition, one address may try at most 20 sign-ins within 15 minutes across all names. The counts are stored in the database, so restarting ownpaneld does not reset them.
+
+Because the limit is per account, someone who knows a name or address can keep that person from signing in for 15 minutes at a time; see [[Security|Security]].
 
 Checking a password takes a lot of memory and time on purpose. At most 16 sign-ins and password changes are checked at once; while all are busy, further ones get `429` ("try again in a minute") right away.
 
 A name that does not exist takes as long as a wrong password, so the answer does not reveal which names exist.
 
-The counter is kept in memory; see [[Security|Security]].
 
 ## Access tokens
 
@@ -77,7 +90,7 @@ Access tokens let scripts, CI and AI agents use the API and MCP without a passwo
 | Add, check, remove DNS connections | yes | no | yes | no |
 | List DNS connections | yes | yes | yes | no |
 | Manage access tokens | yes | no | no | no |
-| Change own password | yes | no | no | no |
+| Change own password or e-mail address | yes | no | no | no |
 | List, create, change, delete users; read activity log | admins only | no | admins only | no |
 
 Notes:
@@ -96,6 +109,9 @@ Admins can read the newest entries (web interface: **Activity**; API: `GET /api/
 | `setup` | first admin created |
 | `account.login` | someone signed in |
 | `account.password` | someone changed their own password |
+| `account.email` | someone changed or removed their own e-mail address |
+| `account.password_reset` | someone chose a new password with a link from an e-mail |
+| `account.password_reset_failed` | a link to choose a new password could not be sent |
 | `account.logout_everywhere` | someone signed out everywhere |
 | `user.create`, `user.update`, `user.delete` | admin changes to people |
 | `token.create`, `token.delete` | token created or revoked |
@@ -105,4 +121,4 @@ Admins can read the newest entries (web interface: **Activity**; API: `GET /api/
 | `dns.connect`, `dns.disconnect` | DNS connection added or removed |
 | `dns.record.set`, `dns.record.delete`, `dns.point` | DNS changes |
 
-Passwords, tokens and DNS API tokens are never logged; TXT values longer than 60 characters are replaced by their length. Failed sign-ins are not logged.
+Passwords, tokens, links to choose a new password and DNS API tokens are never logged, and e-mail addresses are not written to the activity log; TXT values longer than 60 characters are replaced by their length. Failed sign-ins are not logged.

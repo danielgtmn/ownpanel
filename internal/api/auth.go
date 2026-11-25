@@ -11,10 +11,13 @@ func (s *Server) sessionRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/setup", s.setup)
 	mux.HandleFunc("POST /api/login", s.login)
 	mux.HandleFunc("POST /api/logout", s.logout)
+	mux.HandleFunc("POST /api/password-reset", s.requestPasswordReset)
+	mux.HandleFunc("POST /api/password-reset/confirm", s.resetPassword)
 }
 
 func (s *Server) accountRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/account/password", s.changePassword)
+	mux.HandleFunc("PUT /api/account/email", s.setOwnEmail)
 	mux.HandleFunc("POST /api/account/logout-everywhere", s.logoutEverywhere)
 }
 
@@ -34,7 +37,9 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 		SetupComplete bool        `json:"setup_complete"`
 		User          *panel.User `json:"user"`
 		Via           *string     `json:"via"`
-	}{SetupRequired: setup, SetupComplete: complete}
+		// PasswordReset: a forgotten password can be reset by e-mail.
+		PasswordReset bool `json:"password_reset"`
+	}{SetupRequired: setup, SetupComplete: complete, PasswordReset: s.Panel.PasswordResetAvailable(r.Context())}
 	if a := actorOf(r); a.Via != "" {
 		u, err := s.Panel.Me(r.Context(), a)
 		if err != nil {
@@ -55,7 +60,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &body, `{"setup_code": "…", "name": "…", "password": "…"}`) {
 		return
 	}
-	u, secret, err := s.Panel.Setup(r.Context(), body.Code, panel.Credentials{Name: body.Name, Password: body.Password, ClientIP: clientIP(r)})
+	u, secret, err := s.Panel.Setup(r.Context(), body.Code, credentials(r, body.Name, body.Password))
 	if err != nil {
 		writeFailure(w, err)
 		return
@@ -72,7 +77,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &body, `{"name": "…", "password": "…"}`) {
 		return
 	}
-	u, secret, err := s.Panel.Login(r.Context(), panel.Credentials{Name: body.Name, Password: body.Password, ClientIP: clientIP(r)})
+	u, secret, err := s.Panel.Login(r.Context(), credentials(r, body.Name, body.Password))
 	if err != nil {
 		writeFailure(w, err)
 		return
@@ -110,9 +115,59 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &body, `{"current": "…", "new": "…"}`) {
 		return
 	}
-	if err := s.Panel.ChangePassword(r.Context(), actorOf(r), body.Current, body.New, clientIP(r)); err != nil {
+	if err := s.Panel.ChangePassword(r.Context(), actorOf(r), body.Current, body.New); err != nil {
 		writeFailure(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) setOwnEmail(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email string `json:"email"`
+	}
+	if !decodeJSON(w, r, &body, `{"email": "…"} ("" removes it)`) {
+		return
+	}
+	u, err := s.Panel.SetOwnEmail(r.Context(), actorOf(r), body.Email)
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, u)
+}
+
+// requestPasswordReset sends a reset link if the address belongs to
+// someone. The answer is the same either way.
+func (s *Server) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email string `json:"email"`
+	}
+	if !decodeJSON(w, r, &body, `{"email": "…"}`) {
+		return
+	}
+	if err := s.Panel.RequestPasswordReset(r.Context(), body.Email, clientIP(r)); err != nil {
+		writeFailure(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Token    string `json:"token"`
+		Password string `json:"password"`
+	}
+	if !decodeJSON(w, r, &body, `{"token": "…", "password": "…"}`) {
+		return
+	}
+	if err := s.Panel.ResetPassword(r.Context(), body.Token, body.Password); err != nil {
+		writeFailure(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func credentials(r *http.Request, name, password string) panel.Credentials {
+	return panel.Credentials{Name: name, Password: password, ClientIP: clientIP(r), UserAgent: r.UserAgent()}
 }

@@ -259,7 +259,7 @@ func TestAuthenticationAndCSRF(t *testing.T) {
 func TestSessionLifecycleOverHTTP(t *testing.T) {
 	e := newEmptyEnv(t)
 	rec := e.do(req{method: "GET", path: "/api/session"})
-	if rec.Body.String() != `{"setup_required":true,"setup_complete":false,"user":null,"via":null}`+"\n" {
+	if rec.Body.String() != `{"setup_required":true,"setup_complete":false,"user":null,"via":null,"password_reset":false}`+"\n" {
 		t.Fatalf("before setup: %s", rec.Body)
 	}
 	rec = e.do(req{method: "POST", path: "/api/setup", body: `{"setup_code":"WRONG","name":"root","password":"root-password-1"}`})
@@ -377,10 +377,11 @@ func TestLoginThrottledOverHTTP(t *testing.T) {
 	if rec.Code != 429 || !strings.Contains(rec.Body.String(), "Too many failed attempts") {
 		t.Fatalf("got %d %s", rec.Code, rec.Body)
 	}
-	// Behind the local proxy the forwarded address counts.
+	// The limit per name holds for the account, whatever address the
+	// attempts come from, so another client is turned away too.
 	rec = e.do(req{method: "POST", path: "/api/login", body: `{"name":"root","password":"root-password-1"}`,
 		remote: "127.0.0.1:9", headers: map[string]string{"X-Forwarded-For": "198.51.100.7"}})
-	if rec.Code != 200 {
+	if rec.Code != 429 {
 		t.Fatalf("other client: %d %s", rec.Code, rec.Body)
 	}
 }

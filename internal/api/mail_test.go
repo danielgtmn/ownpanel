@@ -55,6 +55,8 @@ func (f *fakeMailService) CheckOutbound(context.Context) (config.OutboundCheck, 
 	return config.OutboundCheck{OK: true}, nil
 }
 
+func (f *fakeMailService) Send(context.Context, config.OutgoingMail) error { return nil }
+
 // mxHere: every domain's MX points to mail.example.net.
 type mxHere struct{}
 

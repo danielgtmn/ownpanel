@@ -16,6 +16,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danielgtmn/sesam"
+	"github.com/danielgtmn/sesam/plugins/password"
+
 	"github.com/danielgtmn/ownpanel/internal/store"
 )
 
@@ -26,8 +29,9 @@ const (
 	SessionLifetime    = 30 * 24 * time.Hour
 )
 
-// Sign-in throttling: failed attempts per address and name, and per address
-// across all names (so trying many names from one place is slowed too).
+// Sign-in throttling: failed attempts per user (or unknown name), and per
+// client address across all names (so trying many names from one place is
+// slowed too). sesam counts them; the setup code uses the per-name limit.
 const (
 	loginWindow       = 15 * time.Minute
 	loginMaxPerName   = 5
@@ -44,23 +48,33 @@ const TokenPrefix = "op_"
 
 var userNameRe = regexp.MustCompile(`^[a-z0-9._-]{3,32}$`)
 
-// User is what callers see of a user. The password hash never leaves the
-// package.
+// User is what callers see of a user. Email is "" when none is set.
 type User struct {
 	ID        int64     `json:"id"`
 	Name      string    `json:"name"`
+	Email     string    `json:"email"`
 	Role      string    `json:"role"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
-func userView(u store.User) User {
-	return User{ID: u.ID, Name: u.Name, Role: u.Role, CreatedAt: u.CreatedAt}
+func userView(u store.User, au sesam.User) User {
+	return User{ID: u.ID, Name: u.Name, Email: au.Email, Role: u.Role, CreatedAt: u.CreatedAt}
 }
 
-// clientKey is the unit sign-in limits count per client in: the address
-// for IPv4, the /48 for IPv6 (one customer often gets a whole /48, and a
-// /64 is cheap to vary), like the mail service's sign-in throttle. Anything
-// that is not an address is used as it is.
+// Credentials are a sign-in attempt. Name is the user name or the e-mail
+// address. ClientIP keys the attempt limit.
+type Credentials struct {
+	Name      string
+	Password  string
+	ClientIP  string
+	UserAgent string
+}
+
+// clientKey is the unit the panel's own attempt limits count per client in:
+// the address for IPv4, the /48 for IPv6 (one customer often gets a whole
+// /48, and a /64 is cheap to vary), like the mail service's sign-in
+// throttle. Anything that is not an address is used as it is. (Sign-in
+// itself is limited by sesam, per address as given.)
 func clientKey(ip string) string {
 	a, err := netip.ParseAddr(ip)
 	if err != nil {
@@ -77,11 +91,8 @@ func clientKey(ip string) string {
 	return p.String()
 }
 
-// Credentials are a sign-in attempt. ClientIP keys the attempt limit.
-type Credentials struct {
-	Name     string
-	Password string
-	ClientIP string
+func (c Credentials) meta() sesam.SessionMeta {
+	return sesam.SessionMeta{IP: c.ClientIP, UserAgent: c.UserAgent}
 }
 
 func normalizeUserName(name string) string { return strings.ToLower(strings.TrimSpace(name)) }
@@ -107,34 +118,25 @@ func sha256Hex(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// newSession stores a session for u and returns the secret for the cookie.
-func (s *Service) newSession(ctx context.Context, u store.User) (string, error) {
-	// Expired rows are cleaned up whenever someone signs in.
-	if err := s.store.DeleteExpiredSessions(ctx, s.now()); err != nil {
-		slog.Warn("could not remove expired sessions", "err", err)
-	}
-	secret := randomString(32)
-	if err := s.store.CreateSession(ctx, sha256Hex(secret), u.ID, s.now().Add(SessionIdleTimeout)); err != nil {
-		return "", newError(Internal, err)
-	}
-	return secret, nil
-}
-
-// SessionActor returns the actor of a session cookie value.
+// SessionActor returns the actor of a session cookie value. Using a session
+// keeps it alive, up to its full lifetime.
 func (s *Service) SessionActor(ctx context.Context, secret string) (Actor, error) {
-	id := sha256Hex(secret)
-	u, err := s.store.SessionUser(ctx, id, s.now())
-	if errors.Is(err, store.ErrNotFound) {
-		return Actor{}, errorf(Unauthenticated, "your session has ended; please sign in again")
+	ended := errorf(Unauthenticated, "your session has ended; please sign in again")
+	sess, au, err := s.auth.Session(ctx, secret)
+	if errors.Is(err, sesam.ErrUnauthenticated) {
+		return Actor{}, ended
 	}
 	if err != nil {
 		return Actor{}, newError(Internal, err)
 	}
-	// Using a session keeps it alive, up to its full lifetime.
-	if err := s.store.ExtendSession(ctx, id, s.now().Add(SessionIdleTimeout), SessionLifetime); err != nil {
-		slog.Warn("could not extend a session", "err", err)
+	u, err := s.store.UserByAuthID(ctx, au.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return Actor{}, ended
 	}
-	return Actor{UserID: u.ID, Name: u.Name, Admin: u.Role == store.RoleAdmin, Via: ViaSession, sessionID: id}, nil
+	if err != nil {
+		return Actor{}, newError(Internal, err)
+	}
+	return Actor{UserID: u.ID, Name: u.Name, Admin: u.Role == store.RoleAdmin, Via: ViaSession, sessionID: sess.ID, authUserID: au.ID}, nil
 }
 
 // TokenActor returns the actor of an access token. Its rights are the
@@ -169,6 +171,23 @@ func (s *Service) TokenActor(ctx context.Context, token string) (Actor, error) {
 	}, nil
 }
 
+// sessionActive tells whether a session of a user is still running.
+func (s *Service) sessionActive(ctx context.Context, u store.User, sessionID string) (bool, error) {
+	if u.AuthUserID == "" {
+		return false, nil
+	}
+	list, err := s.auth.Sessions(ctx, u.AuthUserID)
+	if err != nil {
+		return false, err
+	}
+	for _, sess := range list {
+		if sess.ID == sessionID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // refreshActor re-reads an actor saved earlier, so a deleted token, an ended
 // session or a changed role takes effect. A missing credential is NotFound
 // for the caller's purposes.
@@ -182,7 +201,12 @@ func (s *Service) refreshActor(ctx context.Context, a Actor) (Actor, error) {
 	case ViaToken:
 		t, u, err = s.store.TokenByHash(ctx, a.tokenHash)
 	case ViaSession:
-		u, err = s.store.SessionUser(ctx, a.sessionID, s.now())
+		if u, err = s.store.User(ctx, a.UserID); err == nil {
+			var ok bool
+			if ok, err = s.sessionActive(ctx, u, a.sessionID); err == nil && !ok {
+				err = store.ErrNotFound
+			}
+		}
 	default:
 		return a, nil
 	}
@@ -192,7 +216,7 @@ func (s *Service) refreshActor(ctx context.Context, a Actor) (Actor, error) {
 	if a.Via == ViaToken && tokenExpired(t, s.now()) {
 		return Actor{}, store.ErrNotFound
 	}
-	fresh := Actor{UserID: u.ID, Name: u.Name, Admin: u.Role == store.RoleAdmin, Via: a.Via, sessionID: a.sessionID}
+	fresh := Actor{UserID: u.ID, Name: u.Name, Admin: u.Role == store.RoleAdmin, Via: a.Via, sessionID: a.sessionID, authUserID: u.AuthUserID}
 	if a.Via == ViaToken {
 		fresh.ReadOnly, fresh.Sites, fresh.tokenName, fresh.tokenHash = t.Access != "write", t.Sites, t.Name, a.tokenHash
 	}
@@ -208,56 +232,50 @@ func (s *Service) Me(ctx context.Context, a Actor) (User, error) {
 	if err != nil {
 		return User{}, storeError(err)
 	}
-	return userView(u), nil
+	au, err := s.authUser(ctx, u)
+	if err != nil {
+		return User{}, err
+	}
+	return userView(u, au), nil
 }
 
-// Login checks a name and password and starts a session. It returns the
-// user and the secret for the session cookie.
+// Login checks a name or e-mail address and a password and starts a
+// session. It returns the user and the secret for the session cookie.
+// Failed attempts are limited per user (or unknown name) and per client
+// address.
 func (s *Service) Login(ctx context.Context, c Credentials) (User, string, error) {
 	release, err := s.passwordCheck()
 	if err != nil {
 		return User{}, "", err
 	}
 	defer release()
-	name := normalizeUserName(c.Name)
-	client := clientKey(c.ClientIP)
-	key := client + "\n" + name
-	if _, wait, err := s.limiter.attempt(ctx, key); err != nil {
-		return User{}, "", err
-	} else if wait > 0 {
-		return User{}, "", throttled(wait)
+	wrong := errorf(Unauthenticated, "Wrong name or password.")
+	// Expired sessions, links and counters are cleaned up whenever someone
+	// signs in.
+	if err := s.auth.DeleteExpired(ctx); err != nil {
+		slog.Warn("could not remove expired sessions", "err", err)
 	}
-	clientAttempt, wait, err := s.clientLimiter.attempt(ctx, client+"\nany name")
+	au, secret, _, err := s.pw.SignIn(ctx, password.Credentials{Identifier: c.Name, Password: c.Password}, c.meta())
+	if errors.Is(err, sesam.ErrInvalidCredentials) {
+		return User{}, "", wrong
+	}
 	if err != nil {
-		return User{}, "", err
-	} else if wait > 0 {
-		return User{}, "", throttled(wait)
+		return User{}, "", authError(err)
 	}
-	u, err := s.store.UserByName(ctx, name)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		verifyPassword(dummyHash(), c.Password)
-		return User{}, "", errorf(Unauthenticated, "Wrong name or password.")
-	case err != nil:
+	u, err := s.store.UserByAuthID(ctx, au.ID)
+	if err != nil {
+		// A sign-in user without a panel user (left over, removed at the
+		// next start) cannot use the panel.
+		if serr := s.auth.SignOut(ctx, secret); serr != nil {
+			slog.Warn("could not end a session", "err", serr)
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			return User{}, "", wrong
+		}
 		return User{}, "", newError(Internal, err)
 	}
-	if !verifyPassword(u.PasswordHash, c.Password) {
-		return User{}, "", errorf(Unauthenticated, "Wrong name or password.")
-	}
-	// A successful sign-in clears the failures for this name and does not
-	// count against the address.
-	if err := s.limiter.succeed(ctx, key); err != nil {
-		return User{}, "", err
-	}
-	if err := s.clientLimiter.forget(ctx, clientAttempt); err != nil {
-		return User{}, "", err
-	}
-	secret, err := s.newSession(ctx, u)
-	if err != nil {
-		return User{}, "", err
-	}
 	s.record(ctx, Actor{Name: u.Name}, "account.login", u.Name, "")
-	return userView(u), secret, nil
+	return userView(u, au), secret, nil
 }
 
 // passwordCheck takes one of the slots for checking a password, or answers
@@ -277,7 +295,7 @@ func (s *Service) SignOutEverywhere(ctx context.Context, a Actor) error {
 	if err := needSession(a, "signing out everywhere"); err != nil {
 		return err
 	}
-	if err := s.store.DeleteUserSessions(ctx, a.UserID); err != nil {
+	if _, err := s.auth.RevokeUserSessions(ctx, a.authUserID, ""); err != nil {
 		return newError(Internal, err)
 	}
 	s.record(ctx, a, "account.logout_everywhere", a.Name, "")
@@ -287,10 +305,7 @@ func (s *Service) SignOutEverywhere(ctx context.Context, a Actor) error {
 // Logout ends the session with the given cookie value. Unknown sessions are
 // fine.
 func (s *Service) Logout(ctx context.Context, secret string) error {
-	if secret == "" {
-		return nil
-	}
-	if err := s.store.DeleteSession(ctx, sha256Hex(secret)); err != nil {
+	if err := s.auth.SignOut(ctx, secret); err != nil {
 		return newError(Internal, err)
 	}
 	return nil
@@ -298,43 +313,67 @@ func (s *Service) Logout(ctx context.Context, secret string) error {
 
 // ChangePassword sets the actor's own password. It needs the current one and
 // ends the user's other sessions.
-func (s *Service) ChangePassword(ctx context.Context, a Actor, current, next, clientIP string) error {
+func (s *Service) ChangePassword(ctx context.Context, a Actor, current, next string) error {
 	if err := needSession(a, "changing the password"); err != nil {
 		return err
 	}
-	u, err := s.store.User(ctx, a.UserID)
-	if err != nil {
-		return storeError(err)
+	if err := validatePassword(next); err != nil {
+		return err
 	}
 	release, err := s.passwordCheck()
 	if err != nil {
 		return err
 	}
 	defer release()
-	key := clientIP + "\n" + u.Name
-	if _, wait, err := s.limiter.attempt(ctx, key); err != nil {
-		return err
-	} else if wait > 0 {
-		return throttled(wait)
+	if err := s.pw.ChangePassword(ctx, a.authUserID, current, next, a.sessionID); err != nil {
+		return authError(err)
 	}
-	if !verifyPassword(u.PasswordHash, current) {
-		return errorf(Invalid, "the current password is wrong")
-	}
-	if err := s.limiter.succeed(ctx, key); err != nil {
-		return err
-	}
-	if err := validatePassword(next); err != nil {
-		return err
-	}
-	hash, err := hashPassword(next)
-	if err != nil {
-		return newError(Internal, err)
-	}
-	if err := s.store.SetPassword(ctx, u.ID, hash, a.sessionID); err != nil {
-		return storeError(err)
-	}
-	s.record(ctx, a, "account.password", u.Name, "")
+	s.record(ctx, a, "account.password", a.Name, "")
 	return nil
+}
+
+// SetOwnEmail sets or (with "") removes the actor's own e-mail address,
+// where password reset links are sent.
+func (s *Service) SetOwnEmail(ctx context.Context, a Actor, email string) (User, error) {
+	if err := needSession(a, "changing the e-mail address"); err != nil {
+		return User{}, err
+	}
+	u, err := s.store.User(ctx, a.UserID)
+	if err != nil {
+		return User{}, storeError(err)
+	}
+	au, changed, err := s.setEmail(ctx, u, email)
+	if err != nil {
+		return User{}, err
+	}
+	if changed != "" {
+		s.record(ctx, a, "account.email", u.Name, changed)
+	}
+	return userView(u, au), nil
+}
+
+// setEmail sets a user's e-mail address. changed describes the change for
+// the activity log ("" for none); the address itself is not logged.
+func (s *Service) setEmail(ctx context.Context, u store.User, email string) (sesam.User, string, error) {
+	e, err := normalizeEmail(email)
+	if err != nil {
+		return sesam.User{}, "", err
+	}
+	au, err := s.authUser(ctx, u)
+	if err != nil {
+		return sesam.User{}, "", err
+	}
+	if e == au.Email {
+		return au, "", nil
+	}
+	next, err := s.auth.UpdateUser(ctx, au.ID, sesam.UserUpdate{Email: &e})
+	if err != nil {
+		return sesam.User{}, "", authError(err)
+	}
+	if e == "" {
+		return next, "e-mail address removed", nil
+	}
+	return next, "e-mail address changed", nil
 }
 
 // SetupRequired reports whether no user exists yet.
@@ -397,11 +436,9 @@ func (s *Service) Setup(ctx context.Context, code string, c Credentials) (User, 
 	} else if !needed {
 		return User{}, "", alreadySetUp
 	}
-	key := clientKey(c.ClientIP) + "\nsetup code"
-	if _, wait, err := s.limiter.attempt(ctx, key); err != nil {
-		return User{}, "", err
-	} else if wait > 0 {
-		return User{}, "", throttled(wait)
+	key := "setup-code:" + clientKey(c.ClientIP)
+	if err := s.auth.Limit(ctx, key, loginMaxPerName, loginWindow); err != nil {
+		return User{}, "", authError(err)
 	}
 	want, err := os.ReadFile(s.setupCodeFile)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -412,8 +449,8 @@ func (s *Service) Setup(ctx context.Context, code string, c Credentials) (User, 
 	if wantCode == "" || subtle.ConstantTimeCompare([]byte(gotCode), []byte(wantCode)) != 1 {
 		return User{}, "", errorf(Invalid, "the setup code is wrong")
 	}
-	if err := s.limiter.succeed(ctx, key); err != nil {
-		return User{}, "", err
+	if err := s.auth.ResetLimit(ctx, key); err != nil {
+		return User{}, "", newError(Internal, err)
 	}
 
 	name := normalizeUserName(c.Name)
@@ -423,24 +460,36 @@ func (s *Service) Setup(ctx context.Context, code string, c Credentials) (User, 
 	if err := validatePassword(c.Password); err != nil {
 		return User{}, "", err
 	}
-	hash, err := hashPassword(c.Password)
-	if err != nil {
-		return User{}, "", newError(Internal, err)
-	}
-	u, err := s.store.CreateUser(ctx, name, hash, store.RoleAdmin, true)
-	if errors.Is(err, store.ErrConflict) {
+	au, err := s.pw.CreateUser(ctx, sesam.NewUser{Username: name}, c.Password)
+	if errors.Is(err, sesam.ErrUsernameTaken) {
 		return User{}, "", alreadySetUp
 	}
 	if err != nil {
+		return User{}, "", authError(err)
+	}
+	u, err := s.store.CreateUser(ctx, name, au.ID, store.RoleAdmin, true)
+	if err != nil {
+		s.dropAuthUser(ctx, au.ID)
+		if errors.Is(err, store.ErrConflict) {
+			return User{}, "", alreadySetUp
+		}
 		return User{}, "", storeError(err)
 	}
 	if err := os.Remove(s.setupCodeFile); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		slog.Error("could not remove the setup code file", "file", s.setupCodeFile, "err", err)
 	}
-	secret, err := s.newSession(ctx, u)
+	secret, _, err := s.auth.SignIn(ctx, au, c.meta())
 	if err != nil {
-		return User{}, "", err
+		return User{}, "", newError(Internal, err)
 	}
 	s.record(ctx, Actor{Name: u.Name}, "setup", u.Name, "first admin created")
-	return userView(u), secret, nil
+	return userView(u, au), secret, nil
+}
+
+// dropAuthUser removes a sign-in user whose panel user could not be
+// created. If that fails too, the next start removes it.
+func (s *Service) dropAuthUser(ctx context.Context, id string) {
+	if err := s.auth.DeleteUser(ctx, id); err != nil {
+		slog.Warn("could not remove an unused sign-in user", "err", err)
+	}
 }

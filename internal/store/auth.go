@@ -7,49 +7,6 @@ import (
 	"time"
 )
 
-// CreateSession stores a session. id is the hash of the cookie value.
-func (s *Store) CreateSession(ctx context.Context, id string, userID int64, expires time.Time) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
-		id, userID, s.now(), expires.Unix())
-	return err
-}
-
-// SessionUser returns the user of a session that has not expired at now.
-func (s *Store) SessionUser(ctx context.Context, id string, now time.Time) (User, error) {
-	return scanUser(s.db.QueryRowContext(ctx, `SELECT u.id, u.name, u.password_hash, u.role, u.created_at
-		FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.id = ? AND s.expires_at > ?`, id, now.Unix()))
-}
-
-// DeleteSession removes one session; a missing one is not an error.
-func (s *Store) DeleteSession(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id)
-	return err
-}
-
-// ExtendSession moves the expiry of a session to until, but never past
-// created_at + lifetime. To keep reads cheap it only writes when the expiry
-// moves by more than a minute.
-func (s *Store) ExtendSession(ctx context.Context, id string, until time.Time, lifetime time.Duration) error {
-	limit := int64(lifetime / time.Second)
-	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET expires_at = min(?, created_at + ?)
-		WHERE id = ? AND expires_at < min(?, created_at + ?) - 60`,
-		until.Unix(), limit, id, until.Unix(), limit)
-	return err
-}
-
-// DeleteUserSessions ends every session of a user.
-func (s *Store) DeleteUserSessions(ctx context.Context, userID int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID)
-	return err
-}
-
-// DeleteExpiredSessions removes sessions that expired before now.
-func (s *Store) DeleteExpiredSessions(ctx context.Context, now time.Time) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at <= ?`, now.Unix())
-	return err
-}
-
 // Token is a personal access token. Only the hash of its secret is kept.
 type Token struct {
 	ID     int64

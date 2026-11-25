@@ -33,3 +33,13 @@ export function validatePasswordPair(password: string, repeat: string): Password
   else if (repeat !== password) errors.repeat = "The two passwords don't match."
   return errors
 }
+
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@.]+$/
+
+// A plausible address; the server has the final say.
+export function validateEmail(value: string): string | null {
+  const email = value.trim()
+  if (!email) return 'Enter an e-mail address.'
+  if (!EMAIL.test(email)) return 'Enter a valid e-mail address, like name@example.com.'
+  return null
+}

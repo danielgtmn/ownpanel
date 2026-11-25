@@ -85,6 +85,7 @@ mode 0750, socket 0660; the user `ownpanel` is a member of the group
 | `POST /mailboxes/{storage_id}/unblock` | Lift a sending block. |
 | `DELETE /mailboxes/{storage_id}` | Delete a mailbox's data. |
 | `POST /checks/outbound` | Try a connection to an outside port 25 (deliverability check). |
+| `POST /send` | Send a message the panel wrote itself (for example a password reset link): sender, recipient, subject, text and optional HTML. The service builds the message, signs it with the sender domain's DKIM key and delivers or queues it; the sender must be an address in one of the server's mail domains, and bounces are dropped. |
 
 ## Data
 

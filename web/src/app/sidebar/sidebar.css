@@ -40,6 +40,7 @@
   gap: 0.625rem;
   width: 4.25rem;
   padding: 0.875rem var(--rail-pad) 0.75rem;
+  /* Only scrolls as a whole when the window is too short even for a few domains (see .rail-scroll). */
   overflow: hidden auto;
   background: var(--side-rail);
   scrollbar-width: none;
@@ -67,9 +68,73 @@
   min-width: 0;
 }
 
-.rail-grow {
-  flex: 1;
-  min-height: 0.5rem;
+/* Overview and Add stay at the top, the panel's own pages and the account at the bottom; only the
+   domains between them scroll. */
+.rail-top,
+.rail-bottom {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.rail-bottom {
+  margin-top: auto;
+}
+
+/* The scroll area reaches into the rail's padding so focus rings, outlines and status dots of the
+   tiles at its edges are not cut off. */
+.rail-scroll {
+  --rail-fade: 1.5rem;
+
+  flex: 0 1 auto;
+  /* About two and a half domains stay visible, however short the window is. */
+  min-height: 7.5rem;
+  margin: -0.375rem calc(-1 * var(--rail-pad));
+  padding: 0.375rem var(--rail-pad);
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  /* A tile scrolled into view (the selected domain) stays clear of the faded edges. */
+  scroll-padding-block: calc(var(--rail-fade) + 0.375rem);
+}
+
+.rail-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.rail-scroll[data-more-above] {
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--rail-fade));
+}
+
+.rail-scroll[data-more-below] {
+  mask-image: linear-gradient(to top, transparent, #000 var(--rail-fade));
+}
+
+.rail-scroll[data-more-above][data-more-below] {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 var(--rail-fade),
+    #000 calc(100% - var(--rail-fade)),
+    transparent
+  );
+}
+
+/* A line between the fixed groups and the domains once the list scrolls. The space for it is always
+   there, so the list keeps its height (and the selected domain its place) when the line appears. */
+.rail-top {
+  padding-bottom: 0.625rem;
+  border-bottom: 1px solid transparent;
+}
+
+.rail-bottom {
+  padding-top: 0.625rem;
+  border-top: 1px solid transparent;
+}
+
+.rail:has(.rail-scroll[data-more-above], .rail-scroll[data-more-below]) :is(.rail-top, .rail-bottom) {
+  border-color: color-mix(in oklch, var(--side-line) 35%, transparent);
 }
 
 .sidebar .tile {

@@ -100,7 +100,7 @@ func TestSettingsRoutesJSONShapes(t *testing.T) {
 		return json.RawMessage(rec.Body.Bytes())
 	}
 	before := session()
-	wantKeys(t, before, "setup_required", "setup_complete", "user", "via")
+	wantKeys(t, before, "setup_required", "setup_complete", "user", "via", "password_reset")
 	if !strings.Contains(string(before), `"setup_required":true,"setup_complete":false`) {
 		t.Fatalf("fresh install: %s", before)
 	}

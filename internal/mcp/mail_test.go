@@ -150,6 +150,7 @@ func (f *importMail) Status(context.Context) (mailconfig.Status, error) {
 	return mailconfig.Status{ConfigHash: f.hash}, nil
 }
 func (f *importMail) Events(context.Context, int64) ([]mailconfig.Event, error) { return nil, nil }
+func (f *importMail) Send(context.Context, mailconfig.OutgoingMail) error       { return nil }
 func (f *importMail) Unblock(context.Context, string) error                     { return nil }
 func (f *importMail) DeleteMailbox(context.Context, string) error               { return nil }
 func (f *importMail) CheckOutbound(context.Context) (mailconfig.OutboundCheck, error) {
