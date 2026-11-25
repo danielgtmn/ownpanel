@@ -37,6 +37,24 @@ Archives are treated as untrusted. Only regular files and folders are accepted (
 - ownpaneld runs as its own, unprivileged user with `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=full` and `ProtectHome=true`. Caddy's data directories are mode 0700.
 - The database file is created with mode 0600.
 
+### Slow and stalled connections
+
+Time limits keep a slow or stalled client from holding connections open. Caddy applies them to everyone (sites and the panel share one server, so they suit both: large downloads and 512 MB uploads on slow links keep working as long as data keeps flowing):
+
+| Caddy (every server) | Value |
+|---|---|
+| Request headers complete | 10 s |
+| Request body stalls (no data arrives) | 1 min |
+| Whole request, including the body | 1 h (512 MB at about 1.2 Mbit/s) |
+| Response stalls (the client reads nothing) | 1 min |
+| Kept-alive connection without a request | 2 min |
+
+There is no limit on the whole response, so slow downloads of large files are not cut off; only a stalled one is.
+
+Between Caddy and the panel: connecting 5 s; waiting for the panel's answer after the request has been passed on 10 min (time to unpack and publish an archive).
+
+ownpaneld has its own limits, also when it is reached directly: request headers 10 s, a whole request 1 min, until the response is written 5 min, kept-alive connections 3 min (longer than Caddy keeps its idle connections to the panel, so Caddy closes them first). Archive uploads (`POST /api/sites/{name}/deployments`, upload links) and MCP requests get 1 h to arrive and 1 h 10 min until the answer.
+
 ### Updates
 
 Updating replaces binaries and restarts services, which needs root; the panel runs as `ownpanel` and must not get root. So the two only talk through files:
