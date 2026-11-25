@@ -14,7 +14,7 @@ The panel's web interface uses the same HTTP API that scripts can use. It is ser
 - **Cookie requests that change something** (anything but `GET` and `HEAD`) must send the header `X-Ownpanel-Request: 1`, otherwise they get `403`. Token requests do not need it.
 - If an `Origin` header is sent on a changing request without a token, its host must equal the request's `Host`, otherwise `403` ("requests from other web sites are not allowed"). The API never allows cross-origin requests (no CORS).
 - Tokens and passwords can only be managed when signed in with a password, not with a token.
-- Some routes are open: `GET /api/session`, `POST /api/setup` (needs the setup code), `POST /api/login`, `POST /api/logout`, and `POST /api/uploads/{id}` (the link is the credential).
+- Some routes are open: `GET /api/session`, `POST /api/setup` (needs the setup code), `POST /api/login`, `POST /api/logout`, `POST /api/password-reset`, `POST /api/password-reset/confirm` (the link is the credential), and `POST /api/uploads/{id}` (the link is the credential).
 
 ```sh
 curl -H "Authorization: Bearer op_…" https://panel.example.com/api/sites
@@ -45,7 +45,7 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 
 **Site:** `{"name", "domains": [..], "owner", "current_release", "releases": [..]}`. `releases` lists version ids oldest first; `current_release` is empty until something is published.
 
-**User:** `{"id", "name", "role", "created_at"}`, role `"admin"` or `"member"`.
+**User:** `{"id", "name", "email", "role", "created_at"}`, role `"admin"` or `"member"`; `email` is `""` when the person has none.
 
 **Token:** `{"id", "name", "access", "sites", "created_at", "last_used_at", "expires_at", "expired"}`. `sites` is `null` for all sites; `expires_at` is `null` for a token that never expires. Creating a token also returns `"token"` (the secret, shown once).
 
@@ -81,11 +81,14 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 
 | Method | Path | Who | Request | Response |
 |---|---|---|---|---|
-| `GET` | `/api/session` | open | | `{"setup_required": bool, "user": User or null, "via": "session" or "token" or null}` |
+| `GET` | `/api/session` | open | | `{"setup_required": bool, "setup_complete": bool, "user": User or null, "via": "session" or "token" or null, "password_reset": bool}`; `password_reset` tells whether a forgotten password can be reset by e-mail |
 | `POST` | `/api/setup` | open, needs setup code | `{"setup_code", "name", "password"}` | `201` User; sets the session cookie. `409` once set up |
-| `POST` | `/api/login` | open | `{"name", "password"}` | User; sets the cookie. `401` wrong credentials, `429` throttled |
+| `POST` | `/api/login` | open | `{"name", "password"}`; `name` may be the e-mail address | User; sets the cookie. `401` wrong credentials, `429` throttled |
+| `POST` | `/api/password-reset` | open | `{"email"}` | `204` whether or not the address belongs to someone; `400` not an address, `404` the panel cannot send e-mail, `429` too many requests |
+| `POST` | `/api/password-reset/confirm` | open | `{"token", "password"}` | `204`; ends all sessions of that person. `400` link invalid, used or expired, or password not allowed |
 | `POST` | `/api/logout` | open | | `204`; clears the cookie |
 | `PUT` | `/api/account/password` | password sign-in | `{"current", "new"}` | `204`; ends your other sessions |
+| `PUT` | `/api/account/email` | password sign-in | `{"email"}`; `""` removes it | User. `409` the address belongs to someone else |
 | `POST` | `/api/account/logout-everywhere` | password sign-in | | `204`; ends all your sessions, this one included, and clears the cookie. Tokens keep working |
 
 ### Access tokens
@@ -114,8 +117,8 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 | Method | Path | Who | Request | Response |
 |---|---|---|---|---|
 | `GET` | `/api/users` | admin | | list of User |
-| `POST` | `/api/users` | admin | `{"name", "password", "role"}` | `201` User |
-| `PUT` | `/api/users/{id}` | admin | `{"role"}` and/or `{"password"}` | User |
+| `POST` | `/api/users` | admin | `{"name", "email", "password", "role"}`; `email` optional | `201` User. `409` name or address taken |
+| `PUT` | `/api/users/{id}` | admin | any of `{"role", "email", "password"}`; `""` removes the address | User; a new password ends all of that person's sessions |
 | `DELETE` | `/api/users/{id}` | admin | | `204`; `409` for the last admin or a user who owns sites, domain redirects or mail domains |
 | `GET` | `/api/activity?limit=50` | admin | `limit` 1 to 200 (default 50) | list of Activity, newest first |
 
