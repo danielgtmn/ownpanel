@@ -125,10 +125,12 @@ func start(t *testing.T) *env {
 			MX: map[string][]*net.MX{"remote.test": {{Host: "mx.remote.test", Pref: 10}}},
 			IP: map[string][]net.IPAddr{"mx.remote.test": mailtest.Localhost},
 		},
-		Port:   e.sink.Port,
-		Now:    e.clock.Now,
-		Event:  record,
-		Logger: log,
+		Port: e.sink.Port,
+		// The sink listens on 127.0.0.1.
+		AllowPrivate: true,
+		Now:          e.clock.Now,
+		Event:        record,
+		Logger:       log,
 	})
 	t.Cleanup(func() { e.q.Shutdown(context.Background()) })
 	e.limits = NewLimiter(st, e.clock.Now, record, log)

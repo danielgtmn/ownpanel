@@ -14,6 +14,12 @@
 // IPv6 address often has no reverse DNS entry naming the mail host, and
 // receivers refuse such mail. The panel decides later whether IPv6 is
 // safe to use.
+//
+// Only public addresses are connected to: an MX pointing at loopback, a
+// private or link-local network or another special range would let anyone
+// who can send mail make the server open port 25 inside its own network.
+// Mail to a domain whose mail servers all have such addresses fails for
+// good. Options.AllowPrivate lifts this for tests.
 package queue
 
 import (
@@ -23,6 +29,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/netip"
 	"slices"
 	"sort"
 	"strings"
@@ -73,6 +80,9 @@ type Options struct {
 	Port string
 	// IPv6 allows connections over IPv6 (tried before IPv4 then).
 	IPv6 bool
+	// AllowPrivate lets the queue connect to loopback, private and other
+	// non-public addresses (tests and test networks only).
+	AllowPrivate bool
 	// Workers bounds concurrent deliveries; 0 means DefaultWorkers.
 	Workers int
 	// Schedule is the delay after the 1st, 2nd, ... failed attempt; the
@@ -362,14 +372,11 @@ func (q *Queue) work(key groupKey, m storage.QueuedMessage, rcpts []storage.Queu
 		return
 	}
 	results := q.deliverDomain(ctx, m, key.domain, rcpts)
-	if ctx.Err() != nil {
-		// Shutting down: give the claimed rows back as they were, so they
-		// are tried again right after the next start.
-		if err := q.opts.Store.QueueUpdate(context.Background(), rcpts); err != nil {
-			q.log.Error("mail queue: release", "err", err)
-		}
-		return
-	}
+	// Shutting down: a recipient the attempt did not finish for is given
+	// back as it was, so it is tried again right after the next start.
+	// Delivered and permanently refused ones are saved as such: they must
+	// not be delivered again.
+	stopped := ctx.Err() != nil
 	now := q.now()
 	deadline := m.Created.Add(q.opts.GiveUp)
 	var failed []Failure
@@ -377,6 +384,9 @@ func (q *Queue) work(key groupKey, m storage.QueuedMessage, rcpts []storage.Queu
 	for i := range rcpts {
 		r := &rcpts[i]
 		res := results[i]
+		if stopped && res.outcome == temporary {
+			continue // the row as claimed from: due again
+		}
 		r.Attempts++
 		r.LastError = truncate(res.diag, 500)
 		switch res.outcome {
@@ -437,8 +447,13 @@ func (q *Queue) deliverDomain(ctx context.Context, m storage.QueuedMessage, doma
 		return all(*res)
 	}
 	last := result{outcome: temporary, status: "4.4.4", diag: "no mail server of " + domain + " could be reached"}
+	private := 0
 	for _, host := range hosts {
 		ips, err := q.addresses(ctx, host)
+		if errors.Is(err, errNotPublic) {
+			private++
+			continue
+		}
 		if err != nil {
 			last = result{outcome: temporary, status: "4.4.3", diag: err.Error()}
 			continue
@@ -457,6 +472,10 @@ func (q *Queue) deliverDomain(ctx context.Context, m storage.QueuedMessage, doma
 			last = classify(err)
 			q.log.Info("mail queue: host failed", "host", host, "addr", ip.String(), "err", truncate(last.diag, 200))
 		}
+	}
+	if private == len(hosts) {
+		return all(result{outcome: permanent, status: "5.4.4",
+			diag: "the mail servers of " + domain + " have only private or local addresses"})
 	}
 	return all(last)
 }
@@ -500,17 +519,32 @@ func (q *Queue) mxHosts(ctx context.Context, domain string) ([]string, *result) 
 	return hosts, nil
 }
 
+// errNotPublic: a host has addresses, but none the queue may connect to.
+var errNotPublic = errors.New("only private or local addresses")
+
 // addresses returns the addresses of host to connect to: IPv4 only, or
-// IPv6 first and then IPv4 when IPv6 is allowed.
+// IPv6 first and then IPv4 when IPv6 is allowed. Non-public addresses are
+// left out (unless AllowPrivate); errNotPublic when none is left.
 func (q *Queue) addresses(ctx context.Context, host string) ([]net.IP, error) {
+	var addrs []net.IPAddr
 	if ip := net.ParseIP(host); ip != nil {
-		return []net.IP{ip}, nil
+		addrs = []net.IPAddr{{IP: ip}}
+	} else {
+		lctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		var err error
+		addrs, err = q.opts.Resolver.LookupIPAddr(lctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("looking up the address of %s failed", host)
+		}
 	}
-	lctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	addrs, err := q.opts.Resolver.LookupIPAddr(lctx, host)
-	if err != nil {
-		return nil, fmt.Errorf("looking up the address of %s failed", host)
+	if !q.opts.AllowPrivate {
+		n := len(addrs)
+		addrs = slices.DeleteFunc(slices.Clone(addrs), func(a net.IPAddr) bool { return !public(a.IP) })
+		if n > 0 && len(addrs) == 0 {
+			q.log.Warn("mail queue: mail server has only private or local addresses", "host", host)
+			return nil, errNotPublic
+		}
 	}
 	var v4, v6 []net.IP
 	for _, a := range addrs {
@@ -528,6 +562,42 @@ func (q *Queue) addresses(ctx context.Context, host string) ([]net.IP, error) {
 		out = out[:5]
 	}
 	return out, nil
+}
+
+// Special-purpose ranges netip does not classify (RFC 6890).
+var special = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),       // this network
+	netip.MustParsePrefix("100.64.0.0/10"),   // carrier-grade NAT
+	netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments
+	netip.MustParsePrefix("198.18.0.0/15"),   // benchmarking
+	netip.MustParsePrefix("240.0.0.0/4"),     // reserved, broadcast
+	netip.MustParsePrefix("192.0.2.0/24"),    // documentation
+	netip.MustParsePrefix("198.51.100.0/24"), // documentation
+	netip.MustParsePrefix("203.0.113.0/24"),  // documentation
+	netip.MustParsePrefix("2001:db8::/32"),   // documentation
+}
+
+// public tells whether ip is a public unicast address the queue may
+// connect to. It is stricter than filter.Checkable (which only decides
+// whether to ask blocklists about a client): loopback, private (RFC 1918,
+// ULA), link-local, unspecified, multicast and the special ranges
+// above are not.
+func public(ip net.IP) bool {
+	a, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	a = a.Unmap()
+	if !a.IsValid() || !a.IsGlobalUnicast() || a.IsPrivate() || a.IsLoopback() ||
+		a.IsLinkLocalUnicast() || a.IsUnspecified() || a.IsMulticast() {
+		return false
+	}
+	for _, p := range special {
+		if p.Contains(a) {
+			return false
+		}
+	}
+	return true
 }
 
 func humanDur(d time.Duration) string {

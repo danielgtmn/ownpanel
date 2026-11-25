@@ -23,6 +23,7 @@ func runMail(args []string) error {
 	submissions := fs.String("submissions", ":465", "address for mail clients sending mail over TLS (\"\" to disable)")
 	imaps := fs.String("imaps", ":993", "address for mail clients reading mail with IMAP over TLS (\"\" to disable)")
 	ipv6Out := fs.Bool("ipv6-outbound", false, "also deliver outgoing mail over IPv6 (only if the server's IPv6 address has a reverse DNS entry naming the mail host)")
+	allowPrivateMX := fs.Bool("allow-private-mx", false, "for test setups only: deliver outgoing mail to mail servers with loopback or private network addresses")
 	fs.Parse(args)
 
 	srv, err := server.New(server.Options{
@@ -33,6 +34,7 @@ func runMail(args []string) error {
 		SubmissionsAddr: *submissions,
 		IMAPSAddr:       *imaps,
 		IPv6Outbound:    *ipv6Out,
+		AllowPrivateMX:  *allowPrivateMX,
 		Logger:          slog.Default(),
 	})
 	if err != nil {

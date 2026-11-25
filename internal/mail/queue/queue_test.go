@@ -46,6 +46,22 @@ type env struct {
 	mu     sync.Mutex
 	dial   atomic.Int32 // dials
 	down   atomic.Bool  // refuse connections
+	// keepOpen makes connections ignore Close (the end of a running
+	// attempt on shutdown) until the test ends.
+	keepOpen atomic.Bool
+}
+
+// lingerConn ignores Close while its env's keepOpen is set.
+type lingerConn struct {
+	net.Conn
+	e *env
+}
+
+func (c *lingerConn) Close() error {
+	if c.e.keepOpen.Load() {
+		return nil
+	}
+	return c.Conn.Close()
 }
 
 func testDir() *directory.Directory {
@@ -60,14 +76,18 @@ func newEnv(t *testing.T, mode mailtest.SinkTLS) *env {
 	e := &env{t: t, dir: t.TempDir(), clock: newClock(), sink: mailtest.NewSink(t, mode)}
 	e.res = &mailtest.Resolver{
 		MX: map[string][]*net.MX{
-			"remote.test": {{Host: "mx2.remote.test.", Pref: 20}, {Host: "mx1.remote.test.", Pref: 10}},
-			"nomail.test": {{Host: ".", Pref: 0}},
+			"remote.test":  {{Host: "mx2.remote.test.", Pref: 20}, {Host: "mx1.remote.test.", Pref: 10}},
+			"nomail.test":  {{Host: ".", Pref: 0}},
+			"private.test": {{Host: "mx.private.test.", Pref: 10}, {Host: "mx.cgnat.test.", Pref: 20}, {Host: "localhost-mx.test.", Pref: 30}},
 		},
 		IP: map[string][]net.IPAddr{
-			"mx1.remote.test": mailtest.Localhost,
-			"mx2.remote.test": mailtest.Localhost,
-			"implicit.test":   mailtest.Localhost,
-			"v6only.test":     {{IP: net.ParseIP("::1")}},
+			"mx1.remote.test":   mailtest.Localhost,
+			"mx2.remote.test":   mailtest.Localhost,
+			"implicit.test":     mailtest.Localhost,
+			"v6only.test":       {{IP: net.ParseIP("::1")}},
+			"mx.private.test":   {{IP: net.IPv4(10, 0, 0, 25)}, {IP: net.ParseIP("fd00::25")}},
+			"mx.cgnat.test":     {{IP: net.IPv4(100, 64, 0, 1)}},
+			"localhost-mx.test": mailtest.Localhost,
 		},
 	}
 	e.open()
@@ -94,11 +114,18 @@ func (e *env) open() {
 			if e.down.Load() {
 				return nil, errors.New("connection refused")
 			}
-			return dialer.DialContext(ctx, network, addr)
+			c, err := dialer.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			e.t.Cleanup(func() { c.Close() })
+			return &lingerConn{Conn: c, e: e}, nil
 		},
-		Port:    e.sink.Port,
-		Now:     e.clock.Now,
-		Timeout: 5 * time.Second,
+		// The sink listens on 127.0.0.1.
+		AllowPrivate: true,
+		Port:         e.sink.Port,
+		Now:          e.clock.Now,
+		Timeout:      5 * time.Second,
 		Event: func(ev config.Event) {
 			e.mu.Lock()
 			e.events = append(e.events, ev)
@@ -466,5 +493,131 @@ func TestFailedStateSavedBeforeBounce(t *testing.T) {
 	}
 	if len(e.inbox()) != 1 || e.length() != 0 {
 		t.Fatal("bounce")
+	}
+}
+
+// Shutdown cuts an attempt short after the receiver took the message for
+// one recipient and refused another for good: those are saved (and the
+// refusal bounced); only the unfinished recipient is tried again.
+func TestShutdownKeepsFinishedResults(t *testing.T) {
+	e := newEnv(t, mailtest.SinkPlain)
+	e.keepOpen.Store(true)
+	e.sink.SetRcpt(func(to string) error {
+		switch {
+		case strings.HasPrefix(to, "nobody@"):
+			return &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 1, 1}, Message: "no such user"}
+		case strings.HasPrefix(to, "carol@"):
+			return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "try later"}
+		}
+		return nil
+	})
+	// The grace time ends while the receiver takes the message.
+	e.sink.SetData(func() error { e.q.cancelWork(); return nil })
+	e.enqueue("alice@example.org", "bob@remote.test", "nobody@remote.test", "carol@remote.test")
+	ms, err := e.store.QueueDue(context.Background(), e.clock.Now(), 10)
+	if err != nil || len(ms) != 1 {
+		t.Fatalf("due %v %d", err, len(ms))
+	}
+	// One attempt, as a worker runs it (Flush would try the released
+	// recipient again and again with the cancelled context).
+	e.q.sem <- struct{}{}
+	e.q.wg.Add(1)
+	e.q.work(groupKey{ms[0].ID, "remote.test"}, ms[0], ms[0].Rcpts)
+	if got := e.sink.Messages(); len(got) != 1 {
+		t.Fatalf("delivered %d", len(got))
+	}
+	m := e.queued(1)
+	byAddr := map[string]storage.QueuedRcpt{}
+	for _, r := range m.Rcpts {
+		byAddr[r.Address] = r
+	}
+	if r := byAddr["bob@remote.test"]; r.State != storage.RcptDelivered {
+		t.Fatalf("delivered recipient %+v", r)
+	}
+	if r := byAddr["nobody@remote.test"]; r.State != storage.RcptFailed {
+		t.Fatalf("refused recipient %+v", r)
+	}
+	if r := byAddr["carol@remote.test"]; r.State != storage.RcptPending || r.Attempts != 0 || r.NextTry.After(e.clock.Now()) {
+		t.Fatalf("unfinished recipient %+v", r)
+	}
+	if in := e.inbox(); len(in) != 1 || !strings.Contains(in[0], "nobody@remote.test") || strings.Contains(in[0], "carol@") {
+		t.Fatalf("bounces %d", len(in))
+	}
+
+	// After the restart only carol is tried again.
+	e.keepOpen.Store(false)
+	e.close()
+	e.open()
+	e.sink.SetRcpt(nil)
+	e.sink.SetData(nil)
+	e.q.Flush()
+	got := e.sink.Messages()
+	if len(got) != 2 || len(got[1].To) != 1 || got[1].To[0] != "carol@remote.test" {
+		t.Fatalf("after restart %+v", got)
+	}
+	if e.length() != 0 {
+		t.Fatal("still queued")
+	}
+}
+
+// Mail servers with only non-public addresses are never connected to; a
+// domain that has nothing else fails for good.
+func TestPrivateMXRefused(t *testing.T) {
+	e := newEnv(t, mailtest.SinkPlain)
+	e.q.opts.AllowPrivate = false
+	e.enqueue("alice@example.org", "x@private.test", "y@implicit.test")
+	e.q.Flush()
+	if e.dial.Load() != 0 || len(e.sink.Messages()) != 0 {
+		t.Fatalf("dialed %d", e.dial.Load())
+	}
+	if e.length() != 0 {
+		t.Fatal("still queued")
+	}
+	in := e.inbox()
+	if len(in) != 2 {
+		t.Fatalf("bounces %d", len(in))
+	}
+	all := in[0] + in[1]
+	for _, want := range []string{"Status: 5.4.4", "x@private.test", "y@implicit.test", "only private or local addresses"} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("bounces lack %q:\n%s", want, all)
+		}
+	}
+}
+
+// A host with a public address that cannot be reached keeps the failure
+// temporary, even when the other hosts are private.
+func TestPrivateAndUnreachableMXIsTemporary(t *testing.T) {
+	e := newEnv(t, mailtest.SinkPlain)
+	e.q.opts.AllowPrivate = false
+	e.res.MX["mixed.test"] = []*net.MX{{Host: "mx.private.test.", Pref: 10}, {Host: "mx.public.test.", Pref: 20}}
+	e.res.IP["mx.public.test"] = []net.IPAddr{{IP: net.IPv4(8, 8, 8, 8)}}
+	e.down.Store(true)
+	e.enqueue("alice@example.org", "x@mixed.test")
+	e.q.Flush()
+	if e.dial.Load() != 1 || len(e.inbox()) != 0 {
+		t.Fatalf("dials %d", e.dial.Load())
+	}
+	if m := e.queued(1); m.Rcpts[0].State != storage.RcptPending {
+		t.Fatalf("state %+v", m.Rcpts[0])
+	}
+}
+
+func TestPublic(t *testing.T) {
+	for _, tc := range []struct {
+		ip   string
+		want bool
+	}{
+		{"8.8.8.8", true}, {"2a00:1450:4001::1", true}, {"::ffff:8.8.8.8", true},
+		{"127.0.0.1", false}, {"::1", false}, {"10.1.2.3", false}, {"172.30.0.5", false},
+		{"192.168.1.1", false}, {"fd12::1", false}, {"169.254.1.1", false}, {"fe80::1", false},
+		{"0.0.0.0", false}, {"::", false}, {"100.64.0.1", false}, {"100.127.255.254", false},
+		{"224.0.0.1", false}, {"ff02::1", false}, {"255.255.255.255", false}, {"240.0.0.1", false},
+		{"0.1.2.3", false}, {"192.0.0.8", false}, {"198.18.0.1", false}, {"192.0.2.1", false},
+		{"2001:db8::1", false}, {"::ffff:127.0.0.1", false}, {"::ffff:10.0.0.1", false},
+	} {
+		if got := public(net.ParseIP(tc.ip)); got != tc.want {
+			t.Errorf("public(%s) = %v", tc.ip, got)
+		}
 	}
 }

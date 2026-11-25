@@ -59,6 +59,9 @@ type Options struct {
 	QueueResolver queue.Resolver
 	QueueDial     func(ctx context.Context, network, address string) (net.Conn, error)
 	QueuePort     string
+	// AllowPrivateMX lets the queue deliver to mail servers on loopback,
+	// private and other non-public addresses (tests and test networks).
+	AllowPrivateMX bool
 	// Resolver answers the DNS lookups of the checks of incoming mail
 	// (SPF, DKIM, DMARC, blocklists, reverse DNS); nil means the system
 	// resolver (tests replace it).
@@ -176,15 +179,16 @@ func New(opts Options) (*Server, error) {
 	s.srs = auth.NewSRS(srsKey, nil)
 	s.filter = filter.New(filter.Options{Resolver: opts.Resolver, Store: store, Event: s.event, Logger: s.log})
 	s.queue = queue.New(queue.Options{
-		ReturnTo:  s.returnTo,
-		Store:     store,
-		Directory: s.Directory,
-		Resolver:  opts.QueueResolver,
-		Dial:      opts.QueueDial,
-		Port:      opts.QueuePort,
-		IPv6:      opts.IPv6Outbound,
-		Event:     s.event,
-		Logger:    s.log,
+		ReturnTo:     s.returnTo,
+		Store:        store,
+		Directory:    s.Directory,
+		Resolver:     opts.QueueResolver,
+		Dial:         opts.QueueDial,
+		Port:         opts.QueuePort,
+		IPv6:         opts.IPv6Outbound,
+		AllowPrivate: opts.AllowPrivateMX,
+		Event:        s.event,
+		Logger:       s.log,
 	})
 	if err := s.resume(); err != nil {
 		// A broken file must not keep mail down: the panel pushes again.

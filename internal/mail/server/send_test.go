@@ -29,6 +29,7 @@ func TestSendEndToEnd(t *testing.T) {
 			IP: map[string][]net.IPAddr{"mx.remote.test": mailtest.Localhost},
 		}
 		o.QueuePort = sink.Port
+		o.AllowPrivateMX = true // the sink listens on 127.0.0.1
 	})
 	defer in.stop(t)
 	key, _ := mailtest.DKIMKey(t)

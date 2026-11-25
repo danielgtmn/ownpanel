@@ -350,6 +350,15 @@ How it is built (phase 1c):
   passes). IPv6 should only be used when `mail_host` has a matching AAAA
   record and the address has a PTR naming `mail_host` (otherwise SPF `mx`
   would fail); else IPv4.
+- Only public addresses are connected to: mail servers on loopback, private
+  (RFC 1918, ULA), link-local, CGNAT, multicast or other special addresses
+  are skipped, and a domain whose mail servers have only such addresses
+  bounces at once (`5.4.4`). Otherwise anyone who can send mail could make
+  the server open port 25 inside its own network. `-allow-private-mx` lifts
+  this for test setups.
+- On shutdown, an attempt that does not finish within the grace time is
+  cancelled; recipients it already delivered or that were refused for good
+  are saved as such, the others are tried again after the next start.
 - The MX lookup and port are replaceable, so tests can deliver to a local
   sink or a second instance.
 - DANE: *later* (needs a validating resolver).

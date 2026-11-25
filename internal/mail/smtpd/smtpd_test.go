@@ -126,6 +126,7 @@ func start(t *testing.T, cfg *config.Config) *env {
 	e.q = queue.New(queue.Options{
 		Store: st, Directory: e.dir.Load, Resolver: e.res, Port: e.sink.Port,
 		Now: e.clock.Now, Event: event, Logger: logger,
+		AllowPrivate: true, // the sink listens on 127.0.0.1
 		ReturnTo: func(sender string) (string, bool) {
 			orig, err := e.srs.Reverse(sender)
 			return orig, err == nil
