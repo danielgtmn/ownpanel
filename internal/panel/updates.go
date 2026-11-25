@@ -58,8 +58,10 @@ const (
 	releasesCheckGap = time.Minute
 	releasesTimeout  = 5 * time.Second
 	// updateStaleAfter: a "running" status older than this is an update
-	// that died without reporting.
-	updateStaleAfter  = 45 * time.Minute
+	// that died without reporting. systemd stops ownpanel-update.service
+	// after 30 minutes (TimeoutStartSec) and update.sh then reports
+	// "failed" itself; this only covers a run killed without that chance.
+	updateStaleAfter  = 35 * time.Minute
 	defaultAutoWindow = "03:00-05:00"
 	// keyUpdateRecorded remembers which finished update is in the activity log.
 	keyUpdateRecorded = "update_recorded"
