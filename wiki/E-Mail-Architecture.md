@@ -250,8 +250,12 @@ have no panel account and cannot change their own password yet (*later*).
 - `postmaster@`/`abuse@` go to the alias of that name if one exists,
   otherwise to the domain's oldest mailbox. With no mailbox, and for
   `mail_host`, they go to the address in the setting `postmaster_address`
-  (admin); without it they are refused with a temporary error and Mail health
-  shows a warning.
+  (admin). An outside postmaster address is forwarded to through the queue
+  like an alias (SRS sender in the domain, or in `mail_host`, the mail was
+  addressed to; counted against that domain's hourly limit). Without a
+  postmaster address, or when it is an address of a domain here that does
+  not exist, they are refused with a temporary error and Mail health shows a
+  warning.
 - Over quota or low disk: `452`, temporary.
 - Filtering, see [#28](#filtering--28).
 

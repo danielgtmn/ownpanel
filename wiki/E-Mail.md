@@ -112,7 +112,9 @@ sender. Mail judged as spam is not forwarded.
 
 `postmaster@` and `abuse@` of every domain always receive mail: through a
 forwarding address of that name if there is one, else into the domain's
-first mailbox, else to the postmaster address from the settings.
+first mailbox, else to the postmaster address from the settings. The
+postmaster address may be outside (at another provider): then that mail is
+forwarded to it like a forwarding address.
 
 ## Limits
 

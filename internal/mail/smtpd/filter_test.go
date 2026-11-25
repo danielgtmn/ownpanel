@@ -381,6 +381,35 @@ func TestForwarding(t *testing.T) {
 	}
 }
 
+// TestPostmasterOutside: with an outside postmaster address, mail to
+// postmaster@ of the host name (and of a domain without mailboxes) is
+// forwarded there through the queue with an SRS sender.
+func TestPostmasterOutside(t *testing.T) {
+	cfg := fwdConfig(t)
+	cfg.PostmasterAddress = "admin@elsewhere.test"
+	e := start(t, cfg)
+	e.from("192.0.2.10")
+	c := dial(t, e.addr, false)
+	for _, rcpt := range []string{"postmaster@mail.example.net", "abuse@empty.test"} {
+		if err := send(c, "a@sender.test", []string{rcpt}, goodMsg); err != nil {
+			t.Fatalf("%s: %v", rcpt, err)
+		}
+	}
+	e.q.Flush()
+	got := e.sink.Messages()
+	if len(got) != 2 {
+		t.Fatalf("forwarded %d", len(got))
+	}
+	for _, m := range got {
+		if len(m.To) != 1 || m.To[0] != "admin@elsewhere.test" {
+			t.Errorf("to %v", m.To)
+		}
+		if orig, err := e.srs.Reverse(m.From); err != nil || orig != "a@sender.test" {
+			t.Errorf("sender %q: %v", m.From, err)
+		}
+	}
+}
+
 func TestBounceToSRSAddress(t *testing.T) {
 	e := start(t, fwdConfig(t))
 	e.from("192.0.2.10")

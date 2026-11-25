@@ -189,6 +189,23 @@ func TestMailHealth(t *testing.T) {
 	if c := healthCheck(t, mustHealth(t, svc), HealthPostmaster); c.State != HealthOK {
 		t.Fatalf("postmaster with alias %+v", c)
 	}
+	// The postmaster address may be outside (forwarded), but one in a mail
+	// domain here that does not exist leads nowhere.
+	for addr, want := range map[string]string{
+		"admin@elsewhere.test":            HealthOK,
+		"postmaster@bobother.example.com": HealthOK,
+		"nobody@bobother.example.com":     HealthWarning,
+	} {
+		if _, err := svc.UpdateSettings(ctx, admin, SettingsUpdate{PostmasterAddress: strp(addr)}); err != nil {
+			t.Fatal(err)
+		}
+		if c := healthCheck(t, mustHealth(t, svc), HealthPostmaster); c.State != want {
+			t.Errorf("postmaster address %s: %+v", addr, c)
+		}
+	}
+	if _, err := svc.UpdateSettings(ctx, admin, SettingsUpdate{PostmasterAddress: strp("")}); err != nil {
+		t.Fatal(err)
+	}
 
 	// An unreachable mail service: never a failure of the request.
 	w.mail.set(func(f *fakeMail) { f.statusErr = errors.New("connection refused") })

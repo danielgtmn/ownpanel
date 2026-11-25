@@ -12,6 +12,7 @@ import (
 
 	"github.com/danielgtmn/ownpanel/internal/dns"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/mail/directory"
 	"github.com/danielgtmn/ownpanel/internal/store"
 )
 
@@ -414,9 +415,32 @@ func (s *Service) healthListeners(st *config.Status) MailHealthCheck {
 	return c
 }
 
+// healthPostmasterAddress tells where the postmaster address leads, the
+// way the mail service resolves it: a mailbox here, forwarded outside, or
+// nowhere (an address in a mail domain here that does not exist).
+func (s *Service) healthPostmasterAddress(ctx context.Context, pm string) MailHealthCheck {
+	cfg, err := s.buildMailConfig(ctx)
+	if err != nil {
+		return check("", HealthUnknown, "The mail domains could not be read.")
+	}
+	if cfg.Hostname == "" {
+		return check("", HealthOK, "Mail to postmaster@ and abuse@ that has no mailbox to go to is sent to "+pm+".")
+	}
+	_, out := directory.New(cfg).Resolve("postmaster@" + cfg.Hostname)
+	switch out {
+	case directory.Deliver:
+		return check("", HealthOK, "Mail to postmaster@ and abuse@ that has no mailbox to go to is delivered to "+pm+".")
+	case directory.ForwardOnly:
+		return check("", HealthOK, "Mail to postmaster@ and abuse@ that has no mailbox to go to is forwarded to "+pm+".")
+	}
+	c := check("", HealthWarning, "The postmaster address "+pm+" does not exist on this server, so mail to postmaster@ and abuse@ that has no mailbox to go to is refused for now. Create it, or set another postmaster address in the settings.")
+	c.Found = []string{pm}
+	return c
+}
+
 func (s *Service) healthPostmaster(ctx context.Context) MailHealthCheck {
-	if s.state().postmasterAddress != "" {
-		return check("", HealthOK, "Mail to postmaster@ and abuse@ that has no mailbox to go to is sent to "+s.state().postmasterAddress+".")
+	if pm := s.state().postmasterAddress; pm != "" {
+		return s.healthPostmasterAddress(ctx, pm)
 	}
 	domains, err := s.store.MailDomains(ctx)
 	if err != nil {

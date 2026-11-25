@@ -81,10 +81,25 @@ func TestPostmasterMissing(t *testing.T) {
 	if _, out := d.Resolve("abuse@mail.example.net"); out != NoPostmaster {
 		t.Fatalf("got %v", out)
 	}
-	cfg.PostmasterAddress = "admin@elsewhere.test"
+	// An address of ours that does not exist leads nowhere.
+	cfg.PostmasterAddress = "nobody@a.test"
 	d = New(cfg)
 	if _, out := d.Resolve("abuse@mail.example.net"); out != NoPostmaster {
-		t.Fatalf("external postmaster: %v", out)
+		t.Fatalf("unknown postmaster: %v", out)
+	}
+}
+
+// TestPostmasterOutside: an outside postmaster address is forwarded to,
+// like an alias pointing there.
+func TestPostmasterOutside(t *testing.T) {
+	cfg := testConfig()
+	cfg.PostmasterAddress = "admin@elsewhere.test"
+	d := New(cfg)
+	for _, addr := range []string{"abuse@mail.example.net", "postmaster@mail.example.net", "postmaster@c.test"} {
+		r, out := d.Resolve(addr)
+		if out != ForwardOnly || len(r.Mailboxes) != 0 || !slices.Equal(r.External, []string{"admin@elsewhere.test"}) {
+			t.Errorf("%s: %v %+v", addr, out, r)
+		}
 	}
 }
 

@@ -100,8 +100,8 @@ const (
 	Unknown
 	// ForwardOnly: the address only forwards outside (Route.External).
 	ForwardOnly
-	// NoPostmaster: postmaster@/abuse@ without anyone to receive it
-	// (temporary error).
+	// NoPostmaster: postmaster@/abuse@ without anywhere to go, neither a
+	// local mailbox nor an outside postmaster address (temporary error).
 	NoPostmaster
 )
 
@@ -120,8 +120,8 @@ type Route struct {
 //
 // Accepted are: a mailbox; an alias; postmaster@ and abuse@ of every
 // configured domain and of the hostname (to the alias of that name, else
-// the domain's oldest mailbox, else the postmaster address); and the
-// catch-all of a configured domain.
+// the domain's oldest mailbox, else the postmaster address, forwarded when
+// it is outside); and the catch-all of a configured domain.
 func (d *Directory) Resolve(addr string) (Route, Outcome) {
 	var r Route
 	local, dom, ok := config.SplitAddress(addr)
@@ -147,13 +147,15 @@ func (d *Directory) Resolve(addr string) (Route, Outcome) {
 		if pm == "" || pm == addr {
 			return r, NoPostmaster
 		}
+		// The postmaster address may be outside: then the mail is
+		// forwarded like an alias that points there.
 		r, out := d.expand([]string{pm})
-		if out != Deliver {
+		if out == Unknown {
 			// The postmaster must stay reachable later: ask the sender to
 			// retry rather than refuse for good.
 			return r, NoPostmaster
 		}
-		return r, Deliver
+		return r, out
 	}
 	if isDomain {
 		if targets, ok := d.aliases["*@"+dom]; ok {
