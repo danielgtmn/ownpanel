@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/base64"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -407,6 +409,41 @@ func TestPostmasterOutside(t *testing.T) {
 		if orig, err := e.srs.Reverse(m.From); err != nil || orig != "a@sender.test" {
 			t.Errorf("sender %q: %v", m.From, err)
 		}
+	}
+}
+
+// TestForwardCountTakenBack: a message refused because a mailbox could not
+// store it does not keep its forward counted, so the retry is forwarded.
+func TestForwardCountTakenBack(t *testing.T) {
+	e := start(t, fwdConfig(t)) // limited.test: 1 message per hour
+	e.from("192.0.2.10")
+	c := dial(t, e.addr, false)
+	if err := send(c, "a@sender.test", []string{"alice@example.org"}, goodMsg); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(e.store.Dir(), "messages", idAlice)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	rcpts := []string{"alice@example.org", "x@limited.test"}
+	if err := send(c, "a@sender.test", rcpts, goodMsg); code(err) != 451 {
+		t.Fatalf("store failed: %v", err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := send(c, "a@sender.test", rcpts, goodMsg); err != nil {
+		t.Fatal(err)
+	}
+	e.q.Flush()
+	if got := e.sink.Messages(); len(got) != 1 || got[0].To[0] != "far@elsewhere.test" {
+		evs, _ := e.store.Events(context.Background(), 0)
+		t.Fatalf("forwarded %+v %+v", got, evs)
+	}
+	// The limit still holds for the next message.
+	if err := send(c, "a@sender.test", []string{"y@limited.test"}, goodMsg); code(err) != 451 {
+		t.Fatalf("over the limit: %v", err)
 	}
 }
 

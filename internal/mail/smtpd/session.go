@@ -63,6 +63,16 @@ type forward struct {
 	domain  string   // the alias domain: the SRS address is in it
 	alias   string   // first alias address (for events)
 	targets []string // deduplicated
+	// res is the reservation against the domain's sending limit while the
+	// message is not queued yet.
+	res *reservation
+}
+
+// reservation is one message counted against sending limits at a time;
+// release takes it back.
+type reservation struct {
+	limits []storage.SendLimit
+	at     time.Time
 }
 
 type session struct {
@@ -430,9 +440,18 @@ func (ss *session) Data(r io.Reader) error {
 
 	// Forwarding and delivery reports passed back: the domain's sending
 	// limit is counted before anything is stored, so a message that cannot
-	// go anywhere gets a temporary error.
+	// go anywhere gets a temporary error. Reservations of copies that are
+	// not queued in the end (the message is refused, e.g. a mailbox could
+	// not store it) are taken back, so the sender's retry does not count
+	// twice against the limit.
 	var sendable []*forward
-	reportsOK := false
+	var reportsRes *reservation
+	defer func() {
+		for _, fw := range sendable {
+			ss.release(fw.res)
+		}
+		ss.release(reportsRes)
+	}()
 	if !v.junk {
 		for _, fw := range ss.forwards {
 			if ss.reserveForward(ctx, fw) {
@@ -440,9 +459,9 @@ func (ss *session) Data(r io.Reader) error {
 			}
 		}
 		if len(ss.reports) > 0 {
-			reportsOK = ss.reserveReports(ctx)
+			reportsRes = ss.reserveReports(ctx)
 		}
-		if len(ss.boxes) == 0 && len(sendable) == 0 && !reportsOK {
+		if len(ss.boxes) == 0 && len(sendable) == 0 && reportsRes == nil {
 			return errForwardLimited
 		}
 	}
@@ -495,9 +514,11 @@ func (ss *session) Data(r io.Reader) error {
 				ss.s.log.Error("smtp: enqueue forward", "err", err)
 				return errLocal
 			}
+			// Queued: it goes out, so it stays counted.
+			fw.res = nil
 			queued++
 		}
-		if reportsOK {
+		if reportsRes != nil {
 			msg, err := message("")
 			if err != nil {
 				return errLocal
@@ -506,6 +527,7 @@ func (ss *session) Data(r io.Reader) error {
 				ss.s.log.Error("smtp: enqueue report", "err", err)
 				return errLocal
 			}
+			reportsRes = nil
 			queued++
 		}
 	}
@@ -683,8 +705,9 @@ func (ss *session) junkFolder(ctx context.Context, id string) string {
 // reserveForward counts one forwarded message against the alias domain's
 // hourly sending limit; false (and an event) when it is reached.
 func (ss *session) reserveForward(ctx context.Context, fw *forward) bool {
-	ok, dom, max := ss.reserveDomains(ctx, []string{fw.domain})
+	res, ok, dom, max := ss.reserveDomains(ctx, []string{fw.domain})
 	if ok {
+		fw.res = res
 		return true
 	}
 	ss.notes = append(ss.notes, config.Event{Kind: config.EventNotForwarded, Address: fw.alias,
@@ -697,25 +720,30 @@ func (ss *session) reserveForward(ctx context.Context, fw *forward) bool {
 // addresses once per message against each SRS domain's hourly sending
 // limit, like forwards: otherwise anyone with an alias that forwards could
 // make this server send unlimited null-sender mail to an address of their
-// choice. False (and events) when a limit is reached; then none of the
+// choice. nil (and events) when a limit is reached; then none of the
 // reports is passed on.
-func (ss *session) reserveReports(ctx context.Context) bool {
-	ok, dom, max := ss.reserveDomains(ctx, ss.reportDoms)
+func (ss *session) reserveReports(ctx context.Context) *reservation {
+	res, ok, dom, max := ss.reserveDomains(ctx, ss.reportDoms)
 	if ok {
-		return true
+		if res == nil {
+			// Counting failed: passed on anyway, nothing to take back.
+			res = &reservation{}
+		}
+		return res
 	}
 	for _, o := range ss.reports {
 		ss.notes = append(ss.notes, config.Event{Kind: config.EventNotForwarded, Address: o,
 			Detail: fmt.Sprintf("a delivery report for %s was not passed on: the domain %s reached its limit of %d messages per hour",
 				o, dom, max)})
 	}
-	return false
+	return nil
 }
 
 // reserveDomains counts one message against the hourly sending limit of
-// every domain in doms, all or nothing. When a limit is reached it returns
-// false, that domain and its limit.
-func (ss *session) reserveDomains(ctx context.Context, doms []string) (bool, string, int) {
+// every domain in doms, all or nothing, and returns the reservation (nil
+// when counting failed and the message goes anyway). When a limit is
+// reached it returns false, that domain and its limit.
+func (ss *session) reserveDomains(ctx context.Context, doms []string) (*reservation, bool, string, int) {
 	now := ss.s.opts.Now()
 	limits := make([]storage.SendLimit, 0, len(doms))
 	for _, dom := range doms {
@@ -729,12 +757,22 @@ func (ss *session) reserveDomains(ctx context.Context, doms []string) (bool, str
 	if err != nil {
 		// Counting failed: send anyway rather than lose the message.
 		ss.s.log.Error("smtp: count forward", "err", err)
-		return true, "", 0
+		return nil, true, "", 0
 	}
 	if i < 0 {
-		return true, "", 0
+		return &reservation{limits: limits, at: now}, true, "", 0
 	}
-	return false, doms[i], limits[i].Max
+	return nil, false, doms[i], limits[i].Max
+}
+
+// release takes back a reservation of a message that was not queued.
+func (ss *session) release(r *reservation) {
+	if r == nil || len(r.limits) == 0 {
+		return
+	}
+	if err := ss.s.opts.Store.ReleaseSend(context.Background(), r.limits, r.at); err != nil {
+		ss.s.log.Error("smtp: release forward count", "err", err)
+	}
 }
 
 // forwardSender is the envelope sender of forwarded mail and the mailbox

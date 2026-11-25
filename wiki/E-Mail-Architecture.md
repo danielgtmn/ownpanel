@@ -318,8 +318,10 @@ How it is built (phase 1c):
   `send_per_hour` (the same counter submission uses). When it is reached,
   the forward is dropped with a `delivery.not-forwarded` event if the
   message also reached a local mailbox, and refused with `451 4.7.1` if it
-  had nowhere else to go. Bounces routed back to an SRS address are not
-  counted.
+  had nowhere else to go. Bounces routed back to an SRS address count once
+  per message against the SRS address's domain the same way. A message that
+  is refused after all (a local mailbox could not store it) gives its count
+  back, so the sender's retry is not counted twice.
 - **Bounces of forwards:** when the outside server refuses a forwarded
   message for good, the queue sends a delivery status notification (from
   the null sender) to the original sender decoded from the SRS address.

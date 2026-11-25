@@ -380,6 +380,26 @@ func (s *Store) ReserveSend(ctx context.Context, limits []SendLimit, now time.Ti
 	return reached, err
 }
 
+// ReleaseSend takes back what ReserveSend recorded at the same now for the
+// same limits (one entry for every distinct key), for a message that was
+// not accepted after all: its retry must not count twice.
+func (s *Store) ReleaseSend(ctx context.Context, limits []SendLimit, now time.Time) error {
+	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
+		done := map[string]bool{}
+		for _, l := range limits {
+			if done[l.Key] {
+				continue
+			}
+			done[l.Key] = true
+			if _, err := tx.Exec(`DELETE FROM send_log WHERE rowid = (SELECT rowid FROM send_log WHERE key = ? AND value = '' AND at = ? LIMIT 1)`,
+				l.Key, now.Unix()); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // MarkOnce records (key, value) at now unless the same pair was recorded
 // after since. It returns whether it added one and how many entries with
 // distinct values the key has after since.
