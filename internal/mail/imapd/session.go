@@ -7,11 +7,13 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/mail/directory"
 	"github.com/danielgtmn/ownpanel/internal/mail/signin"
 	"github.com/danielgtmn/ownpanel/internal/mail/storage"
 )
@@ -31,6 +33,10 @@ type session struct {
 	// watch holds a storage watch per mailbox the session reads (its own
 	// and those shared with it).
 	watch watches
+	// nextDir is the configuration waiting to be applied; reconfiguring is
+	// set while a goroutine applies them (queueReconfigure).
+	nextDir       atomic.Pointer[directory.Directory]
+	reconfiguring atomic.Bool
 
 	// mu guards the fields below and selected.queue. It is never held
 	// while calling the store: the storage callback takes it under the

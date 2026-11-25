@@ -164,7 +164,7 @@ func (s *Server) Reconfigure() {
 	// Grants may have changed: watches follow them, and a session whose
 	// selected shared folder is no longer readable ends.
 	for _, sess := range live {
-		go sess.reconfigure(dir)
+		sess.queueReconfigure(dir)
 	}
 }
 

@@ -192,12 +192,43 @@ func (s *session) reconfigure(dir *directory.Directory) {
 	if _, ok := s.mailbox(); !ok {
 		return
 	}
+	if reconfigureDelay != nil {
+		reconfigureDelay(dir)
+	}
 	s.syncWatches(dir)
 	s.mu.Lock()
 	sel := s.sel
 	s.mu.Unlock()
 	if sel != nil && sel.t.shared && !stillFits(dir, sel.t.sid, sel.t.reader, s.id()) {
 		s.revoked()
+	}
+}
+
+// reconfigureDelay, when set (tests), runs before a session applies a
+// configuration.
+var reconfigureDelay func(*directory.Directory)
+
+// queueReconfigure hands a new configuration to the session. One goroutine
+// per session applies them, always the latest one waiting, so a slow
+// earlier one is never applied after a newer one.
+func (s *session) queueReconfigure(dir *directory.Directory) {
+	s.nextDir.Store(dir)
+	if s.reconfiguring.CompareAndSwap(false, true) {
+		go s.runReconfigure()
+	}
+}
+
+func (s *session) runReconfigure() {
+	for {
+		if dir := s.nextDir.Swap(nil); dir != nil {
+			s.reconfigure(dir)
+			continue
+		}
+		s.reconfiguring.Store(false)
+		// One may have been queued between the Swap and the Store.
+		if s.nextDir.Load() == nil || !s.reconfiguring.CompareAndSwap(false, true) {
+			return
+		}
 	}
 }
 
