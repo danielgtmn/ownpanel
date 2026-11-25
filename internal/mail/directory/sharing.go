@@ -114,8 +114,9 @@ const (
 
 // SendMode tells how mailbox m may send as addr (normalized) and for which
 // mailbox: its own address and aliases (m itself), the address of a mailbox
-// it has the send-as right on or an alias of it, or exactly the address of a
-// mailbox it has the send-on-behalf right on.
+// it has the send-as right on or an alias that delivers to that mailbox
+// alone, or exactly the address of a mailbox it has the send-on-behalf
+// right on.
 func (d *Directory) SendMode(m *config.Mailbox, addr string) (SendMode, *config.Mailbox) {
 	if d.MaySendAs(m, addr) {
 		return SendOwn, m
@@ -126,7 +127,11 @@ func (d *Directory) SendMode(m *config.Mailbox, addr string) (SendMode, *config.
 	} else if local, _, ok := config.SplitAddress(addr); ok && local != "*" {
 		if targets, ok := d.aliases[addr]; ok {
 			r, _ := d.expand(targets)
-			owners = r.Mailboxes
+			// Only an alias of that one mailbox: send-as on one member
+			// does not cover a group.
+			if len(r.Mailboxes) == 1 && len(r.External) == 0 {
+				owners = r.Mailboxes
+			}
 		}
 	}
 	var behalf *config.Mailbox
