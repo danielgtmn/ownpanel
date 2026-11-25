@@ -233,6 +233,10 @@ type ImportCheck struct {
 	// SkippedEntries counts entries of an uploaded file that are not mail
 	// or were refused (unsafe names, nested archives, too large).
 	SkippedEntries int `json:"skipped_entries,omitempty"`
+	// OwnExport is set when an uploaded file is a "Download all mail" zip
+	// of this panel: it was cleaned up once already, so the interface
+	// suggests including Junk and Trash.
+	OwnExport bool `json:"own_export,omitempty"`
 }
 
 // ImportFolderProgress is the mapping of one source folder and what was

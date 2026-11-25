@@ -58,7 +58,9 @@ type fileSource struct {
 	// empty are folders of our manifest without messages.
 	empty   []*fileEntry
 	skipped int
-	close   func() error
+	// ownExport: a zip with our export's manifest.
+	ownExport bool
+	close     func() error
 }
 
 // manifest is the manifest.json of our export.
@@ -176,6 +178,7 @@ func openZip(f *os.File, size, declared int64) (*fileSource, error) {
 		}
 	}
 	byPath := map[string]manifestFolder{}
+	src.ownExport = man != nil
 	if man != nil {
 		for _, mf := range man.Folders {
 			byPath[mf.Path] = mf
@@ -561,6 +564,7 @@ func (m *Manager) scanFile(ctx context.Context, j config.ImportJob) (config.Impo
 	}
 	c = makePlan(folders, local).check()
 	c.SkippedEntries = src.skipped
+	c.OwnExport = src.ownExport
 	return c, m.quotaNumbers(ctx, mb, &c)
 }
 

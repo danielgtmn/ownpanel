@@ -425,6 +425,19 @@ func TestExportImportRoundTrip(t *testing.T) {
 	var zipBuf bytes.Buffer
 	must(t, Export(ctx, st, idAlice, &zipBuf, time.Now()))
 
+	// The check tells it is our own export (the interface then includes
+	// Junk and Trash); another zip is not.
+	for name, data := range map[string][]byte{
+		"alice-export.zip": zipBuf.Bytes(),
+		"other.zip":        makeZip(t, zipEntry{name: "Inbox", data: "From - Fri Jan 05 11:00:00 2024\nSubject: x\n\nx\n"}),
+	} {
+		j := e.upload(idBob, name, data)
+		if j.Check == nil || j.Check.OwnExport != (name == "alice-export.zip") {
+			t.Fatalf("%s: own export %+v", name, j.Check)
+		}
+		must(t, e.m.Cancel(ctx, idBob, j.ID))
+	}
+
 	j := e.importFile(idBob, "alice-export.zip", zipBuf.Bytes(), config.ImportChoices{IncludeJunk: true, IncludeTrash: true})
 	if j.State != config.ImportDone || j.Copied != 5 || j.Failed != 0 {
 		t.Fatalf("import %+v", j)
