@@ -19,9 +19,10 @@ func runMail(args []string) error {
 	dataDir := fs.String("data", "/var/lib/ownpanel-mail", "data directory: configuration, mail index and messages")
 	admin := fs.String("admin", "/run/ownpanel-mail/admin.sock", "Unix socket the panel configures the service through")
 	smtpAddr := fs.String("smtp", ":25", "address for incoming mail from other servers")
-	submission := fs.String("submission", ":587", "address for mail clients sending with STARTTLS (not served yet)")
-	submissions := fs.String("submissions", ":465", "address for mail clients sending with TLS (not served yet)")
+	submission := fs.String("submission", ":587", "address for mail clients sending mail, STARTTLS required before sign-in (\"\" to disable)")
+	submissions := fs.String("submissions", ":465", "address for mail clients sending mail over TLS (\"\" to disable)")
 	imaps := fs.String("imaps", ":993", "address for mail clients reading mail with IMAP over TLS (\"\" to disable)")
+	ipv6Out := fs.Bool("ipv6-outbound", false, "also deliver outgoing mail over IPv6 (only if the server's IPv6 address has a reverse DNS entry naming the mail host)")
 	fs.Parse(args)
 
 	srv, err := server.New(server.Options{
@@ -31,6 +32,7 @@ func runMail(args []string) error {
 		SubmissionAddr:  *submission,
 		SubmissionsAddr: *submissions,
 		IMAPSAddr:       *imaps,
+		IPv6Outbound:    *ipv6Out,
 		Logger:          slog.Default(),
 	})
 	if err != nil {

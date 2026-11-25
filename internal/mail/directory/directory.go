@@ -217,3 +217,26 @@ func (d *Directory) expand(targets []string) (Route, Outcome) {
 		return r, Unknown
 	}
 }
+
+// MaySendAs tells whether mailbox m may send as addr (normalized): its own
+// address, or an alias (not the catch-all) that delivers to m.
+func (d *Directory) MaySendAs(m *config.Mailbox, addr string) bool {
+	if addr == m.Address {
+		return true
+	}
+	local, _, ok := config.SplitAddress(addr)
+	if !ok || local == "*" {
+		return false
+	}
+	targets, ok := d.aliases[addr]
+	if !ok {
+		return false
+	}
+	r, _ := d.expand(targets)
+	for _, b := range r.Mailboxes {
+		if b.StorageID == m.StorageID {
+			return true
+		}
+	}
+	return false
+}

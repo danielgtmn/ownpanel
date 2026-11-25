@@ -20,20 +20,24 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/danielgtmn/ownpanel/internal/mail/auth"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/mail/directory"
 	"github.com/danielgtmn/ownpanel/internal/mail/imapd"
+	"github.com/danielgtmn/ownpanel/internal/mail/queue"
 	"github.com/danielgtmn/ownpanel/internal/mail/signin"
 	"github.com/danielgtmn/ownpanel/internal/mail/smtpd"
 	"github.com/danielgtmn/ownpanel/internal/mail/storage"
+	"github.com/danielgtmn/ownpanel/internal/mail/submission"
 )
 
 // Options configure the service.
 type Options struct {
 	DataDir     string
 	AdminSocket string
-	// Listener addresses. SMTP (port 25) and IMAPS (993) are served in
-	// this version; an empty address leaves that listener closed.
+	// Listener addresses: SMTP (port 25), submission with STARTTLS (587),
+	// submission with TLS (465) and IMAPS (993). An empty address leaves
+	// that listener closed.
 	SMTPAddr        string
 	SubmissionAddr  string
 	SubmissionsAddr string
@@ -46,6 +50,14 @@ type Options struct {
 	// Outbound runs the outbound port 25 check (tests); nil tries the MX
 	// of gmail.com.
 	Outbound func(ctx context.Context) config.OutboundCheck
+
+	// IPv6Outbound lets the queue deliver over IPv6 (see package queue).
+	IPv6Outbound bool
+	// QueueResolver, QueueDial and QueuePort replace MX lookups, outgoing
+	// connections and port 25 of the queue (tests).
+	QueueResolver queue.Resolver
+	QueueDial     func(ctx context.Context, network, address string) (net.Conn, error)
+	QueuePort     string
 }
 
 // configFile is the last configuration loaded, used at start like Caddy's
@@ -70,10 +82,15 @@ type Server struct {
 	loadMu sync.Mutex // serializes loads
 
 	signIn *signin.Checker
+	limits *submission.Limiter
+	signer *auth.Signer
+	queue  *queue.Queue
 
-	lisMu sync.Mutex
-	smtp  listenerState
-	imaps listenerState
+	lisMu       sync.Mutex
+	smtp        listenerState
+	submission  listenerState
+	submissions listenerState
+	imaps       listenerState
 
 	admin   *http.Server
 	adminLn net.Listener
@@ -113,6 +130,8 @@ func New(opts Options) (*Server, error) {
 	}
 	s := &Server{opts: opts, log: opts.Logger}
 	s.smtp = listenerState{name: "smtp", label: "incoming mail", cfg: opts.SMTPAddr, start: s.startSMTP}
+	s.submission = listenerState{name: "submission", label: "sending for mail clients (STARTTLS)", cfg: opts.SubmissionAddr, start: func() service { return s.startSubmission(false) }}
+	s.submissions = listenerState{name: "submissions", label: "sending for mail clients (TLS)", cfg: opts.SubmissionsAddr, start: func() service { return s.startSubmission(true) }}
 	s.imaps = listenerState{name: "imaps", label: "IMAP for mail clients", cfg: opts.IMAPSAddr, start: s.startIMAPS}
 	s.signIn = signin.New(signin.Options{Event: s.event})
 	empty := &config.Config{}
@@ -137,8 +156,21 @@ func New(opts Options) (*Server, error) {
 	}
 	if rep != (storage.ReconcileReport{}) {
 		s.log.Warn("mail storage repaired", "missing_files", rep.MissingFiles, "indexed_files", rep.IndexedFiles,
-			"restored", rep.Restored, "new_uidvalidity", rep.NewUIDValidity)
+			"restored", rep.Restored, "new_uidvalidity", rep.NewUIDValidity,
+			"queue_missing_files", rep.QueueMissing, "queue_stray_files", rep.QueueStray)
 	}
+	s.limits = submission.NewLimiter(store, nil, s.event, s.log)
+	s.signer = auth.NewSigner()
+	s.queue = queue.New(queue.Options{
+		Store:     store,
+		Directory: s.Directory,
+		Resolver:  opts.QueueResolver,
+		Dial:      opts.QueueDial,
+		Port:      opts.QueuePort,
+		IPv6:      opts.IPv6Outbound,
+		Event:     s.event,
+		Logger:    s.log,
+	})
 	if err := s.resume(); err != nil {
 		// A broken file must not keep mail down: the panel pushes again.
 		s.log.Error("mail: last configuration not loaded", "err", err)
@@ -278,7 +310,7 @@ func (s *Server) syncListeners() {
 	s.lisMu.Lock()
 	defer s.lisMu.Unlock()
 	rt := s.state.Load()
-	for _, st := range []*listenerState{&s.smtp, &s.imaps} {
+	for _, st := range s.allListeners() {
 		s.syncListener(rt, st)
 	}
 }
@@ -340,6 +372,25 @@ func (s *Server) startSMTP() service {
 	})
 }
 
+func (s *Server) allListeners() []*listenerState {
+	return []*listenerState{&s.smtp, &s.submission, &s.submissions, &s.imaps}
+}
+
+func (s *Server) startSubmission(implicitTLS bool) service {
+	return submission.New(submission.Options{
+		Store:       s.store,
+		Directory:   s.Directory,
+		SignIn:      s.signIn,
+		Limits:      s.limits,
+		Queue:       s.queue,
+		Signer:      s.signer,
+		TLSConfig:   s.tls,
+		ImplicitTLS: implicitTLS,
+		Logger:      s.log,
+		FreeBytes:   s.opts.FreeBytes,
+	})
+}
+
 func (s *Server) startIMAPS() service {
 	return imapd.New(imapd.Options{
 		Store:     s.store,
@@ -362,6 +413,17 @@ func bindError(err error) string {
 
 // SMTPAddr is the address the SMTP listener is bound to ("" if none).
 func (s *Server) SMTPAddr() string { return s.boundAddr(&s.smtp) }
+
+// SubmissionAddr is the address the submission (STARTTLS) listener is
+// bound to ("" if none).
+func (s *Server) SubmissionAddr() string { return s.boundAddr(&s.submission) }
+
+// SubmissionsAddr is the address the submission (TLS) listener is bound to
+// ("" if none).
+func (s *Server) SubmissionsAddr() string { return s.boundAddr(&s.submissions) }
+
+// Queue is the outbound queue.
+func (s *Server) Queue() *queue.Queue { return s.queue }
 
 // IMAPSAddr is the address the IMAPS listener is bound to ("" if none).
 func (s *Server) IMAPSAddr() string { return s.boundAddr(&s.imaps) }
@@ -387,6 +449,10 @@ func (s *Server) Status(ctx context.Context) (config.Status, error) {
 	st := config.Status{ConfigHash: rt.hash, Listeners: s.listeners(), Mailboxes: []config.MailboxStatus{}, Orphans: []string{}}
 	if len(rt.certs.certs) > 0 {
 		st.CertificateExpires = rt.certs.certs[0].Leaf.NotAfter.UTC()
+	}
+	var err error
+	if st.QueueLength, err = s.queue.Len(ctx); err != nil {
+		return st, err
 	}
 	blocks, err := s.store.Blocks(ctx)
 	if err != nil {
@@ -417,10 +483,6 @@ func (s *Server) Status(ctx context.Context) (config.Status, error) {
 	return st, nil
 }
 
-// notBuilt marks listeners of later phases, so the panel can show all four
-// ports and why two of them are closed.
-const notBuilt = "not built yet"
-
 func (s *Server) listeners() []config.Listener {
 	s.lisMu.Lock()
 	defer s.lisMu.Unlock()
@@ -431,12 +493,11 @@ func (s *Server) listeners() []config.Listener {
 		}
 		return l
 	}
-	return []config.Listener{
-		report(&s.smtp),
-		{Name: "submission", Address: s.opts.SubmissionAddr, Error: notBuilt},
-		{Name: "submissions", Address: s.opts.SubmissionsAddr, Error: notBuilt},
-		report(&s.imaps),
+	var out []config.Listener
+	for _, st := range s.allListeners() {
+		out = append(out, report(st))
 	}
+	return out
 }
 
 // Run serves the admin socket and the listeners until ctx ends, then shuts
@@ -450,6 +511,8 @@ func (s *Server) Run(ctx context.Context) error {
 	go func() { adminDone <- s.admin.Serve(s.adminLn) }()
 	s.syncListeners()
 	s.store.PruneEvents(ctx)
+	s.limits.Prune(ctx)
+	s.queue.Start()
 
 	retry := time.NewTicker(30 * time.Second)
 	defer retry.Stop()
@@ -470,6 +533,9 @@ func (s *Server) Run(ctx context.Context) error {
 		case <-prune.C:
 			if err := s.store.PruneEvents(context.Background()); err != nil {
 				s.log.Error("mail: prune events", "err", err)
+			}
+			if err := s.limits.Prune(context.Background()); err != nil {
+				s.log.Error("mail: prune send log", "err", err)
 			}
 		}
 	}
@@ -509,7 +575,7 @@ func (s *Server) shutdown() error {
 	defer cancel()
 	s.lisMu.Lock()
 	var srvs []service
-	for _, st := range []*listenerState{&s.smtp, &s.imaps} {
+	for _, st := range s.allListeners() {
 		if st.srv != nil {
 			srvs = append(srvs, st.srv)
 			st.srv = nil
@@ -525,6 +591,9 @@ func (s *Server) shutdown() error {
 		}()
 	}
 	wg.Wait()
+	// Deliveries still running when the grace time is over are cancelled
+	// and tried again after the next start.
+	s.queue.Shutdown(ctx)
 	if s.admin != nil {
 		actx, acancel := context.WithTimeout(context.Background(), 5*time.Second)
 		s.admin.Shutdown(actx)

@@ -75,6 +75,9 @@ const (
 	EventBlocked        = "mailbox.blocked"
 	EventSignInFailures = "mailbox.sign-in-failures"
 	EventBounced        = "delivery.bounced"
+	// EventSendLimit: a mailbox or domain reached a sending limit (at most
+	// one event per mailbox and kind of limit per hour).
+	EventSendLimit      = "mailbox.send-limit"
 	EventListenerFailed = "listener.failed"
 )
 

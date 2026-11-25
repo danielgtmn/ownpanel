@@ -82,7 +82,10 @@ func (s *Store) SetBlocked(ctx context.Context, id, reason string) error {
 	})
 }
 
-// Unblock lifts a block. It reports whether the mailbox was blocked.
+// Unblock lifts a block and clears the send counters of the mailbox (sent
+// messages, hourly limit hits, sign-in networks), so the reasons for the
+// block do not block it again at once. It reports whether the mailbox was
+// blocked.
 func (s *Store) Unblock(ctx context.Context, id string) (bool, error) {
 	if err := checkID(id); err != nil {
 		return false, err
@@ -95,7 +98,8 @@ func (s *Store) Unblock(ctx context.Context, id string) (bool, error) {
 		}
 		n, _ := res.RowsAffected()
 		was = n > 0
-		return nil
+		_, err = tx.Exec(`DELETE FROM send_log WHERE key IN (?, ?, ?, ?)`, mailboxSendKeys(id)...)
+		return err
 	})
 	return was, err
 }

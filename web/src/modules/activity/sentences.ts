@@ -174,6 +174,8 @@ export function describeActivity({ actor, action, target }: Entry): string {
       return about(target, (t) => `The mail server stopped ${t} from sending`, 'The mail server stopped a mailbox from sending')
     case 'mail.mailbox.sign-in-failures':
       return about(target, (t) => `Many failed sign-ins to ${t}`, 'Many failed sign-ins to a mailbox')
+    case 'mail.mailbox.send-limit':
+      return about(target, (t) => `${t} reached its sending limit`, 'A mailbox reached its sending limit')
     case 'mail.delivery.bounced':
       return about(target, (t) => `Mail from ${t} could not be delivered`, 'Mail could not be delivered')
     case 'mail.listener.failed':

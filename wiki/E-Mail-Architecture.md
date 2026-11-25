@@ -293,7 +293,9 @@ duplicates. External targets count against the alias owner's send limits.
 - Retries after 5 min, 15 min, 30 min, 1 h, 2 h, then every 4 h, at most 5
   days; then a bounce message (DSN) to the sender. Permanent failures bounce
   at once. No bounce for bounces.
-- Source address: IPv6 is used only when `mail_host` has a matching AAAA
+- Source address: IPv4 unless the service runs with `-ipv6-outbound`
+  (off by default; the panel turns it on *later* once the PTR check
+  passes). IPv6 should only be used when `mail_host` has a matching AAAA
   record and the address has a PTR naming `mail_host` (otherwise SPF `mx`
   would fail); else IPv4.
 - The MX lookup and port are replaceable, so tests can deliver to a local
@@ -351,8 +353,10 @@ Receiving and showing DMARC reports: *later*.
 
 ## Limits and abuse — [#31](https://github.com/danielgtmn/ownpanel/issues/31)
 
-- Per mailbox: messages per hour and per day (defaults 100/h, 500/day),
-  recipients per message (50). Per domain: messages per hour (default 300).
+- Per mailbox: messages per hour and per day (defaults 100/h, 500/day).
+  One accepted message counts once, whatever the number of recipients;
+  recipients per message are capped separately. The windows slide and are
+  stored, so a restart does not reset them. Per domain: messages per hour (default 300).
   Admins set defaults and per-mailbox values; owners can only lower them.
 - Per person: at most 20 mail domains and 200 mailboxes (fixed now; an admin
   setting is *later*).

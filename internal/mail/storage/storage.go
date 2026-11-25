@@ -86,7 +86,7 @@ func Open(dir string, opts Options) (*Store, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	for _, d := range []string{dir, filepath.Join(dir, messagesDir), filepath.Join(dir, tmpDir), filepath.Join(dir, trashDir)} {
+	for _, d := range []string{dir, filepath.Join(dir, messagesDir), filepath.Join(dir, tmpDir), filepath.Join(dir, trashDir), filepath.Join(dir, queueDir)} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return nil, err
 		}
@@ -187,6 +187,35 @@ CREATE TABLE events (
 	detail     TEXT NOT NULL
 );
 CREATE INDEX events_at ON events(at);
+`,
+	// 2: outbound queue and the send log of the submission limits.
+	`
+CREATE TABLE queue (
+	id         INTEGER PRIMARY KEY,
+	file       TEXT NOT NULL UNIQUE,
+	sender     TEXT NOT NULL,
+	storage_id TEXT NOT NULL DEFAULT '',
+	created    INTEGER NOT NULL,
+	size       INTEGER NOT NULL
+);
+CREATE TABLE queue_rcpts (
+	id         INTEGER PRIMARY KEY,
+	message_id INTEGER NOT NULL REFERENCES queue(id) ON DELETE CASCADE,
+	address    TEXT NOT NULL,
+	domain     TEXT NOT NULL,
+	state      INTEGER NOT NULL DEFAULT 0,
+	attempts   INTEGER NOT NULL DEFAULT 0,
+	next_try   INTEGER NOT NULL,
+	last_error TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX queue_rcpts_due ON queue_rcpts(state, next_try);
+CREATE INDEX queue_rcpts_message ON queue_rcpts(message_id);
+CREATE TABLE send_log (
+	key   TEXT NOT NULL,
+	value TEXT NOT NULL DEFAULT '',
+	at    INTEGER NOT NULL
+);
+CREATE INDEX send_log_key ON send_log(key, at);
 `,
 }
 

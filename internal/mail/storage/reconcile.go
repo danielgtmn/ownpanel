@@ -20,6 +20,10 @@ type ReconcileReport struct {
 	NewUIDValidity bool
 	// Restored is set when the restore marker was found.
 	Restored bool
+	// QueueMissing are queued messages whose file was gone (dropped);
+	// QueueStray are queue files without a row (removed: never accepted).
+	QueueMissing int
+	QueueStray   int
 }
 
 // Reconcile brings index and files in line; call it once at start, before
@@ -147,7 +151,9 @@ func (s *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 			}
 			rep.NewUIDValidity = true
 		}
-		return nil
+		var qerr error
+		rep.QueueMissing, rep.QueueStray, qerr = s.reconcileQueue(tx)
+		return qerr
 	})
 	if err != nil {
 		return rep, err
@@ -223,6 +229,9 @@ func (s *Store) DeleteMailbox(ctx context.Context, id string) error {
 			if _, err := tx.Exec(q, id); err != nil {
 				return err
 			}
+		}
+		if _, err := tx.Exec(`DELETE FROM send_log WHERE key IN (?, ?, ?, ?)`, mailboxSendKeys(id)...); err != nil {
+			return err
 		}
 		ch.add(id, Change{Kind: MailboxDeleted})
 		return nil

@@ -60,6 +60,9 @@ describe('e-mail activity', () => {
     expect(describeActivity({ actor: 'mail', action: 'mail.delivery.bounced', target: 'info@example.com' })).toBe(
       'Mail from info@example.com could not be delivered',
     )
+    expect(describeActivity({ actor: 'mail', action: 'mail.mailbox.send-limit', target: 'info@example.com' })).toBe(
+      'info@example.com reached its sending limit',
+    )
     expect(describeActivity({ actor: 'mail', action: 'mail.mailbox.sign-in-failures', target: 'info@example.com' })).toBe(
       'Many failed sign-ins to info@example.com',
     )

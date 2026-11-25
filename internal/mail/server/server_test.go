@@ -44,21 +44,25 @@ func socketDir(t *testing.T) string {
 	return d
 }
 
-func run(t *testing.T, data, sock string) *instance {
+func run(t *testing.T, data, sock string, mods ...func(*Options)) *instance {
 	t.Helper()
-	srv, err := New(Options{
+	opts := Options{
 		DataDir:         data,
 		AdminSocket:     filepath.Join(sock, "admin.sock"),
 		SMTPAddr:        "127.0.0.1:0",
-		SubmissionAddr:  ":587",
-		SubmissionsAddr: ":465",
+		SubmissionAddr:  "127.0.0.1:0",
+		SubmissionsAddr: "127.0.0.1:0",
 		IMAPSAddr:       "127.0.0.1:0",
 		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 		FreeBytes:       func() (int64, error) { return 10 << 30, nil },
 		Outbound: func(context.Context) config.OutboundCheck {
 			return config.OutboundCheck{OK: true, Target: "mx.test:25"}
 		},
-	})
+	}
+	for _, m := range mods {
+		m(&opts)
+	}
+	srv, err := New(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +134,7 @@ func TestLoadStatusResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	if st.ConfigHash != "" || listener(st, "smtp").Listening || listener(st, "imaps").Error != notReady ||
-		listener(st, "submission").Error != notBuilt {
+		listener(st, "submission").Error != notReady {
 		t.Fatalf("empty status %+v", st)
 	}
 	if fi, err := os.Stat(filepath.Join(sock, "admin.sock")); err != nil || fi.Mode().Perm() != 0o660 {

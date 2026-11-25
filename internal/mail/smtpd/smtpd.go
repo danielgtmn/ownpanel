@@ -47,6 +47,14 @@ type Options struct {
 	MinFreeBytes   int64
 	// FreeBytes reports free disk space (tests); nil means Store.FreeBytes.
 	FreeBytes func() (int64, error)
+
+	// NewSession replaces the port 25 sessions (the submission server
+	// uses this server's listener, limits and generations with its own
+	// sessions). Nil means port 25.
+	NewSession func(c *smtp.Conn) (smtp.Session, error)
+	// ImplicitTLS starts every connection with TLS (port 465); TLSConfig
+	// must be set. Refused connections are closed without a reply then.
+	ImplicitTLS bool
 }
 
 // Server is the port 25 server. It runs go-smtp servers behind its own
@@ -105,6 +113,11 @@ func (s *Server) Serve(l net.Listener) error {
 		return errors.New("smtpd: already serving")
 	}
 	s.ln = newLimitListener(l, d.Limits().ConnectionsPerIP, s.opts.MaxConnections, s.opts.IdleTimeout)
+	refusal := func(line string) string { return line }
+	if s.opts.ImplicitTLS {
+		s.ln.refusal = ""
+		refusal = func(string) string { return "" }
+	}
 	ln := s.ln
 	s.mu.Unlock()
 	s.Reconfigure()
@@ -124,13 +137,16 @@ func (s *Server) Serve(l net.Listener) error {
 			return err
 		}
 		if s.stopping.Load() {
-			go refuse(c, "421 4.3.2 Service shutting down, try again later\r\n")
+			go refuse(c, refusal("421 4.3.2 Service shutting down, try again later\r\n"))
 			continue
+		}
+		if s.opts.ImplicitTLS {
+			c = tls.Server(c, s.opts.TLSConfig)
 		}
 		for {
 			g := s.current()
 			if g == nil {
-				refuse(c, "421 4.3.0 Service not ready\r\n")
+				refuse(c, refusal("421 4.3.0 Service not ready\r\n"))
 				break
 			}
 			if g.ln.deliver(c) {
@@ -163,7 +179,11 @@ func (s *Server) Reconfigure() {
 		return
 	}
 	g := &generation{key: key, ln: newChanListener(s.ln.Addr())}
-	srv := smtp.NewServer(smtp.BackendFunc(s.newSession))
+	newSession := s.newSession
+	if s.opts.NewSession != nil {
+		newSession = s.opts.NewSession
+	}
+	srv := smtp.NewServer(smtp.BackendFunc(newSession))
 	srv.Domain = d.Hostname()
 	srv.MaxMessageBytes = lim.MaxMessageBytes
 	srv.MaxRecipients = lim.MaxRecipients
@@ -197,6 +217,10 @@ func (s *Server) retire(g *generation, ctx context.Context) {
 	}
 	g.run.Wait()
 }
+
+// Stopping tells whether Shutdown or Close was called; sessions refuse
+// new transactions then.
+func (s *Server) Stopping() bool { return s.stopping.Load() }
 
 // Shutdown stops taking new mail: new connections and new transactions get
 // 421, running transactions may finish until ctx ends (at most 30 s), then
