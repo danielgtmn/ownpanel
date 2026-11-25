@@ -56,13 +56,14 @@ outgoing encryption policies (MTA-STS, DANE). See [[Roadmap|Roadmap]].
 1. **Settings → E-mail:** enter the mail server name and a postmaster
    address (an address of yours that receives reports about mail problems).
    The server's certificate is requested automatically once the name points
-   at the server.
+   at the server. Until the mail server has a name, a domain's e-mail page
+   only says so and shows neither records nor settings for mail programs.
 2. **Turn on e-mail for a domain:** from the domain in the sidebar, or from
    the add menu. You can do this for a domain of one of your sites or
    redirects, or one in a zone of your DNS connection. Administrators can do
    it for any domain.
 3. **DNS records:** the domain's e-mail page lists the records mail needs.
-   If the domain's DNS is in your connected DNS account, **Set up records**
+   If the domain's DNS is in one of your DNS connections, **Set up records**
    creates them; if the domain currently receives mail somewhere else, you
    confirm first that it should come here from now on. Otherwise create them
    where you manage the domain's DNS:
