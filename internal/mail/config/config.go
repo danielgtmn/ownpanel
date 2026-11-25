@@ -179,6 +179,9 @@ type Mailbox struct {
 	PasswordSetAt         int64 `json:"password_set_at,omitempty"`
 	DisplayNameSetAt      int64 `json:"display_name_set_at,omitempty"`
 	AppPasswordsOnlySetAt int64 `json:"app_passwords_only_set_at,omitempty"`
+	// NoForwarding: the mailbox's filters may not forward mail (redirect);
+	// the domain owner decides, forwarding is allowed by default.
+	NoForwarding bool `json:"no_forwarding,omitempty"`
 }
 
 // Alias delivers mail for Address to Targets.

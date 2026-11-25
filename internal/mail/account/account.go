@@ -144,6 +144,7 @@ func New(opts Options) *Handler {
 	mux.HandleFunc("POST /account/api/app-passwords", h.authed(h.createAppPassword))
 	mux.HandleFunc("DELETE /account/api/app-passwords/{id}", h.authed(h.revokeAppPassword))
 	mux.HandleFunc("GET /account/api/apple-setup", h.authed(h.appleSetup))
+	h.filterRoutes(mux)
 	mux.HandleFunc("/account/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found.")
 	})

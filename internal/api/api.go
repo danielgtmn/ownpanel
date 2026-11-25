@@ -67,6 +67,7 @@ var routeGroups = []func(*Server, *http.ServeMux){
 	(*Server).mailRoutes,
 	(*Server).mailTransferRoutes,
 	(*Server).mailAccountRoutes,
+	(*Server).mailRulesRoutes,
 }
 
 // Handler returns the API routes.

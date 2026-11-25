@@ -26,6 +26,8 @@ import (
 	"github.com/emersion/go-smtp"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/auth"
+	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/mail/deliver"
 	"github.com/danielgtmn/ownpanel/internal/mail/directory"
 	"github.com/danielgtmn/ownpanel/internal/mail/filter"
 	"github.com/danielgtmn/ownpanel/internal/mail/queue"
@@ -81,6 +83,9 @@ type Options struct {
 	// ClientIP returns the address a connection comes from (tests); nil
 	// means the connection's remote address.
 	ClientIP func(net.Addr) netip.Addr
+	// Deliver stores messages in mailboxes and runs their filters; nil
+	// means one with Store, Queue and SRS.
+	Deliver *deliver.Deliverer
 }
 
 // Server is the port 25 server. It runs go-smtp servers behind its own
@@ -134,6 +139,11 @@ func New(opts Options) *Server {
 	}
 	if opts.SRS == nil {
 		opts.SRS = auth.NewSRS(randomKey(), opts.Now)
+	}
+	if opts.Deliver == nil {
+		st := opts.Store
+		opts.Deliver = deliver.New(deliver.Options{Store: st, Queue: opts.Queue, SRS: opts.SRS, Signer: auth.NewSigner(),
+			Logger: opts.Logger, Now: opts.Now, Event: func(e config.Event) { st.AddEvent(context.Background(), e) }})
 	}
 	if opts.ClientIP == nil {
 		opts.ClientIP = func(a net.Addr) netip.Addr {

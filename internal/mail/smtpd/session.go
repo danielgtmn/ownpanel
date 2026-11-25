@@ -19,6 +19,7 @@ import (
 
 	"github.com/danielgtmn/ownpanel/internal/mail/auth"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/mail/deliver"
 	"github.com/danielgtmn/ownpanel/internal/mail/directory"
 	"github.com/danielgtmn/ownpanel/internal/mail/filter"
 	"github.com/danielgtmn/ownpanel/internal/mail/storage"
@@ -96,6 +97,7 @@ type session struct {
 	spfDone     bool
 	spf         auth.SPFResult
 	boxes       []*config.Mailbox // deduplicated over all recipients
+	rcptOf      map[string]string // storage id → the first recipient address that reached it
 	rcptDomains []string          // our domains among the recipients
 	forwards    []*forward
 	reports     []string       // original senders of bounces to SRS addresses
@@ -122,6 +124,7 @@ func (ss *session) Reset() {
 	ss.spfDone = false
 	ss.spf = auth.SPFResult{}
 	ss.boxes = nil
+	ss.rcptOf = nil
 	ss.rcptDomains = nil
 	ss.forwards = nil
 	ss.reports = nil
@@ -248,6 +251,10 @@ func (ss *session) Rcpt(to string, _ *smtp.RcptOptions) error {
 	for _, m := range room {
 		if !containsBox(ss.boxes, m) {
 			ss.boxes = append(ss.boxes, m)
+			if ss.rcptOf == nil {
+				ss.rcptOf = map[string]string{}
+			}
+			ss.rcptOf[m.StorageID] = addr
 		}
 	}
 	if len(route.Mailboxes) > 0 && !slices.Contains(ss.rcptDomains, dom) {
@@ -466,14 +473,10 @@ func (ss *session) Data(r io.Reader) error {
 		}
 	}
 
-	returnPath := fmt.Sprintf("Return-Path: <%s>\r\n", sanitize(ss.from))
+	dm := ss.deliverMessage(v, size, func() (io.Reader, error) { return message("") })
 	delivered, full, failed := 0, 0, 0
 	for _, m := range ss.boxes {
-		msg, err := message(returnPath)
-		if err != nil {
-			return errLocal
-		}
-		err = ss.store(ctx, m, msg, v.junk)
+		err := ss.s.opts.Deliver.Deliver(ctx, dm, deliver.Recipient{Mailbox: m, Rcpt: ss.rcptOf[m.StorageID]})
 		switch {
 		case err == nil:
 			delivered++
@@ -673,33 +676,25 @@ func sameOrg(a, b string) bool {
 	return a == b || auth.OrgDomain(a) == auth.OrgDomain(b)
 }
 
-// store delivers into the mailbox's INBOX, or its Junk folder.
-func (ss *session) store(ctx context.Context, m *config.Mailbox, msg io.Reader, junk bool) error {
-	folder := storage.Inbox
-	if junk {
-		folder = ss.junkFolder(ctx, m.StorageID)
+// deliverMessage is the message as the mailboxes' filters see it: junk
+// goes to Junk unless a filter moves it, and the checks' results decide
+// whether filters may forward it or reply to it.
+func (ss *session) deliverMessage(v verdict, size int64, open func() (io.Reader, error)) *deliver.Message {
+	dm := &deliver.Message{Dir: ss.dir, Open: open, Size: size, EnvelopeFrom: ss.from, Junk: v.junk}
+	if _, d, ok := config.SplitAddress(directory.Normalize(ss.from)); ok && ss.ours(d) && ss.spfPassFor(d) {
+		dm.SenderVerified = true
 	}
-	_, err := ss.s.opts.Store.Append(ctx, m.StorageID, folder, msg, storage.AppendOptions{})
-	return err
-}
-
-// junkFolder is the folder marked \Junk (the person may have renamed it),
-// else INBOX.
-func (ss *session) junkFolder(ctx context.Context, id string) string {
-	st := ss.s.opts.Store
-	if err := st.EnsureMailbox(ctx, id); err != nil {
-		return storage.Inbox
+	for _, r := range v.dmarc {
+		dm.DMARCFail = dm.DMARCFail || r.Result == auth.Fail
 	}
-	folders, err := st.ListFolders(ctx, id)
-	if err != nil {
-		return storage.Inbox
+	dkimPass, dkimFail := false, false
+	for _, d := range v.dkim {
+		dkimPass = dkimPass || d.Result == auth.Pass
+		dkimFail = dkimFail || d.Result == auth.Fail || d.Result == auth.PermError
 	}
-	for _, f := range folders {
-		if f.SpecialUse == storage.SpecialJunk {
-			return f.Name
-		}
-	}
-	return storage.Inbox
+	dm.AuthFail = v.spf.Result == auth.Fail || dkimFail && !dkimPass
+	dm.SpamTest, dm.SpamPercent = deliver.SpamValues(v.score.Points, ss.dir.Config().Filter.WithDefaults().JunkScore, v.junk)
+	return dm
 }
 
 // reserveForward counts one forwarded message against the alias domain's

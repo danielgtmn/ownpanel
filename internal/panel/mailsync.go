@@ -112,6 +112,9 @@ func (s *Service) buildMailConfig(ctx context.Context) (*config.Config, error) {
 			})
 		}
 	}
+	if err := s.applyNoForwarding(ctx, cfg, mailboxes); err != nil {
+		return nil, err
+	}
 	aliases, err := s.store.MailAliases(ctx, "")
 	if err != nil {
 		return nil, err

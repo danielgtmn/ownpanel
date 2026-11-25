@@ -86,7 +86,7 @@ It all works with standard programs: Thunderbird, Apple Mail/Calendar/Contacts, 
 |---|---|---|---|---|
 | G0 | Web entry point on the mail host: Caddy site, certificate, routing, DAV socket | S | — | [#85](https://github.com/danielgtmn/ownpanel/issues/85) |
 | G1 | Mailbox accounts: display name, self-service area, app passwords, organisations (built) | M | G0 | [#86](https://github.com/danielgtmn/ownpanel/issues/86) |
-| G2 | Filters and out-of-office (Sieve, ManageSieve) | L | G1 | [#87](https://github.com/danielgtmn/ownpanel/issues/87) |
+| G2 | Filters and out-of-office (Sieve, ManageSieve) (built) | L | G1 | [#87](https://github.com/danielgtmn/ownpanel/issues/87) |
 | G3 | Shared mailboxes, send as / on behalf, distribution groups | XL | G1 | [#88](https://github.com/danielgtmn/ownpanel/issues/88) |
 | G4a | Own calendars and contacts, discovery, sync, directory | XL | G1 | [#89](https://github.com/danielgtmn/ownpanel/issues/89) |
 | G4b | Sharing calendars and address books | M | G4a | [#90](https://github.com/danielgtmn/ownpanel/issues/90) |
@@ -373,6 +373,105 @@ mailbox of their domain. The activity log records it, and the person sees
 **Limits:** at most 10 scripts per mailbox, 64 KiB each; step and time
 limits at runtime; scripts are parsed and checked when saved.
 
+**Library spike (G2):** `github.com/foxcpp/go-sieve` (fetched at
+`v0.0.0-20260523221512-9ae51b269e52` and read) is a clean RFC 5228
+interpreter with envelope, fileinto, imap4flags, variables, relational,
+copy, body, subaddress, environment and reject/ereject. It has **no**
+vacation, date/currentdate, include, duplicate, spamtest or mailbox
+(`mailboxexists`, `:create`), and no step or time limits (a run is bounded
+only by the script). Adding six extensions plus limits to a pre-1.0
+library we would have to fork was more work than writing exactly the
+subset: **own interpreter**, as expected.
+
+**Built (G2)** — how it turned out, and where it differs from the plan:
+
+- **`internal/mail/sieve`**: lexer, parser (nesting ≤ 32, lists ≤ 1024
+  strings, valid UTF-8, ≤ 64 KiB), a checking compiler into typed commands
+  and tests (`Compile`, errors with line numbers), and the runner
+  (`Script.Run`). Extensions: `fileinto`, `mailbox` (`mailboxexists`,
+  `:create`), `envelope`, `imap4flags`, `body` (`:raw`, `:text`,
+  `:content`), `copy`, `variables` (all modifiers, `string`), `relational`,
+  `date`/`currentdate` (every date part, `:zone`, `:originalzone`),
+  `vacation`, `vacation-seconds`, `include` (`:personal`, `:once`,
+  `:optional`, `return`, `global`; `:global` refused; depth ≤ 5, cycles
+  are errors), `duplicate` (`:handle`, `:header`, `:uniqueid`, `:seconds`,
+  `:last`; ≤ 30 days), `spamtest` and `spamtestplus` (`:percent`),
+  `regex` (≤ 1 KiB, Go RE2, captures as `${0}`…`${9}`), comparators
+  `i;octet`, `i;ascii-casemap`, `i;ascii-numeric`. `reject`/`ereject`
+  answer that they are not offered. Limits per run: 50,000 steps (commands,
+  tests, comparisons; long values cost more), 2 s, 100 actions, 512
+  variables of ≤ 16 KiB, one vacation; `:matches` has a work budget. The
+  parser and runner are fuzzed (`FuzzCompile`).
+- **Deviation:** the mailbox's own address is **not** offered "through
+  variables" (that needs the `environment` extension, which is not in the
+  list); it is in vacation's `:addresses` set implicitly, with the aliases
+  that deliver to the mailbox.
+- **`internal/mail/deliver`** runs the active script once per recipient
+  mailbox, after the spam checks, on port 25 (`smtpd`) and in submission
+  (mail between mailboxes). `envelope :to` is the RCPT that reached the
+  mailbox; spamtest maps the content score (1 clean … 10 junk; `:percent`
+  is score/threshold). Junk: keep and the implicit keep go to Junk, an
+  explicit `fileinto` moves it. A failed run, a missing folder (without
+  `:create`) or a redirect that may not happen keeps the message: filters
+  never lose mail. Compiled scripts are cached by content hash.
+- **Redirect:** never for Junk or DMARC failures (any policy), only when
+  the mailbox may forward (`config.Mailbox.NoForwarding`, set by the domain
+  owner, default allowed), at most 5 addresses per message, never to the
+  mailbox's own addresses. Loops: the copy gets `Delivered-To: <mailbox>`
+  and `X-Ownpanel-Loop: <opaque mark>` (a hash of host and storage id, not
+  the address); a message that already carries this mailbox's mark or
+  Delivered-To, 5 loop marks, more than 30 `Received` or a nesting of 5
+  is not redirected. Local targets are delivered directly (their filters
+  run), outside targets through the queue with SRS (a verified sender of
+  ours is kept) and the domain's hourly limit; refusals are
+  `delivery.not-forwarded` events.
+- **Vacation** replies exactly under the rules listed above; once per
+  (sender, handle) and period in `mail.db` (`sieve_replies`; 1 to 90 days,
+  default 7; the record is taken back if the reply could not be queued).
+  Replies come from the mailbox's address (or `:from` if the mailbox may
+  send as it) with its display name, null sender, `Auto-Submitted:
+  auto-replied`, `In-Reply-To`, `References`, DKIM-signed for the From
+  domain, and are counted against the mailbox's and the domain's sending
+  limits. **Deviation:** reaching a limit skips the reply silently and does
+  not count as a limit hit, so outside mail cannot get a mailbox blocked.
+  Replies to mailboxes here go straight to their INBOX.
+- **Simple settings** (`internal/mail/rules`): out-of-office, forwarding
+  and filter rules generate the script `ownpanel`, which carries its
+  settings as JSON on one comment line; it can be edited as long as it is
+  exactly what its settings generate. Any other active script (or an
+  edited `ownpanel`) makes the page read-only and offers to replace it.
+  **Deviation:** instead of marked sections inside the person's own
+  script, there is one generated script; a hand-written script stays
+  stored (inactive) when replaced. Order: out-of-office, forwarding (without
+  a copy it stops the rest), then the rules (each ends with `stop`).
+- **ManageSieve** (`internal/mail/managesieve`, `-managesieve :4190`, the
+  listener `managesieve` in `/status` and Mail health): STARTTLS only;
+  before it only CAPABILITY, STARTTLS, NOOP and LOGOUT (others get `NO
+  (ENCRYPT-NEEDED)`), and data sent together with STARTTLS closes the
+  connection. AUTHENTICATE PLAIN only, through the IMAP sign-in
+  (`signin.Checker.Check`: app passwords, "only app passwords", throttle →
+  `NO (TRYLATER)`), re-checked before every command (a revoked app password
+  ends the session). All RFC 5804 commands listed above; PUTSCRIPT and
+  CHECKSCRIPT compile and answer `NO "line N: …"`; PUTSCRIPT never
+  activates. Limits: lines 8 KiB, scripts 64 KiB (larger literals up to
+  1 MiB are drained, beyond that the connection ends), 10 scripts, 3 failed
+  sign-ins, 20 commands before sign-in, 30 s / 5 min idle, connections per
+  IP as for SMTP and 500 in total. Not built: UNAUTHENTICATE and a
+  `_sieve._tcp` SRV record.
+- **Mail service API:** self-service `GET /account/api/filters`, `PUT
+  /account/api/out-of-office|forwarding|filters` (wiki/API.md); admin socket
+  `GET /mailboxes/{sid}/rules`, `PUT …/out-of-office`, `PUT …/forwarding`
+  (`config/rules.go`). `Status.Mailboxes[].OutOfOffice` tells whether a
+  reply is on now (only for the generated script).
+- **Panel:** `internal/panel/mailrules.go` (permission checks there:
+  mail read to see, mail write to change, own domains), API routes
+  `/api/mail/mailboxes/{id}/rules|out-of-office|forwarding|may-forward`,
+  MCP tools `get_/set_/clear_mailbox_out_of_office`, table
+  `mailbox_no_forwarding` (migration 0015). The panel sees whether a reply
+  is on and its dates; text and forwarding address only if a panel user set
+  them. Activity: `mail.mailbox.out-of-office`, `mail.mailbox.forwarding`,
+  `mail.mailbox.may-forward` (never the text).
+
 ## G3 — Shared mailboxes, delegation, distribution groups
 
 **Shared mailbox:** a mailbox of kind `shared`. It has no password and
@@ -537,9 +636,9 @@ decided in its own design.
 
 None of these are in the module today; a spike decides before each phase:
 
-- **Sieve:** `foxcpp/go-sieve` is, from memory, small, pre-1.0 and without
-  `vacation`. Expect our own interpreter for the extension list above,
-  with a parser fuzzed in tests.
+- **Sieve:** decided in G2: our own interpreter (`internal/mail/sieve`);
+  `foxcpp/go-sieve` lacks vacation, date, include, duplicate, spamtest,
+  mailbox and runtime limits (see the spike in G2).
 - **DAV:** `emersion/go-webdav` for the XML types and basic handlers. Expect
   our own layer for sync, privileges, quota, sharing and scheduling.
 - **iCalendar/vCard:** `emersion/go-ical` (from memory, it wraps an RRULE

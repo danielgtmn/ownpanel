@@ -43,8 +43,8 @@ outgoing encryption policies (MTA-STS, DANE). See [[Roadmap|Roadmap]].
 1. **Port 25 must be open in both directions.** Many hosting providers block
    outgoing port 25 on new servers (Hetzner, AWS, Google Cloud, Azure, many
    others) and unblock it on request. Ask before you rely on sending.
-   Incoming 25, 465, 587 and 993 must be reachable; the installer opens them
-   in ufw.
+   Incoming 25, 465, 587, 993 and 4190 must be reachable; the installer opens
+   them in ufw.
 2. **A mail server name.** Pick a name such as `mail.example.com` and point it
    at the server (A and, if the server has IPv6, AAAA record). Mail
    programs connect to it and other servers deliver to it.
@@ -109,6 +109,7 @@ outgoing encryption policies (MTA-STS, DANE). See [[Roadmap|Roadmap]].
 | Password | the mailbox's password |
 | Incoming (IMAP) | port 993, SSL/TLS |
 | Outgoing (SMTP) | port 465, SSL/TLS, or port 587, STARTTLS |
+| Filters (ManageSieve) | port 4190, STARTTLS (see [Filters with a mail program](#filters-with-a-mail-program-managesieve)) |
 
 Most programs find these settings by themselves: Thunderbird and others
 ask `autoconfig.<domain>` (or `<domain>/.well-known/autoconfig/…` when the
@@ -173,6 +174,8 @@ signed in with the full address and the mailbox password. There they can
 - **create and revoke app passwords** (shown once, with copy), see when each
   was last used in the last 30 days, and switch **Only allow mail programs
   with app passwords** on or off;
+- set an **out-of-office reply**, **forwarding** and **filters** (see
+  [Out-of-office and filters](#out-of-office-and-filters));
 - read the **settings for mail programs** and download the **setup for
   Apple devices**.
 
@@ -209,6 +212,81 @@ book, once those features exist; nothing is shared just by grouping.
   organisation lets all its domains stand alone.
 - If an administrator put your domain into an organisation of someone
   else, the page says so; you can only take it out.
+
+## Out-of-office and filters
+
+Every mailbox can sort its incoming mail and answer it automatically. The
+person sets this up on the **mailbox's own page** (`https://<mail server
+name>/`), or in a mail program that can edit server filters (see below).
+Filters run when mail arrives, for mail from outside and for mail between
+mailboxes of this server, so an out-of-office reply also answers
+colleagues.
+
+- **Out-of-office reply:** on or off, a subject, the text, an optional first
+  and last day, and how often the same sender gets it (once every 1 to 90
+  days, 7 by default). Each sender gets it at most once in that time. It is
+  sent only when the mailbox's address (or a forwarding address that
+  delivers to it) is in To or Cc, and never to mailing lists, automatic
+  messages, bulk mail, the empty sender, `MAILER-DAEMON`, `owner-…`,
+  `…-request`, `LISTSERV`, its own address, mail judged as spam or mail
+  whose sender could not be confirmed (failed SPF, DKIM or DMARC). Replies
+  are signed for the domain and count against the mailbox's sending limit;
+  when the limit is reached, no reply is sent (the mailbox is not blocked
+  for it).
+- **Forwarding:** every message also (or only) goes to another address.
+- **Filters:** rules of conditions (from, to or cc, subject, mailing list;
+  contains or is; all or any of them) and actions (move to a folder, mark
+  as read, forward to an address, delete). The first rule that matches
+  ends the list.
+
+Mail judged as spam still lands in **Junk** unless a filter moves it
+somewhere else; it is never forwarded and never answered. A filter that
+fails, or a folder that no longer exists, keeps the message in the inbox:
+filters never lose mail.
+
+Forwarding by filters follows the same rules as forwarding addresses
+(rewritten return address, the domain's hourly limit) and in addition: at
+most 5 addresses per message, never to the mailbox's own addresses, and not
+for mail that this mailbox already forwarded once (two mailboxes that
+forward to each other stop after one round). The panel records an activity
+entry when a message was not forwarded and says why.
+
+**For someone who left:** as the domain's owner, open the mailbox in the
+panel, **Out-of-office and forwarding**: set or clear an out-of-office reply
+and forwarding for it. The activity log records it, and the person sees on
+their page who set it. The panel shows whether an out-of-office reply is on
+(also in the list of mailboxes), but not the text the person wrote. There
+you can also turn off **Filters of this mailbox may forward mail**
+(on by default).
+
+When the person's filters were written in a mail program, the page and the
+panel show them read-only and offer to replace them.
+
+### Filters with a mail program (ManageSieve)
+
+Mail programs that can edit filters on the server connect to the mail
+server name on **port 4190** with **STARTTLS** and sign in with the full
+address and the mailbox password or an app password (with **Only allow mail
+programs with app passwords** on, only an app password works). The
+connection is encrypted before any password is sent.
+
+In **Thunderbird** this needs the add-on **Sieve** by Thomas Schmid. In its
+settings for the account: server = the mail server name (for example
+`mail.example.com`), port 4190, security **STARTTLS**, user name = the full
+address, password = the mailbox password or an app password. Other programs
+and phones that speak ManageSieve take the same settings.
+
+- A mailbox keeps up to 10 filter scripts of at most 64 KB each; **one** of
+  them is active at a time. The filters set on the mailbox's own page are
+  the script called `ownpanel`.
+- A script with a mistake is refused with the line and the problem; it is
+  not saved, so the filters in use stay as they were.
+- The active script cannot be deleted; switch to another one (or to none)
+  first.
+- Changing the password, revoking the app password or deleting the mailbox
+  signs the program out at once. Three wrong passwords end the connection,
+  and too many from one network hold back further tries for a while, as for
+  IMAP.
 
 ## Forwarding
 
@@ -395,7 +473,7 @@ Mailbox owners should know this.
 - **Mail to Gmail or Outlook lands in spam or is refused:** check Mail health
   (reverse name, blocklists), that all records show as set up, and that
   outgoing port 25 is unblocked.
-- **Mail programs cannot connect:** check that 993, 465 and 587 are open in
-  the firewall and that the certificate check in Mail health is ok.
+- **Mail programs cannot connect:** check that 993, 465 and 587 (and 4190
+  for filters) are open in the firewall and that the certificate check in Mail health is ok.
 - **Logs:** `journalctl -u ownpanel-mail`. Logs never contain message
   contents or passwords.

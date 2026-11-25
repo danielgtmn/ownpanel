@@ -23,9 +23,11 @@ import (
 
 	"github.com/danielgtmn/ownpanel/internal/mail/auth"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	maildeliver "github.com/danielgtmn/ownpanel/internal/mail/deliver"
 	"github.com/danielgtmn/ownpanel/internal/mail/directory"
 	"github.com/danielgtmn/ownpanel/internal/mail/filter"
 	"github.com/danielgtmn/ownpanel/internal/mail/imapd"
+	"github.com/danielgtmn/ownpanel/internal/mail/managesieve"
 	"github.com/danielgtmn/ownpanel/internal/mail/queue"
 	"github.com/danielgtmn/ownpanel/internal/mail/signin"
 	"github.com/danielgtmn/ownpanel/internal/mail/smtpd"
@@ -56,6 +58,9 @@ type Options struct {
 	SubmissionAddr  string
 	SubmissionsAddr string
 	IMAPSAddr       string
+	// ManageSieveAddr is where mail programs manage filter scripts
+	// (ManageSieve, port 4190, STARTTLS); "" leaves it closed.
+	ManageSieveAddr string
 	Logger          *slog.Logger
 
 	// FreeBytes reports free disk space (tests); nil measures the data
@@ -121,12 +126,16 @@ type Server struct {
 	imports *transfer.Manager
 	filter  *filter.Filter
 	srs     *auth.SRS
+	// deliver stores incoming mail and runs the mailboxes' filters (port 25
+	// and submission share it).
+	deliver *maildeliver.Deliverer
 
 	lisMu       sync.Mutex
 	smtp        listenerState
 	submission  listenerState
 	submissions listenerState
 	imaps       listenerState
+	managesieve listenerState
 
 	admin   *http.Server
 	adminLn net.Listener
@@ -175,6 +184,7 @@ func New(opts Options) (*Server, error) {
 	s.submission = listenerState{name: "submission", label: "sending for mail clients (STARTTLS)", cfg: opts.SubmissionAddr, start: func() service { return s.startSubmission(false) }}
 	s.submissions = listenerState{name: "submissions", label: "sending for mail clients (TLS)", cfg: opts.SubmissionsAddr, start: func() service { return s.startSubmission(true) }}
 	s.imaps = listenerState{name: "imaps", label: "IMAP for mail clients", cfg: opts.IMAPSAddr, start: s.startIMAPS}
+	s.managesieve = listenerState{name: "managesieve", label: "filters for mail programs (ManageSieve)", cfg: opts.ManageSieveAddr, start: s.startManageSieve}
 	s.signIn = signin.New(signin.Options{Event: s.event})
 	empty := &config.Config{}
 	s.state.Store(&runtime{pushed: empty, dir: directory.New(empty), certs: &certSet{}})
@@ -222,6 +232,7 @@ func New(opts Options) (*Server, error) {
 		Event:        s.event,
 		Logger:       s.log,
 	})
+	s.deliver = maildeliver.New(maildeliver.Options{Store: store, Queue: s.queue, Signer: s.signer, SRS: s.srs, Event: s.event, Logger: s.log})
 	imp := transfer.Options{
 		Store:        store,
 		Directory:    s.Directory,
@@ -463,11 +474,12 @@ func (s *Server) startSMTP() service {
 		Filter:    s.filter,
 		Queue:     s.queue,
 		SRS:       s.srs,
+		Deliver:   s.deliver,
 	})
 }
 
 func (s *Server) allListeners() []*listenerState {
-	return []*listenerState{&s.smtp, &s.submission, &s.submissions, &s.imaps}
+	return []*listenerState{&s.smtp, &s.submission, &s.submissions, &s.imaps, &s.managesieve}
 }
 
 func (s *Server) startSubmission(implicitTLS bool) service {
@@ -482,6 +494,7 @@ func (s *Server) startSubmission(implicitTLS bool) service {
 		ImplicitTLS: implicitTLS,
 		Logger:      s.log,
 		FreeBytes:   s.opts.FreeBytes,
+		Deliver:     s.deliver,
 	})
 }
 
@@ -493,6 +506,16 @@ func (s *Server) startIMAPS() service {
 		TLSConfig: s.tls,
 		Logger:    s.log,
 		FreeBytes: s.opts.FreeBytes,
+	})
+}
+
+func (s *Server) startManageSieve() service {
+	return managesieve.New(managesieve.Options{
+		Store:     s.store,
+		Directory: s.Directory,
+		SignIn:    s.signIn,
+		TLSConfig: s.tls,
+		Logger:    s.log,
 	})
 }
 
@@ -568,6 +591,7 @@ func (s *Server) Status(ctx context.Context) (config.Status, error) {
 		st.Mailboxes = append(st.Mailboxes, config.MailboxStatus{
 			StorageID: m.StorageID, UsedBytes: u.Bytes, Messages: u.Messages,
 			Blocked: b.Blocked, BlockedReason: b.Reason, BlockedAt: b.At,
+			OutOfOffice: s.outOfOfficeOn(ctx, m.StorageID),
 		})
 	}
 	ids, err := s.store.StorageIDs(ctx)
@@ -671,6 +695,9 @@ func (s *Server) Run(ctx context.Context) error {
 			}
 			if err := s.limits.Prune(context.Background()); err != nil {
 				s.log.Error("mail: prune send log", "err", err)
+			}
+			if err := s.store.PruneSieve(context.Background(), time.Now()); err != nil {
+				s.log.Error("mail: prune filter state", "err", err)
 			}
 			if err := s.filter.Prune(context.Background()); err != nil {
 				s.log.Error("mail: prune greylist", "err", err)
