@@ -16,9 +16,14 @@ its reverse name and your DNS records. Read [Before you start](#before-you-start
   and Archive. A storage limit per mailbox, a display name, and
   [app passwords](#app-passwords) for each device.
 - **Organisations:** domains of one company grouped together, the boundary
-  for sharing between mailboxes later on (see [Organisations](#organisations)).
+  for sharing between mailboxes (see [Organisations](#organisations)).
+- **Shared mailboxes** such as info@ or support@ that several people read
+  and send from with their own sign-in, and personal mailboxes shared with
+  an assistant (see [Shared mailboxes](#shared-mailboxes)).
 - **Forwarding:** extra addresses that deliver to mailboxes or to outside
   addresses, and an address that catches everything else on a domain.
+  A forwarding address can be a **distribution group** that accepts mail
+  only from certain senders.
 - **Signed outgoing mail** with a key per domain, so receivers can tell the
   mail really comes from your domain.
 - **DNS records** for mail checked, and set up with one click when the
@@ -34,8 +39,8 @@ its reverse name and your DNS records. Read [Before you start](#before-you-start
 
 Not there yet: a webmail in the browser, virus scanning, mailbox users
 changing their own password and app passwords (an area for them is
-planned, see [[Groupware architecture|Groupware-Architecture]]), sharing
-between mailboxes, reports from receivers about your mail, and
+planned, see [[Groupware architecture|Groupware-Architecture]]), reports
+from receivers about your mail, and
 outgoing encryption policies (MTA-STS, DANE). See [[Roadmap|Roadmap]].
 
 ## Before you start
@@ -120,7 +125,8 @@ mailbox gives a profile to install; it contains no password and asks for it
 during installation (it is not signed, so the device shows it as
 unverified).
 A mailbox can send as its own address and as forwarding addresses that
-deliver to it (not as addresses the catch-all covers).
+deliver to it (not as addresses the catch-all covers), and for shared
+mailboxes it may send for (see [Sending for a shared mailbox](#sending-for-a-shared-mailbox)).
 
 ### Display name
 
@@ -174,7 +180,9 @@ signed in with the full address and the mailbox password. There they can
   was last used in the last 30 days, and switch **Only allow mail programs
   with app passwords** on or off;
 - read the **settings for mail programs** and download the **setup for
-  Apple devices**.
+  Apple devices**;
+- **share their mailbox** with colleagues and see which mailboxes they have
+  access to (see [Sharing your own mailbox](#sharing-your-own-mailbox)).
 
 Only the mailbox password signs in there, also when mail programs may only
 use app passwords; app passwords never do. The page signs out after 30
@@ -198,9 +206,9 @@ address (**Mail health** warns otherwise), and the mail service's web socket
 By default every mail domain stands on its own. When several domains belong
 to one company (for example `example.com` and `example.de`), group them on a
 domain's page under **Organisation → Change**: choose an organisation of
-yours or create one. Mailboxes can only share mail, calendars and contacts
-with mailboxes of the same organisation, and only see those in the address
-book, once those features exist; nothing is shared just by grouping.
+yours or create one. Mailboxes can only share mail with mailboxes of the
+same organisation (and, once those features exist, calendars, contacts and
+the address book); nothing is shared just by grouping.
 
 - You can group only your own domains into your own organisations.
   Grouping domains that belong to different people is for administrators,
@@ -209,6 +217,117 @@ book, once those features exist; nothing is shared just by grouping.
   organisation lets all its domains stand alone.
 - If an administrator put your domain into an organisation of someone
   else, the page says so; you can only take it out.
+
+## Shared mailboxes
+
+A shared mailbox (for example `info@example.com`) receives mail and has
+folders and a storage limit like any mailbox, but nobody signs in to it: it
+has no password and no app passwords. The people who work with it read and
+send from it with their own mailbox and their own sign-in.
+
+### Create one
+
+On the domain's e-mail page, **Create mailbox** and choose **Shared
+mailbox** under **Kind of mailbox** (no password is asked for). The mailbox
+list marks it **Shared**.
+
+### Give people access
+
+Under **People with access** on the shared mailbox, add a mailbox and tick
+what it may do:
+
+| Right | What the person can do |
+|---|---|
+| Read | see the folders and messages; mark them read or unread for themselves |
+| Write | also flag, move and delete messages, create, rename and delete folders (includes Read) |
+| Manage | the shared mailbox's filters and out-of-office (takes effect once filters exist) |
+| Send as | send with the shared address as sender |
+| Send on behalf | send for the shared address, showing who sent it |
+
+- Only **personal mailboxes of the same organisation** can get access (see
+  [Organisations](#organisations)); a domain that stands alone is its own
+  organisation. Administrators cannot cross organisations either.
+- At most 100 mailboxes per shared mailbox.
+- Changes take effect at once. When access is taken away, a mail program
+  that has one of its folders open is disconnected and no longer shows
+  them after reconnecting; when Write is taken away, the open folder
+  becomes read-only.
+- If a domain later moves to another organisation, access across the new
+  boundary stops working and the panel shows it as **not in effect**; it
+  works again when the domains are grouped again.
+
+### In the mail program
+
+Nothing needs to be set up: the folders of every mailbox a person may read
+appear in their own account under **Shared**, for example
+`Shared/info@example.com/INBOX` and `Shared/info@example.com/Sent`
+(Thunderbird, Apple Mail and iOS show them by themselves; they are always
+subscribed, so programs that show only subscribed folders show them too).
+Mail programs never take these folders as the person's own Sent, Drafts or
+Trash. Messages can be copied and moved between one's own folders and
+shared ones as far as the rights allow; moved mail counts towards the
+storage limit of the mailbox it lands in. Personal folders cannot be named
+`Shared/<address>/…`.
+
+**Read state:** in a shared mailbox everyone has their own read and unread
+state, so a message one person read stays unread for the others; flags and
+everything else are the same for all. Messages that were already read
+before the mailbox became shared, and imported messages, start as unread
+for everyone. In a personal mailbox shared with an assistant (see below)
+the read state is the owner's, shared by everyone with access, and Read
+alone means nothing can be changed there.
+
+### Sending for a shared mailbox
+
+- **Send as:** the message goes out from the shared address (or one of its
+  forwarding addresses); receivers see only the shared address.
+- **Send on behalf:** the message goes out from the shared address with the
+  person's own address as *Sender*; many receiving programs show "Anna on
+  behalf of info@example.com". This needs a mail program that sets the
+  Sender field; most do not offer it, so give **Send as** if people use
+  Thunderbird, Apple Mail or iOS.
+
+To send as the shared address, add it as another sender address in the
+mail program, using the person's own account and outgoing server:
+
+- **Thunderbird:** Account Settings → **Manage Identities…** → **Add**: your
+  name and the shared address as **Email Address**. Choose it in the From
+  field when writing.
+- **Apple Mail (Mac):** Settings → Accounts → the account → **Email
+  Address** → **Edit Email Address…** → add the shared address. It then
+  appears in the From menu.
+- **iPhone and iPad:** Settings → Mail → Accounts → the account → Account →
+  Email → **Add Another Email**.
+
+Replies and bounces go to the shared mailbox. The sending limits of the
+shared mailbox and of the person both count; a shared mailbox that was
+stopped from sending cannot be sent for.
+
+**Keep a copy of sent mail:** on a shared mailbox, this option stores
+everything sent for it in its Sent folder (marked read for the sender), so
+the team sees what was answered. If the mail program also saves a copy
+there, it is not stored twice.
+
+### Sharing your own mailbox
+
+On [their mailbox's own page](#your-mailboxs-own-page), people can share
+their personal mailbox with colleagues of the same organisation (for
+example an assistant who reads and answers the boss's mail), with the same
+rights, under **Your mailbox is shared with**. **You have access to** lists
+the mailboxes they may use and where their folders show up. Domain owners
+and administrators see these shares on the mailbox's **Sharing** panel and
+can remove them (for people who left), but not add them.
+
+### Making a mailbox shared or personal
+
+- **Make shared** removes the mailbox's password and app passwords, signs
+  out every mail program and its own page, and ends its access to other
+  mailboxes. The mail stays.
+- **Make personal** needs a new password; people who had access keep it,
+  now as if the owner had shared the mailbox. Keeping copies of sent mail
+  is turned off.
+
+**Import mail** works for shared mailboxes as for any other.
 
 ## Forwarding
 
@@ -227,6 +346,27 @@ first mailbox, else to the postmaster address from the settings. The
 postmaster address may be outside (at another provider): then that mail is
 forwarded to it like a forwarding address.
 
+### Distribution groups
+
+A forwarding address that delivers to several mailboxes is a distribution
+group. **Who may write to this address** limits who can send to it:
+
+- **Anyone** (default): also people outside the organisation, for example
+  customers.
+- **Only addresses of this organisation.**
+- **Only its members:** the addresses it delivers to (and their forwarding
+  addresses, or a member sending as a shared mailbox).
+
+Mail from anyone else is refused with "This address accepts mail only from
+certain senders". Mail arriving from outside under one of your own
+addresses must pass that domain's sender checks (SPF or signature), as all
+such mail does, so faking a member's address does not get through. Only the address
+written to is checked, not groups it forwards to. Not available for the
+catch-all.
+
+**Hide from the address book** keeps the address out of the organisation's
+address book once that exists.
+
 ## Limits
 
 | | Default |
@@ -237,6 +377,7 @@ forwarded to it like a forwarding address.
 | Size of a message | 50 MB |
 | Recipients of a message | 100 |
 | Mail domains / mailboxes per member | 20 / 200 |
+| Mailboxes with access to one mailbox | 100 |
 
 Administrators can change the limits of a mailbox; owners can only lower
 them. One message counts once, whatever the number of recipients.

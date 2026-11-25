@@ -295,6 +295,9 @@ have no panel account and cannot change their own password yet (*later*).
   Caddy never asks a CA for a name that does not point here.
 - IMAP (implicit TLS on 993 only, RFC 8314): `INBOX`, `Sent`, `Drafts`,
   `Junk`, `Trash`, `Archive` with special-use flags; IDLE, MOVE, UIDPLUS.
+  Folders of mailboxes shared with the signed-in mailbox appear under
+  `Shared/<address>/…`, and COPY/MOVE work across mailboxes; see
+  [[Groupware architecture|Groupware-Architecture]], G3.
   Envelope and body structure are read from the message file on FETCH
   (storing them at delivery is *later*). LITERAL+ is not offered, so an
   oversized APPEND is refused before the client sends it. Quota is enforced on delivery and APPEND (`NO [OVERQUOTA]`) and
@@ -356,13 +359,19 @@ How it is built (phase 1c):
   message for good, the queue sends a delivery status notification (from
   the null sender) to the original sender decoded from the SRS address.
 - **Submission:** external targets of a local alias go into the outbound
-  queue with the rest of the message; the sender is the signed-in mailbox,
-  so there is no SRS, and the message counts once like any other.
+  queue with the rest of the message; the sender is the signed-in mailbox
+  (or a shared mailbox it sends for), so there is no SRS, and the message
+  counts once like any other.
+- **Distribution groups:** an alias may accept mail only from its members
+  or its organisation (`SenderPolicy`); see G3 in
+  [[Groupware architecture|Groupware-Architecture]].
 
 ## Sending — [#26](https://github.com/danielgtmn/ownpanel/issues/26)
 
 - A mailbox may send as its own address or an alias that delivers to it
-  (catch-all does not count), checked for the envelope and the header `From`.
+  (catch-all does not count), and as or on behalf of a shared mailbox it has
+  the right for (G3 in [[Groupware architecture|Groupware-Architecture]]),
+  checked for the envelope and the header `From`.
   The message needs exactly one `From` field; several addresses in it need a
   `Sender` with one address, which the mailbox must also be allowed to send
   as. A header section over 1 MB is refused with `552 5.3.4`.

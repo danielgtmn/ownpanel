@@ -87,7 +87,7 @@ It all works with standard programs: Thunderbird, Apple Mail/Calendar/Contacts, 
 | G0 | Web entry point on the mail host: Caddy site, certificate, routing, DAV socket | S | — | [#85](https://github.com/danielgtmn/ownpanel/issues/85) |
 | G1 | Mailbox accounts: display name, self-service area, app passwords, organisations (built) | M | G0 | [#86](https://github.com/danielgtmn/ownpanel/issues/86) |
 | G2 | Filters and out-of-office (Sieve, ManageSieve) | L | G1 | [#87](https://github.com/danielgtmn/ownpanel/issues/87) |
-| G3 | Shared mailboxes, send as / on behalf, distribution groups | XL | G1 | [#88](https://github.com/danielgtmn/ownpanel/issues/88) |
+| G3 | Shared mailboxes, send as / on behalf, distribution groups (built) | XL | G1 | [#88](https://github.com/danielgtmn/ownpanel/issues/88) |
 | G4a | Own calendars and contacts, discovery, sync, directory | XL | G1 | [#89](https://github.com/danielgtmn/ownpanel/issues/89) |
 | G4b | Sharing calendars and address books | M | G4a | [#90](https://github.com/danielgtmn/ownpanel/issues/90) |
 | G5a | Free/busy, sending invitations, accepting replies | L | G4a | [#91](https://github.com/danielgtmn/ownpanel/issues/91) |
@@ -293,8 +293,8 @@ from the plan:
   the password hash at sign-in; at most 20 per mailbox. Every request checks
   the session against the directory (storage id, address, password hash),
   so a reset by the panel, a password change on another device or a
-  deleted mailbox end it at once; a conversion to shared will be added to
-  that check with G3 (mailbox kinds do not exist yet). The session that
+  deleted mailbox end it at once, and so does a conversion to shared (G3:
+  the check refuses shared mailboxes). The session that
   changes the password gets the new fingerprint and stays; the mailbox's
   other sessions are deleted. Idle 30 minutes, at most 12 hours; ended
   sessions are pruned every 10 minutes.
@@ -439,6 +439,103 @@ MCP tools for kinds, grants and groups follow AGENTS.md.
 **Converting:** a personal mailbox can become shared (its password and app passwords are dropped,
 and its sessions end) and back (a password is set). Import (exists) works for shared mailboxes too.
 
+**Built (G3)** — how it turned out:
+
+- **Configuration** (`internal/mail/config/sharing.go`): `Mailbox.Kind`
+  (`""` = personal, `"shared"`), `Mailbox.Grants []{StorageID, Rights}`,
+  `Mailbox.KeepSentCopy`, `Alias.SenderPolicy` (`""`, `anyone`,
+  `organisation`, `members`) and `Alias.HideFromDirectory`, all
+  `omitempty`, so configurations without them hash as before. `Validate`
+  refuses a shared mailbox with a password or app passwords, keeping copies
+  on a personal one, an unknown kind or right, grants to itself, twice,
+  without rights, to a missing or shared mailbox or across organisations,
+  more than 100 grants, and a policy on the catch-all or an unknown one.
+  `DropInvalid` leaves out only the bad grants (the mailbox stays), turns
+  keep-sent-copy off on personal mailboxes and makes an invalid sender
+  policy `members` (the stricter choice).
+- **Rights** are `read`, `write` (implies read), `manage`, `send-as` and
+  `send-on-behalf`, on the grant's owner: a grant on a shared mailbox is
+  set by the domain owner or an admin; a grant on a personal mailbox is the
+  person's own sharing, set in the self-service area (`PUT
+  /account/api/delegations`, event `mailbox.grants-changed` with a revision
+  like the G1 account events). Domain owners and admins see those and may
+  remove them, but not add them. At most 100 grants per mailbox.
+- **Converting:** to shared drops the password, app passwords and
+  "mail programs only with app passwords", ends IMAP, SMTP and
+  self-service sessions (sign-in treats a shared mailbox like an unknown
+  address) and removes the access it had to other mailboxes (only personal
+  mailboxes hold grants). To personal
+  needs a new password and turns keep-sent-copy off; the mailbox's grants
+  stay and then count as the person's own sharing.
+- **The mail service checks again** (Decision 3): `internal/mail/directory`
+  re-applies the rules on every configuration load and ignores grants that
+  no longer fit (domain moved to another organisation, mailbox deleted or
+  made shared), logged as `mail: grant ignored`. The panel keeps them,
+  shows them with `active: false` ("not in effect") and leaves them out of
+  the push (logged as "left out of the push"); they work again once the
+  domains are grouped again.
+- **IMAP** (`internal/mail/imapd/shared.go`): folders under
+  `Shared/<address>/…`, listed in a plain `LIST` and always subscribed;
+  `UNSUBSCRIBE` is accepted and changes nothing. `Shared` and
+  `Shared/<address>` are `\Noselect` parents; `NAMESPACE` announces
+  `Shared/`. Personal folder names `Shared/<something with @>/…` are
+  reserved. COPY/MOVE across mailboxes work: copying out needs Read,
+  copying or moving in needs Write on the destination, moving out needs
+  Write; quota is charged to the destination. RENAME across mailboxes is
+  refused. Removing a grant while one of its folders is selected ends that
+  connection (`BYE Access to this shared mailbox was removed`); removing
+  Write makes the selected folder read-only. New mail in a shared folder
+  reaches IDLE sessions.
+- **Per-user `\Seen`** in `mail.db` migration 8, table `shared_seen`.
+  Deviation: the plan keyed it by (storage id, folder, uid, reader); it is
+  keyed by the message row and the reader instead, so the read state moves
+  with a message and goes with it. Unread counts, SEARCH, FETCH FLAGS, the
+  implicit `\Seen`, STORE and IDLE updates are per reader. Read-only
+  readers may still set and clear their own `\Seen` (not after EXAMINE).
+  Migration 8 also adds `messages.msgid` for de-duplicating sent copies.
+- **Submission** (`internal/mail/submission/session.go`): send-as allows
+  the shared address and its aliases as From and MAIL FROM. On behalf
+  allows From = exactly the shared address only with a `Sender` holding
+  the signed-in mailbox's own address or one of its aliases; MAIL FROM may
+  be the shared address or stay the person's own. Both sending limits
+  count (one message once for each; the domain once); a blocked shared
+  mailbox cannot be sent for. **Keep a copy** stores the message in the
+  shared mailbox's `\Sent` folder, marked read for the sender, and skips a
+  later APPEND (or a repeated send) with the same Message-ID there.
+- **Distribution groups:** the policy of the addressed alias is checked at
+  submission against the signed-in mailbox and the mailbox it sends for,
+  and on port 25 against the envelope sender, which then also needs the
+  aligned SPF or DKIM pass that all mail claiming our domains needs
+  (loopback exempt). `members` counts the alias's targets, aliases of
+  member mailboxes and a member sending as a shared mailbox. Refusal:
+  `550 5.7.1 This address accepts mail only from certain senders`; the null
+  sender is refused for restricted groups.
+- **Panel:** migration `0015_shared_mailboxes.sql`; API and MCP tools as in
+  [[API|API]] and [[MCP|MCP]] (`set_mailbox_kind` only makes mailboxes
+  shared: making one personal needs a password). Activity actions
+  `mail.mailbox.kind`, `mail.mailbox.keep-sent-copy`, `mail.mailbox.grant`,
+  `mail.mailbox.grant-change`, `mail.mailbox.grant-remove` and
+  `mail.mailbox.grants-changed` (by the mailbox).
+- **Limits and deviations:**
+  - No ACL extension, as planned.
+  - Per-user `\Seen` only in shared mailboxes. In a delegated personal
+    mailbox everyone shares the owner's read state (like Exchange
+    delegates), so Read alone there is really read-only.
+  - Messages already read before a mailbox became shared, and imported
+    messages, are unread for each reader: the stored flag is nobody's read
+    state there.
+  - `manage` is stored and checked by the directory, but has an effect
+    only with G2's filters; honouring `imap4flags` at delivery into shared
+    mailboxes is G2's too (a `\Seen` set at delivery is ignored for
+    readers).
+  - Subscriptions of shared folders are fixed.
+  - `HideFromDirectory` is stored and pushed; it takes effect with the
+    address book (G4a).
+  - Only the addressed alias's policy is checked, not that of aliases it
+    expands to.
+  - "Own address" in `Sender` for on behalf accepts the person's aliases
+    too.
+
 ## G4a — Calendars, contacts, directory
 
 **Protocols:** CalDAV (RFC 4791) and CardDAV (RFC 6352) over WebDAV, plus sync
@@ -552,7 +649,7 @@ None of these are in the module today; a spike decides before each phase:
 | Group domains into organisations | yes (logged) | own domains | no |
 | Make a mailbox shared / personal / resource | yes | own domains | no |
 | Grant access to a shared mailbox, groups | yes | own domains, same organisation | no |
-| Delegate own mailbox | — | — | yes, same organisation |
+| Delegate own mailbox | see, remove | see, remove (own domains) | yes, same organisation |
 | Own password, display name, app passwords | reset only | reset only | yes |
 | Filters, out-of-office | set/clear (logged) | set/clear for own domains (logged) | yes |
 | Share own calendars / address books | — | — | yes, same organisation |
