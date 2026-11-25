@@ -47,7 +47,7 @@ function EnableMailForm({ initial, onSubmit }: { initial: string; onSubmit: (dom
         />
         <FieldDescription>
           Addresses end in @ this domain, for example info@{domain.trim() || 'example.com'}. It has to be a domain of one of
-          your sites or redirects, or one in your DNS account.
+          your sites or redirects, or one of your DNS connections.
         </FieldDescription>
         {error ? <FieldError match>{error}</FieldError> : null}
       </Field>

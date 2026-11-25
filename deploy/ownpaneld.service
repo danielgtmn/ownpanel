@@ -1,5 +1,8 @@
 [Unit]
 Description=ownpanel daemon
+# Start after Caddy, which counts as started once its admin socket exists.
+# Wants=, not Requires=: the panel must still start (and show what is wrong)
+# when Caddy fails, and it brings Caddy's config back by itself once Caddy runs.
 After=network-online.target ownpanel-caddy.service ownpanel-mail.service
 Wants=network-online.target ownpanel-caddy.service
 

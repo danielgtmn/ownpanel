@@ -466,6 +466,96 @@ func TestRunRetriesQuicklyWhileUnhealthy(t *testing.T) {
 	}
 }
 
+// syncLog captures the log lines of Run for one test.
+type syncLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *syncLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *syncLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+func captureLog(t *testing.T) *syncLog {
+	t.Helper()
+	l := &syncLog{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(l, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return l
+}
+
+func TestRunWaitsQuietlyForWebServerAtStartup(t *testing.T) {
+	logs := captureLog(t)
+	svc, web, _ := newService(t)
+	svc.startupGrace = time.Minute
+	svc.startupRetry = time.Millisecond
+	web.calls = make(chan struct{}, 64)
+	web.setFail(errors.New("dial unix caddy-admin.sock: no such file or directory"))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		svc.Run(ctx, time.Hour)
+		close(done)
+	}()
+	for i := 0; i < 3; i++ {
+		select {
+		case <-web.calls:
+		case <-time.After(5 * time.Second):
+			t.Fatal("no quick retry at startup")
+		}
+	}
+	web.setFail(nil)
+	// Once a sync succeeds, the next one is an hour away: the calls stop.
+	for quiet := false; !quiet; {
+		select {
+		case <-web.calls:
+		case <-time.After(200 * time.Millisecond):
+			quiet = true
+		}
+	}
+	cancel()
+	<-done
+	if out := logs.String(); strings.Contains(out, "not in sync") || strings.Contains(out, "back in sync") {
+		t.Fatalf("startup wait was not quiet:\n%s", out)
+	}
+}
+
+func TestRunWarnsWhenWebServerStaysDown(t *testing.T) {
+	logs := captureLog(t)
+	svc, web, _ := newService(t)
+	svc.startupGrace = 0
+	svc.unhealthyRetry = time.Millisecond
+	web.calls = make(chan struct{}, 64)
+	web.setFail(errors.New("down"))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		svc.Run(ctx, time.Hour)
+		close(done)
+	}()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-web.calls:
+		case <-time.After(5 * time.Second):
+			t.Fatal("no retry while unhealthy")
+		}
+	}
+	cancel()
+	<-done
+	if out := logs.String(); !strings.Contains(out, "web server not in sync") {
+		t.Fatalf("no warning once the startup wait is over:\n%s", out)
+	}
+}
+
 func mustSites(t *testing.T, svc *Service) []Site {
 	t.Helper()
 	list, err := svc.Sites(context.Background(), admin)

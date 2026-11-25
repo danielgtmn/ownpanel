@@ -754,6 +754,14 @@ print_result() {
     done
     [ ${#ips[@]} -gt 0 ] || say "  $domain.  A/AAAA  <public address of this server>"
     say "The certificate is requested automatically as soon as the domain points here."
+  elif [ ! -f "$SETUP_CODE" ]; then
+    # Set up already: the panel's domain is most likely set in the panel, which
+    # this script cannot see. Do not claim it has none (issue #67).
+    say "Open the panel at its usual address."
+    if [ -n "$url_ip" ]; then
+      say "https://$url_ip/ works too: it leads to the panel's domain once one is set in"
+      say "the panel."
+    fi
   elif [ -n "$url_ip" ]; then
     say "Open the panel:  https://$url_ip/"
     say "The panel has no domain yet, so it uses a self-signed certificate: accept the"
