@@ -62,6 +62,7 @@ Updating replaces binaries and restarts services, which needs root; the panel ru
 - A domain receives mail only once its MX record points at the mail server (or an administrator says so), so nobody can catch mail sent from this server to a domain they do not own.
 - A mailbox can only send as its own address or forwarding addresses that deliver to it. Sending limits stop a hijacked mailbox; only administrators can allow it again.
 - Accepted mail is written to disk before the server confirms it.
+- Backups never read the mail data as root: `ownpaneld backup` reads it in a child process running as `ownpanel-mail` and keeps only plain files and folders from its output, so a taken-over mail service cannot make root copy or hand over other files through links.
 - **Administrators can read any mailbox** by setting its password.
 
 ### Upload links

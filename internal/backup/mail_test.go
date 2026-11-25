@@ -2,6 +2,7 @@ package backup
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"io"
@@ -40,7 +41,11 @@ func TestCreateWithMail(t *testing.T) {
 	defer ms.Close()
 
 	out := filepath.Join(t.TempDir(), "b.tar.gz")
-	if err := CreateWithMail(data, mailDir, out); err != nil {
+	// A link the mail service could plant must not be followed.
+	secret := filepath.Join(t.TempDir(), "secret")
+	os.WriteFile(secret, []byte("root only"), 0o600)
+	os.Symlink(secret, filepath.Join(mailDir, "messages", "planted"))
+	if err := CreateWithMail(data, out, func(w io.Writer) error { return WriteMail(w, mailDir) }); err != nil {
 		t.Fatal(err)
 	}
 
@@ -50,6 +55,9 @@ func TestCreateWithMail(t *testing.T) {
 		if !names[want] {
 			t.Errorf("archive lacks %s; has %v", want, names)
 		}
+	}
+	if names["mail/messages/planted"] {
+		t.Error("a link in the mail data was copied")
 	}
 	for n := range names {
 		if strings.HasPrefix(n, "mail/tmp") || strings.HasPrefix(n, "mail/trash") || strings.HasPrefix(n, "mail/mail.db-") {
@@ -94,8 +102,7 @@ func TestCreateWithoutMail(t *testing.T) {
 	}
 	defer st.Close()
 	out := filepath.Join(t.TempDir(), "b.tar.gz")
-	// A mail directory that does not exist is skipped.
-	if err := CreateWithMail(data, filepath.Join(t.TempDir(), "missing"), out); err != nil {
+	if err := CreateWithMail(data, out, nil); err != nil {
 		t.Fatal(err)
 	}
 	for n := range unpack(t, out, t.TempDir()) {
@@ -142,5 +149,52 @@ func unpack(t *testing.T, archive, dir string) map[string]bool {
 			}
 			w.Close()
 		}
+	}
+}
+
+// A mail stream may only put plain files and folders below mail/.
+func TestEmbedMailRefusesForeignEntries(t *testing.T) {
+	for name, hdr := range map[string]*tar.Header{
+		"outside":   {Name: "sites/x", Typeflag: tar.TypeReg},
+		"climbing":  {Name: "mail/../secret.key", Typeflag: tar.TypeReg},
+		"absolute":  {Name: "/etc/passwd", Typeflag: tar.TypeReg},
+		"link":      {Name: "mail/x", Typeflag: tar.TypeSymlink, Linkname: "/etc/shadow"},
+		"hard link": {Name: "mail/x", Typeflag: tar.TypeLink, Linkname: "secret.key"},
+		"device":    {Name: "mail/x", Typeflag: tar.TypeChar},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var outer bytes.Buffer
+			tw := tar.NewWriter(&outer)
+			err := embedMail(tw, func(w io.Writer) error {
+				mw := tar.NewWriter(w)
+				if err := mw.WriteHeader(hdr); err != nil {
+					return err
+				}
+				return mw.Close()
+			})
+			if err == nil {
+				t.Fatal("accepted")
+			}
+		})
+	}
+	// Names are cleaned and modes reduced to permissions (no setuid).
+	var outer bytes.Buffer
+	tw := tar.NewWriter(&outer)
+	err := embedMail(tw, func(w io.Writer) error {
+		mw := tar.NewWriter(w)
+		mw.WriteHeader(&tar.Header{Name: "mail/./a", Typeflag: tar.TypeReg, Mode: 0o4755, Size: 1})
+		mw.Write([]byte("x"))
+		return mw.Close()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw.Close()
+	hdr, err := tar.NewReader(&outer).Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hdr.Name != "mail/a" || hdr.Mode != 0o755 {
+		t.Fatalf("got %q mode %o", hdr.Name, hdr.Mode)
 	}
 }

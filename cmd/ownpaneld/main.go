@@ -58,6 +58,8 @@ func main() {
 		err = serve(args)
 	case "backup":
 		err = runBackup(args)
+	case backupMailCommand:
+		err = runBackupMail(args)
 	case "mail":
 		err = runMail(args)
 	case "version":
@@ -81,11 +83,14 @@ func runBackup(args []string) error {
 	if *out == "" {
 		return errors.New("backup needs -out <file.tar.gz>")
 	}
-	mailDir := *mailData
-	if *noMail {
-		mailDir = ""
+	var mail backup.MailSource
+	if !*noMail {
+		var err error
+		if mail, err = mailSource(*mailData); err != nil {
+			return err
+		}
 	}
-	if err := backup.CreateWithMail(*dataDir, mailDir, *out); err != nil {
+	if err := backup.CreateWithMail(*dataDir, *out, mail); err != nil {
 		return err
 	}
 	slog.Info("backup written", "file", *out)

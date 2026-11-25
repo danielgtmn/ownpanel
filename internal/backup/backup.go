@@ -13,7 +13,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/danielgtmn/ownpanel/internal/secrets"
 	"github.com/danielgtmn/ownpanel/internal/store"
@@ -42,14 +41,12 @@ var files = []string{secrets.KeyFile}
 
 // Create writes a tar.gz of dataDir to out (mode 0600, must not exist). It
 // is safe while the daemon runs: the database is copied with VACUUM INTO.
-func Create(dataDir, out string) error { return CreateWithMail(dataDir, "", out) }
+func Create(dataDir, out string) error { return CreateWithMail(dataDir, out, nil) }
 
-// CreateWithMail is Create plus the mail service's data directory mailDir
-// ("" or a missing directory: no mail), stored under MailDir in the archive.
-// Its index is copied first and the message files after it, so every
-// message the copied index lists has its file in the archive (files of
-// messages that arrive meanwhile are indexed again on restore).
-func CreateWithMail(dataDir, mailDir, out string) (err error) {
+// CreateWithMail is Create plus the mail service's data: mail writes it as
+// a tar stream (WriteMail), which is checked and stored under MailDir. nil
+// means no mail.
+func CreateWithMail(dataDir, out string, mail MailSource) (err error) {
 	tmp, err := os.MkdirTemp("", "ownpanel-backup-")
 	if err != nil {
 		return err
@@ -58,17 +55,6 @@ func CreateWithMail(dataDir, mailDir, out string) (err error) {
 	dbCopy := filepath.Join(tmp, DBFile)
 	if err := store.VacuumInto(filepath.Join(dataDir, DBFile), dbCopy); err != nil {
 		return fmt.Errorf("copy database: %w", err)
-	}
-	mailCopy := ""
-	if mailDir != "" {
-		if _, err := os.Stat(filepath.Join(mailDir, mailDB)); err == nil {
-			mailCopy = filepath.Join(tmp, mailDB)
-			if err := vacuumMail(filepath.Join(mailDir, mailDB), mailCopy); err != nil {
-				return fmt.Errorf("copy mail index: %w", err)
-			}
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
 	}
 
 	f, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -99,8 +85,8 @@ func CreateWithMail(dataDir, mailDir, out string) (err error) {
 			return err
 		}
 	}
-	if mailCopy != "" {
-		if err := addMail(tw, mailDir, mailCopy); err != nil {
+	if mail != nil {
+		if err := embedMail(tw, mail); err != nil {
 			return fmt.Errorf("mail: %w", err)
 		}
 	}
@@ -175,67 +161,4 @@ func addEntry(tw *tar.Writer, path, name string, fi fs.FileInfo) error {
 	defer src.Close()
 	_, err = io.Copy(tw, src)
 	return err
-}
-
-// vacuumMail copies the mail index. The backup usually runs as root while
-// the mail service has the database open; SQLite may create its -wal and
-// -shm files while reading, and files owned by root would lock the service
-// out, so they are given back to the index's owner.
-func vacuumMail(file, dest string) error {
-	if err := store.VacuumInto(file, dest); err != nil {
-		return err
-	}
-	return giveBack(file)
-}
-
-// addMail adds the mail service's data under MailDir: the index copy first,
-// then everything else except the live index and the scratch folders.
-func addMail(tw *tar.Writer, mailDir, indexCopy string) error {
-	fi, err := os.Lstat(mailDir)
-	if err != nil {
-		return err
-	}
-	if err := addEntry(tw, mailDir, MailDir, fi); err != nil {
-		return err
-	}
-	if err := addFile(tw, indexCopy, MailDir+"/"+mailDB); err != nil {
-		return err
-	}
-	// Unpacked, the marker makes the mail service give every folder a new
-	// UIDVALIDITY, so mail programs drop what they cached from newer mail.
-	if err := tw.WriteHeader(&tar.Header{Name: MailDir + "/" + RestoredMarker, Mode: 0o600, Typeflag: tar.TypeReg, ModTime: fi.ModTime()}); err != nil {
-		return err
-	}
-	return filepath.WalkDir(mailDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			// A message expunged while we walk is simply not in the backup.
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil
-			}
-			return err
-		}
-		rel, err := filepath.Rel(mailDir, path)
-		if err != nil || rel == "." {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		switch {
-		case rel == mailDB || strings.HasPrefix(rel, mailDB+"-") || rel == RestoredMarker:
-			return nil
-		case rel == "tmp" || rel == "trash":
-			return fs.SkipDir
-		}
-		info, err := d.Info()
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		err = addEntry(tw, path, MailDir+"/"+rel, info)
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
-		}
-		return err
-	})
 }
