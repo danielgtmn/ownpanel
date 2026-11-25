@@ -67,6 +67,30 @@ func (d *Directory) Hostname() string { return d.cfg.Hostname }
 // Limits are the service limits with defaults applied.
 func (d *Directory) Limits() config.Limits { return d.limits }
 
+// OrganisationOf returns the organisation of the mailbox with storage id
+// id (its domain's Organisation, or StandaloneOrganisation), and false for
+// an unknown mailbox. Mailboxes may share only within one organisation.
+func (d *Directory) OrganisationOf(id string) (string, bool) {
+	m, ok := d.byStorage[id]
+	if !ok {
+		return "", false
+	}
+	_, dom, _ := config.SplitAddress(m.Address)
+	return d.Organisation(dom)
+}
+
+// Organisation returns the organisation of a configured domain.
+func (d *Directory) Organisation(domain string) (string, bool) {
+	dom, ok := d.domains[domain]
+	if !ok {
+		return "", false
+	}
+	if dom.Organisation == "" {
+		return config.StandaloneOrganisation(dom.Name), true
+	}
+	return dom.Organisation, true
+}
+
 // Domain returns a configured domain.
 func (d *Directory) Domain(name string) (*config.Domain, bool) {
 	dom, ok := d.domains[name]

@@ -377,6 +377,10 @@ type Event struct {
 	StorageID string    `json:"storage_id,omitempty"`
 	Address   string    `json:"address,omitempty"`
 	Detail    string    `json:"detail"`
+	// Account is set for the account events (EventPasswordChanged …
+	// EventAppPasswordUsed). It may hold a password hash or a MAC: the
+	// panel records it in its database, never in the activity log.
+	Account *AccountChange `json:"account,omitempty"`
 }
 
 // OutboundCheck is the result of trying to reach port 25 of another server.

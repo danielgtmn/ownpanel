@@ -108,7 +108,11 @@ type Server struct {
 	state atomic.Pointer[runtime]
 	tls   *tls.Config
 
-	loadMu sync.Mutex // serializes loads
+	loadMu sync.Mutex // serializes loads and account changes
+	// overlays are the account changes mailboxes made here that the
+	// pushed configuration does not include yet, by storage id (see
+	// directory.Overlay). Guarded by loadMu; also kept in mail.db.
+	overlays map[string]*directory.Overlay
 
 	signIn  *signin.Checker
 	limits  *submission.Limiter
@@ -132,9 +136,12 @@ type Server struct {
 
 // runtime is an immutable snapshot of the loaded configuration.
 type runtime struct {
-	dir   *directory.Directory
-	hash  string // "" when nothing was loaded
-	certs *certSet
+	// pushed is the configuration as the panel pushed it; dir is built
+	// from it with the account overlays applied.
+	pushed *config.Config
+	dir    *directory.Directory
+	hash   string // of pushed; "" when nothing was loaded
+	certs  *certSet
 }
 
 // service is a protocol server behind one listener.
@@ -169,7 +176,7 @@ func New(opts Options) (*Server, error) {
 	s.imaps = listenerState{name: "imaps", label: "IMAP for mail clients", cfg: opts.IMAPSAddr, start: s.startIMAPS}
 	s.signIn = signin.New(signin.Options{Event: s.event})
 	empty := &config.Config{}
-	s.state.Store(&runtime{dir: directory.New(empty), certs: &certSet{}})
+	s.state.Store(&runtime{pushed: empty, dir: directory.New(empty), certs: &certSet{}})
 	s.tls = &tls.Config{
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return s.state.Load().certs.pick(hello)
@@ -229,6 +236,10 @@ func New(opts Options) (*Server, error) {
 		imp.Resolver = opts.ImportResolver
 	}
 	s.imports = transfer.New(imp)
+	if s.overlays, err = loadOverlays(store); err != nil {
+		store.Close()
+		return nil, fmt.Errorf("account changes: %w", err)
+	}
 	if err := s.resume(); err != nil {
 		// A broken file must not keep mail down: the panel pushes again.
 		s.log.Error("mail: last configuration not loaded", "err", err)
@@ -291,7 +302,7 @@ func (s *Server) apply(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	s.state.Store(&runtime{dir: directory.New(cfg), hash: cfg.Hash(), certs: certs})
+	s.state.Store(&runtime{pushed: cfg, dir: directory.New(directory.Merge(cfg, s.overlays)), hash: cfg.Hash(), certs: certs})
 	return nil
 }
 
@@ -311,6 +322,9 @@ func (s *Server) Load(ctx context.Context, cfg *config.Config) error {
 		if errors.As(err, &c) {
 			return &loadError{err}
 		}
+		return err
+	}
+	if err := s.pruneOverlays(ctx, cfg); err != nil {
 		return err
 	}
 	hash := cfg.Hash()

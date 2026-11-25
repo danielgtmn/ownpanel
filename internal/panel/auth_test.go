@@ -207,6 +207,34 @@ func TestLoginThrottling(t *testing.T) {
 	}
 }
 
+func TestLoginThrottlingIPv6Per48(t *testing.T) {
+	svc, _, _ := newService(t)
+	withClock(svc)
+	ctx := context.Background()
+	svc.CreateUser(ctx, admin, "alice", "alice-password-1", "member")
+	// Failures from addresses that differ only below the /48 count
+	// together: varying the /64 does not get around the limit.
+	for i := 0; i < 5; i++ {
+		ip := fmt.Sprintf("2001:db8:1:%x::%x", i, i+1)
+		_, _, err := svc.Login(ctx, Credentials{Name: "alice", Password: "wrong-password", ClientIP: ip})
+		wantKind(t, err, Unauthenticated)
+	}
+	_, _, err := svc.Login(ctx, Credentials{Name: "alice", Password: "alice-password-1", ClientIP: "2001:db8:1:ffff::1"})
+	wantKind(t, err, Throttled)
+	// Another /48 is not affected.
+	if _, _, err := svc.Login(ctx, Credentials{Name: "alice", Password: "alice-password-1", ClientIP: "2001:db8:2::1"}); err != nil {
+		t.Fatal(err)
+	}
+	for in, want := range map[string]string{
+		"192.0.2.7": "192.0.2.7", "::ffff:192.0.2.7": "192.0.2.7", "2001:db8:1:2:3::4": "2001:db8:1::/48",
+		"fe80::1%eth0": "fe80::/48", "not an ip": "not an ip",
+	} {
+		if got := clientKey(in); got != want {
+			t.Errorf("clientKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestLimiter(t *testing.T) {
 	svc, _, _ := newEmptyService(t)
 	ctx := context.Background()

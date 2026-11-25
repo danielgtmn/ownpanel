@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"net/netip"
 	"os"
 	"regexp"
 	"strings"
@@ -54,6 +55,26 @@ type User struct {
 
 func userView(u store.User) User {
 	return User{ID: u.ID, Name: u.Name, Role: u.Role, CreatedAt: u.CreatedAt}
+}
+
+// clientKey is the unit sign-in limits count per client in: the address
+// for IPv4, the /48 for IPv6 (one customer often gets a whole /48, and a
+// /64 is cheap to vary), like the mail service's sign-in throttle. Anything
+// that is not an address is used as it is.
+func clientKey(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	a = a.Unmap()
+	if !a.Is6() {
+		return a.String()
+	}
+	p, err := a.WithZone("").Prefix(48)
+	if err != nil {
+		return ip
+	}
+	return p.String()
 }
 
 // Credentials are a sign-in attempt. ClientIP keys the attempt limit.
@@ -199,13 +220,14 @@ func (s *Service) Login(ctx context.Context, c Credentials) (User, string, error
 	}
 	defer release()
 	name := normalizeUserName(c.Name)
-	key := c.ClientIP + "\n" + name
+	client := clientKey(c.ClientIP)
+	key := client + "\n" + name
 	if _, wait, err := s.limiter.attempt(ctx, key); err != nil {
 		return User{}, "", err
 	} else if wait > 0 {
 		return User{}, "", throttled(wait)
 	}
-	clientAttempt, wait, err := s.clientLimiter.attempt(ctx, c.ClientIP+"\nany name")
+	clientAttempt, wait, err := s.clientLimiter.attempt(ctx, client+"\nany name")
 	if err != nil {
 		return User{}, "", err
 	} else if wait > 0 {
@@ -375,7 +397,7 @@ func (s *Service) Setup(ctx context.Context, code string, c Credentials) (User, 
 	} else if !needed {
 		return User{}, "", alreadySetUp
 	}
-	key := c.ClientIP + "\nsetup code"
+	key := clientKey(c.ClientIP) + "\nsetup code"
 	if _, wait, err := s.limiter.attempt(ctx, key); err != nil {
 		return User{}, "", err
 	} else if wait > 0 {

@@ -47,6 +47,11 @@ type Config struct {
 	// Filter configures the checks of incoming mail; zero values mean the
 	// defaults.
 	Filter Filter `json:"filter"`
+	// AppPasswordKey is the server key app passwords are checked with
+	// (AppPasswordMAC; 64 hex characters). The panel generates it once and
+	// keeps it sealed. Empty: no app passwords (then no mailbox may have
+	// any). It is a secret like the rest of the configuration.
+	AppPasswordKey string `json:"app_password_key,omitempty"`
 }
 
 // Filter configures the checks of incoming mail on port 25.
@@ -122,6 +127,11 @@ type Domain struct {
 	DKIM []DKIMKey `json:"dkim"`
 	// SendPerHour caps the messages all mailboxes of the domain send per hour.
 	SendPerHour int `json:"send_per_hour"`
+	// Organisation is an opaque, stable id of the organisation the domain
+	// belongs to (ValidOrganisation): mailboxes may share only within one.
+	// It says nothing about who owns the domain. Empty means the domain is
+	// its own organisation (StandaloneOrganisation).
+	Organisation string `json:"organisation,omitempty"`
 }
 
 // DKIMKey is one DKIM key of a domain.
@@ -146,6 +156,20 @@ type Mailbox struct {
 	// SendPerHour and SendPerDay cap the messages the mailbox sends.
 	SendPerHour int `json:"send_per_hour"`
 	SendPerDay  int `json:"send_per_day"`
+	// DisplayName is the person's or team's name (ValidDisplayName); may be
+	// empty.
+	DisplayName string `json:"display_name,omitempty"`
+	// AppPasswords are the mailbox's app passwords (at most
+	// MaxAppPasswords).
+	AppPasswords []AppPassword `json:"app_passwords,omitempty"`
+	// AppPasswordsOnly: mail programs (IMAP, SMTP) sign in only with app
+	// passwords; the main password works only for the self-service area.
+	AppPasswordsOnly bool `json:"app_passwords_only,omitempty"`
+	// Revision is the highest revision of the mailbox's own changes in the
+	// mail service (AccountChange.Revision) that the panel has recorded. The
+	// mail service keeps newer changes of its own over what this
+	// configuration says until a push carries a Revision that includes them.
+	Revision int64 `json:"revision,omitempty"`
 }
 
 // Alias delivers mail for Address to Targets.
@@ -279,9 +303,18 @@ func (c *Config) Validate() error {
 		if d.SendPerHour < 0 {
 			return fmt.Errorf("domain %s: negative send limit", d.Name)
 		}
+		if d.Organisation != "" && !ValidOrganisation(d.Organisation) {
+			return fmt.Errorf("domain %s: organisation %q is not valid", d.Name, d.Organisation)
+		}
+	}
+	if c.AppPasswordKey != "" {
+		if k, err := hex.DecodeString(c.AppPasswordKey); err != nil || len(k) != AppPasswordKeyBytes || strings.ToLower(c.AppPasswordKey) != c.AppPasswordKey {
+			return errors.New("the app password key is not valid")
+		}
 	}
 	addresses := map[string]bool{}
 	storage := map[string]bool{}
+	appIDs := map[string]bool{}
 	for _, m := range c.Mailboxes {
 		if !ValidAddress(m.Address) {
 			return fmt.Errorf("mailbox address %q is not valid", m.Address)
@@ -301,8 +334,26 @@ func (c *Config) Validate() error {
 		if !passwd.WellFormed(m.PasswordHash) {
 			return fmt.Errorf("mailbox %s: password hash is not an argon2id hash", m.Address)
 		}
-		if m.QuotaBytes < 0 || m.SendPerHour < 0 || m.SendPerDay < 0 {
+		if m.QuotaBytes < 0 || m.SendPerHour < 0 || m.SendPerDay < 0 || m.Revision < 0 {
 			return fmt.Errorf("mailbox %s: negative limit", m.Address)
+		}
+		if !ValidDisplayName(m.DisplayName) {
+			return fmt.Errorf("mailbox %s: the display name is not valid", m.Address)
+		}
+		if len(m.AppPasswords) > MaxAppPasswords {
+			return fmt.Errorf("mailbox %s: more than %d app passwords", m.Address, MaxAppPasswords)
+		}
+		if len(m.AppPasswords) > 0 && c.AppPasswordKey == "" {
+			return fmt.Errorf("mailbox %s: app passwords need an app password key", m.Address)
+		}
+		for _, ap := range m.AppPasswords {
+			if !ValidAppPasswordID(ap.ID) || appIDs[ap.ID] {
+				return fmt.Errorf("mailbox %s: app password id %q is not valid or used twice", m.Address, ap.ID)
+			}
+			appIDs[ap.ID] = true
+			if !macRe.MatchString(ap.MAC) || ap.Name == "" || !ValidDisplayName(ap.Name) {
+				return fmt.Errorf("mailbox %s: app password %s is not valid", m.Address, ap.ID)
+			}
 		}
 	}
 	for _, a := range c.Aliases {

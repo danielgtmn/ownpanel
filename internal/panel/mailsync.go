@@ -42,6 +42,13 @@ func (s *Service) buildMailConfig(ctx context.Context) (*config.Config, error) {
 		return nil, err
 	}
 	cfg.Filter = filter
+	if s.secrets != nil {
+		// The key exists from the start, so the mail service can create
+		// app passwords before the panel ever did.
+		if cfg.AppPasswordKey, err = s.appPasswordKey(ctx); err != nil {
+			return nil, err
+		}
+	}
 	domains, err := s.store.MailDomains(ctx)
 	if err != nil {
 		return nil, err
@@ -53,7 +60,11 @@ func (s *Service) buildMailConfig(ctx context.Context) (*config.Config, error) {
 				continue
 			}
 			active[d.Domain] = true
-			cd := config.Domain{Name: d.Domain, DKIM: []config.DKIMKey{}, SendPerHour: config.DefaultDomainSendPerHour}
+			cd := config.Domain{Name: d.Domain, DKIM: []config.DKIMKey{}, SendPerHour: config.DefaultDomainSendPerHour,
+				Organisation: d.OrganisationID}
+			if cd.Organisation == "" {
+				cd.Organisation = config.StandaloneOrganisation(d.Domain)
+			}
 			keys, err := s.store.DKIMKeys(ctx, d.Domain)
 			if err != nil {
 				return nil, err
@@ -78,11 +89,21 @@ func (s *Service) buildMailConfig(ctx context.Context) (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	appPasswords, err := s.store.AppPasswords(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+	byMailbox := map[int64][]config.AppPassword{}
+	for _, ap := range appPasswords {
+		byMailbox[ap.MailboxID] = append(byMailbox[ap.MailboxID], config.AppPassword{ID: ap.ID, Name: ap.Name, MAC: ap.MAC, Created: ap.CreatedAt})
+	}
 	for _, m := range mailboxes {
 		if active[m.Domain] {
 			cfg.Mailboxes = append(cfg.Mailboxes, config.Mailbox{
 				StorageID: m.StorageID, Address: m.LocalPart + "@" + m.Domain, PasswordHash: m.PasswordHash,
 				QuotaBytes: m.QuotaBytes, SendPerHour: m.SendPerHour, SendPerDay: m.SendPerDay,
+				DisplayName: m.DisplayName, AppPasswords: byMailbox[m.ID], AppPasswordsOnly: m.AppPasswordsOnly,
+				Revision: m.Revision,
 			})
 		}
 	}
@@ -212,9 +233,20 @@ func (s *Service) recordMailEvents(ctx context.Context) error {
 	}
 	last := cursor
 	refusals := blocklistRefusals(m)
-	refused := false
+	refused, accountChanged := false, false
 	for _, e := range events {
 		if e.ID <= last {
+			continue
+		}
+		if accountEventKinds[e.Kind] {
+			changed, err := s.applyAccountEvent(ctx, e)
+			if err != nil {
+				// Stop before this event: it is applied on the next round.
+				slog.Error("recording a mailbox change failed", "kind", e.Kind, "err", err)
+				break
+			}
+			last = e.ID
+			accountChanged = accountChanged || changed
 			continue
 		}
 		last = e.ID
@@ -259,7 +291,15 @@ func (s *Service) recordMailEvents(ctx context.Context) error {
 	if refused {
 		values[keyBlocklistRefused] = encodeRefusals(refusals, s.now())
 	}
-	return s.store.PutSettings(ctx, values)
+	if err := s.store.PutSettings(ctx, values); err != nil {
+		return err
+	}
+	if accountChanged {
+		// The mail service keeps its own change until a push includes it;
+		// push now rather than on the next round.
+		return s.mailSync(ctx)
+	}
+	return nil
 }
 
 // runMail is the mail part of Run: it activates domains whose MX record

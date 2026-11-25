@@ -19,6 +19,10 @@ type MailDomain struct {
 	CreatedAt   time.Time
 	Mailboxes   int // filled by MailDomains and MailDomain
 	Aliases     int
+	// OrganisationID is "" when the domain is its own organisation.
+	OrganisationID      string
+	OrganisationName    string
+	OrganisationOwnerID int64
 }
 
 // DKIMKey is one DKIM key of a mail domain. PrivateKey is sealed by the
@@ -52,6 +56,15 @@ type Mailbox struct {
 	CreatedAt    time.Time
 	OwnerID      int64
 	Owner        string
+	// DisplayName may be empty. AppPasswordsOnly: mail programs sign in
+	// only with app passwords.
+	DisplayName      string
+	AppPasswordsOnly bool
+	// Revision is the highest revision of the mailbox's own changes in the
+	// mail service recorded here; AdminChangedAt when the panel last set the
+	// password, display name or AppPasswordsOnly itself.
+	Revision       int64
+	AdminChangedAt time.Time
 }
 
 // MailAlias delivers mail for LocalPart@Domain to Targets. LocalPart "*" is
@@ -69,9 +82,10 @@ type MailAlias struct {
 // ---- domains ----
 
 const mailDomainCols = `d.domain, d.owner_id, coalesce(u.name, ''), d.active, d.activated_at, d.checked_at, d.check_error, d.created_at,
-	(SELECT count(*) FROM mailboxes m WHERE m.domain = d.domain), (SELECT count(*) FROM mail_aliases a WHERE a.domain = d.domain)`
+	(SELECT count(*) FROM mailboxes m WHERE m.domain = d.domain), (SELECT count(*) FROM mail_aliases a WHERE a.domain = d.domain),
+	coalesce(o.id, ''), coalesce(o.name, ''), coalesce(o.owner_id, 0)`
 
-const mailDomainFrom = ` FROM mail_domains d LEFT JOIN users u ON u.id = d.owner_id`
+const mailDomainFrom = ` FROM mail_domains d LEFT JOIN users u ON u.id = d.owner_id LEFT JOIN organisations o ON o.id = d.organisation_id`
 
 func optionalTime(v sql.NullInt64) *time.Time {
 	if !v.Valid {
@@ -85,7 +99,8 @@ func scanMailDomain(row interface{ Scan(...any) error }) (MailDomain, error) {
 	var d MailDomain
 	var activated, checked sql.NullInt64
 	var created int64
-	err := row.Scan(&d.Domain, &d.OwnerID, &d.Owner, &d.Active, &activated, &checked, &d.CheckError, &created, &d.Mailboxes, &d.Aliases)
+	err := row.Scan(&d.Domain, &d.OwnerID, &d.Owner, &d.Active, &activated, &checked, &d.CheckError, &created, &d.Mailboxes, &d.Aliases,
+		&d.OrganisationID, &d.OrganisationName, &d.OrganisationOwnerID)
 	if err != nil {
 		if noRows(err) {
 			return MailDomain{}, notFoundf("mail domain not found")
@@ -236,15 +251,15 @@ func (s *Store) DKIMKeys(ctx context.Context, domain string) ([]DKIMKey, error) 
 // ---- mailboxes ----
 
 const mailboxCols = `m.id, m.storage_id, m.domain, m.local_part, m.password_hash, m.quota_bytes, m.send_per_hour, m.send_per_day,
-	m.created_at, d.owner_id, coalesce(u.name, '')`
+	m.created_at, d.owner_id, coalesce(u.name, ''), m.display_name, m.app_passwords_only, m.revision, m.admin_changed_at`
 
 const mailboxFrom = ` FROM mailboxes m JOIN mail_domains d ON d.domain = m.domain LEFT JOIN users u ON u.id = d.owner_id`
 
 func scanMailbox(row interface{ Scan(...any) error }) (Mailbox, error) {
 	var m Mailbox
-	var created int64
+	var created, adminChanged int64
 	err := row.Scan(&m.ID, &m.StorageID, &m.Domain, &m.LocalPart, &m.PasswordHash, &m.QuotaBytes, &m.SendPerHour, &m.SendPerDay,
-		&created, &m.OwnerID, &m.Owner)
+		&created, &m.OwnerID, &m.Owner, &m.DisplayName, &m.AppPasswordsOnly, &m.Revision, &adminChanged)
 	if err != nil {
 		if noRows(err) {
 			return Mailbox{}, notFoundf("mailbox not found")
@@ -252,6 +267,9 @@ func scanMailbox(row interface{ Scan(...any) error }) (Mailbox, error) {
 		return Mailbox{}, err
 	}
 	m.CreatedAt = unix(created)
+	if adminChanged > 0 {
+		m.AdminChangedAt = unix(adminChanged)
+	}
 	return m, nil
 }
 
@@ -310,8 +328,8 @@ func (s *Store) CreateMailbox(ctx context.Context, m Mailbox, limit int) (Mailbo
 				return conflictf("at most %d mailboxes are possible per person", limit)
 			}
 		}
-		res, err := tx.Exec(`INSERT INTO mailboxes (storage_id, domain, local_part, password_hash, quota_bytes, send_per_hour, send_per_day, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, m.StorageID, m.Domain, m.LocalPart, m.PasswordHash, m.QuotaBytes, m.SendPerHour, m.SendPerDay, s.now())
+		res, err := tx.Exec(`INSERT INTO mailboxes (storage_id, domain, local_part, password_hash, quota_bytes, send_per_hour, send_per_day, created_at, display_name)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, m.StorageID, m.Domain, m.LocalPart, m.PasswordHash, m.QuotaBytes, m.SendPerHour, m.SendPerDay, s.now(), m.DisplayName)
 		if isUnique(err) {
 			var n int
 			if e := tx.QueryRow(`SELECT count(*) FROM mailboxes WHERE domain = ? AND local_part = ?`, m.Domain, m.LocalPart).Scan(&n); e == nil && n > 0 {
@@ -332,9 +350,17 @@ func (s *Store) CreateMailbox(ctx context.Context, m Mailbox, limit int) (Mailbo
 	return out, err
 }
 
-// SetMailboxPassword replaces a mailbox's password hash.
+// SetMailboxPassword replaces a mailbox's password hash (a change by the
+// panel: it records AdminChangedAt).
 func (s *Store) SetMailboxPassword(ctx context.Context, id int64, hash string) error {
-	return s.updateMailbox(ctx, `UPDATE mailboxes SET password_hash = ? WHERE id = ?`, hash, id)
+	return s.updateMailbox(ctx, `UPDATE mailboxes SET password_hash = ?, admin_changed_at = ? WHERE id = ?`, hash, s.now(), id)
+}
+
+// SetMailboxAccount replaces a mailbox's display name and AppPasswordsOnly
+// (a change by the panel: it records AdminChangedAt).
+func (s *Store) SetMailboxAccount(ctx context.Context, id int64, displayName string, appPasswordsOnly bool) error {
+	return s.updateMailbox(ctx, `UPDATE mailboxes SET display_name = ?, app_passwords_only = ?, admin_changed_at = ? WHERE id = ?`,
+		displayName, appPasswordsOnly, s.now(), id)
 }
 
 // SetMailboxLimits replaces a mailbox's quota and send limits.

@@ -4,6 +4,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/passwd"
 )
 
@@ -19,6 +20,10 @@ func validatePassword(pw string) error {
 	n := utf8.RuneCountInString(pw)
 	if n < minPasswordLen || n > maxPasswordLen {
 		return errorf(Invalid, "the password must be between %d and %d characters long", minPasswordLen, maxPasswordLen)
+	}
+	if config.LooksLikeAppPassword(pw) {
+		// Mail programs would check it as an app password, never as this one.
+		return errorf(Invalid, "this looks like an app password; choose another password")
 	}
 	return nil
 }

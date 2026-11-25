@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -139,16 +140,28 @@ func (s *Store) AddEvent(ctx context.Context, e config.Event) error {
 		at = s.now()
 	}
 	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		_, err := tx.Exec(`INSERT INTO events (at, kind, storage_id, address, detail) VALUES (?, ?, ?, ?, ?)`,
-			at.Unix(), e.Kind, e.StorageID, e.Address, e.Detail)
-		return err
+		return insertEvent(tx, e, at)
 	})
+}
+
+func insertEvent(tx *sql.Tx, e config.Event, at time.Time) error {
+	account := ""
+	if e.Account != nil {
+		b, err := json.Marshal(e.Account)
+		if err != nil {
+			return err
+		}
+		account = string(b)
+	}
+	_, err := tx.Exec(`INSERT INTO events (at, kind, storage_id, address, detail, account) VALUES (?, ?, ?, ?, ?, ?)`,
+		at.Unix(), e.Kind, e.StorageID, e.Address, e.Detail, account)
+	return err
 }
 
 // Events returns up to MaxEvents events with an id greater than after,
 // oldest first.
 func (s *Store) Events(ctx context.Context, after int64) ([]config.Event, error) {
-	rows, err := s.rdb.QueryContext(ctx, `SELECT id, at, kind, storage_id, address, detail FROM events
+	rows, err := s.rdb.QueryContext(ctx, `SELECT id, at, kind, storage_id, address, detail, account FROM events
 		WHERE id > ? ORDER BY id LIMIT ?`, after, MaxEvents)
 	if err != nil {
 		return nil, err
@@ -158,13 +171,81 @@ func (s *Store) Events(ctx context.Context, after int64) ([]config.Event, error)
 	for rows.Next() {
 		var e config.Event
 		var at int64
-		if err := rows.Scan(&e.ID, &at, &e.Kind, &e.StorageID, &e.Address, &e.Detail); err != nil {
+		var account string
+		if err := rows.Scan(&e.ID, &at, &e.Kind, &e.StorageID, &e.Address, &e.Detail, &account); err != nil {
 			return nil, err
+		}
+		if account != "" {
+			e.Account = &config.AccountChange{}
+			if err := json.Unmarshal([]byte(account), e.Account); err != nil {
+				return nil, fmt.Errorf("event %d: %w", e.ID, err)
+			}
 		}
 		e.At = time.Unix(at, 0).UTC()
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// AccountOverlays returns the stored account overlays (directory.Overlay
+// as JSON) by storage id.
+func (s *Store) AccountOverlays(ctx context.Context) (map[string][]byte, error) {
+	rows, err := s.rdb.QueryContext(ctx, `SELECT storage_id, data FROM account_overlays`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]byte{}
+	for rows.Next() {
+		var id, data string
+		if err := rows.Scan(&id, &data); err != nil {
+			return nil, err
+		}
+		out[id] = []byte(data)
+	}
+	return out, rows.Err()
+}
+
+// PutAccountOverlays stores or (nil data) deletes overlays, atomically.
+func (s *Store) PutAccountOverlays(ctx context.Context, overlays map[string][]byte) error {
+	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
+		return putOverlays(tx, overlays)
+	})
+}
+
+func putOverlays(tx *sql.Tx, overlays map[string][]byte) error {
+	for id, data := range overlays {
+		if err := checkID(id); err != nil {
+			return err
+		}
+		var err error
+		if data == nil {
+			_, err = tx.Exec(`DELETE FROM account_overlays WHERE storage_id = ?`, id)
+		} else {
+			_, err = tx.Exec(`INSERT INTO account_overlays (storage_id, data) VALUES (?, ?)
+				ON CONFLICT (storage_id) DO UPDATE SET data = excluded.data`, id, string(data))
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SaveAccountChange stores a mailbox's overlay (data, nil deletes it) and
+// records the event of the change, in one transaction: a change is never
+// applied without being reported, nor reported without being kept.
+func (s *Store) SaveAccountChange(ctx context.Context, storageID string, data []byte, e config.Event) error {
+	at := e.At
+	if at.IsZero() {
+		at = s.now()
+	}
+	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
+		if err := putOverlays(tx, map[string][]byte{storageID: data}); err != nil {
+			return err
+		}
+		return insertEvent(tx, e, at)
+	})
 }
 
 // PruneEvents deletes events older than EventRetention. The AUTOINCREMENT

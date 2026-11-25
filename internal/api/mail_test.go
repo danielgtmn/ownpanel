@@ -125,8 +125,8 @@ func newMailEnvWith(t *testing.T, mail panel.MailService) *env {
 }
 
 var (
-	mailDomainKeys = []string{"domain", "owner", "active", "activated_at", "checked_at", "problem", "mailboxes", "aliases", "dkim_selector", "dkim_record", "created_at"}
-	mailboxKeys    = []string{"id", "address", "domain", "local_part", "owner", "quota_bytes", "send_per_hour", "send_per_day", "created_at", "usage"}
+	mailDomainKeys = []string{"domain", "owner", "active", "activated_at", "checked_at", "problem", "mailboxes", "aliases", "dkim_selector", "dkim_record", "created_at", "organisation"}
+	mailboxKeys    = []string{"id", "address", "domain", "local_part", "owner", "quota_bytes", "send_per_hour", "send_per_day", "created_at", "usage", "display_name", "app_passwords_only"}
 	aliasKeys      = []string{"id", "address", "domain", "local_part", "catch_all", "targets", "owner", "created_at"}
 )
 
@@ -169,7 +169,7 @@ func TestMailRoutes(t *testing.T) {
 	if box.Address != "info@example.com" || box.SendPerDay != 300 || box.QuotaBytes != panel.DefaultQuotaBytes {
 		t.Fatalf("mailbox %s", rec.Body)
 	}
-	if strings.Contains(rec.Body.String(), "argon2") || strings.Contains(rec.Body.String(), "password") {
+	if strings.Contains(rec.Body.String(), "argon2") || strings.Contains(rec.Body.String(), "mailbox-password") || strings.Contains(rec.Body.String(), "\"password\"") {
 		t.Fatalf("mailbox answer contains a secret: %s", rec.Body)
 	}
 	wantStatus(t, e.as("POST", "/api/mail/domains/example.com/mailboxes", `{"local_part":"x","password":"short"}`), 400, "password")
