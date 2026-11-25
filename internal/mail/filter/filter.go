@@ -132,7 +132,8 @@ func (f *Filter) PTR(ctx context.Context, ip netip.Addr) (has, known bool) {
 
 // BlocklistResult is what the blocklists say about an address.
 type BlocklistResult struct {
-	// Refuse is the zone of a listing that refuses mail ("" if none).
+	// Refuse is the zone of a listing that refuses mail ("" if none),
+	// masked (config.MaskZone): it goes into replies and logs.
 	Refuse string
 	// Score for listings that do not refuse.
 	Score Score
@@ -186,7 +187,7 @@ func (f *Filter) Blocklists(ctx context.Context, ip netip.Addr, zones []string) 
 			}
 			if isSpamhaus(z) && v4[1] == 0 && v4[2] == 0 && spamhausRefuse[v4[3]] {
 				if res.Refuse == "" {
-					res.Refuse = z
+					res.Refuse = config.MaskZone(z)
 				}
 				continue
 			}
@@ -196,7 +197,7 @@ func (f *Filter) Blocklists(ctx context.Context, ip netip.Addr, zones []string) 
 			f.queryRefused(z)
 		}
 		if listed {
-			res.Score.Add(PointsListed, "listed:"+z)
+			res.Score.Add(PointsListed, "listed:"+config.MaskZone(z))
 		}
 	}
 	return res
@@ -215,9 +216,10 @@ func (f *Filter) queryRefused(zone string) {
 	if !added {
 		return
 	}
-	f.opts.Logger.Warn("filter: blocklist refused our queries", "zone", zone)
+	shown := config.MaskZone(zone)
+	f.opts.Logger.Warn("filter: blocklist refused our queries", "zone", shown)
 	f.opts.Event(config.Event{Kind: config.EventBlocklistRefused,
-		Detail: "the blocklist " + zone + " refused to answer this server's queries (usually because the server uses a public DNS resolver); incoming mail is not checked against it"})
+		Detail: "the blocklist " + shown + " refused to answer this server's queries (usually because the server uses a public DNS resolver); incoming mail is not checked against it"})
 }
 
 // Greylisting timings.

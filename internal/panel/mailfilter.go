@@ -43,9 +43,9 @@ const (
 	// blocklistPurpose binds sealed blocklist zones to their use.
 	blocklistPurpose = "ownpanel blocklist zone"
 	// secretZoneSuffix marks zones whose first label is an access key.
-	secretZoneSuffix = ".dq.spamhaus.net"
+	secretZoneSuffix = config.SecretZoneSuffix
 	// zoneMask replaces the access key in answers.
-	zoneMask = "••••"
+	zoneMask = config.ZoneMask
 	// Bounds of the junk threshold.
 	minJunkScore = 1
 	maxJunkScore = 50
@@ -75,15 +75,12 @@ func (e blocklistEntry) equal(o blocklistEntry) bool {
 
 // isSecretZone tells whether the first label of zone is an access key.
 func isSecretZone(zone string) bool {
-	return strings.HasSuffix(zone, secretZoneSuffix) && strings.Count(zone, ".") > strings.Count(secretZoneSuffix, ".")
+	return config.SecretZone(zone)
 }
 
 // maskZone hides the access key of a secret zone.
 func maskZone(zone string) string {
-	if !isSecretZone(zone) {
-		return zone
-	}
-	return zoneMask + zone[strings.IndexByte(zone, '.'):]
+	return config.MaskZone(zone)
 }
 
 // secretZoneRe finds zones with an access key in free text.

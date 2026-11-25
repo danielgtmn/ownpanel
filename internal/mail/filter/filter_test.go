@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"log/slog"
 	"net"
 	"net/netip"
 	"net/textproto"
@@ -71,6 +72,46 @@ func TestBlocklists(t *testing.T) {
 	f.Blocklists(ctx, netip.MustParseAddr("192.0.2.3"), zones[:1])
 	if len(events) != 3 {
 		t.Fatalf("no new event after a day: %d", len(events))
+	}
+}
+
+// TestBlocklistsSecretZone: the access key in a Spamhaus DQS zone is used
+// for the lookup only; the result, score, log and event show it masked.
+func TestBlocklistsSecretZone(t *testing.T) {
+	st, err := storage.Open(t.TempDir(), storage.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	const key = "s3cr3tkey"
+	var events []config.Event
+	var logs bytes.Buffer
+	f := New(Options{
+		Store:  st,
+		Logger: slog.New(slog.NewTextHandler(&logs, nil)),
+		Event:  func(e config.Event) { events = append(events, e) },
+		Resolver: &mailtest.Resolver{IP: map[string][]net.IPAddr{
+			"1.2.0.192." + key + ".zen.dq.spamhaus.net": ip4("127.0.0.2"),
+			"2.2.0.192." + key + ".zen.dq.spamhaus.net": ip4("127.0.0.11"),
+			"3.2.0.192." + key + ".zen.dq.spamhaus.net": ip4("127.255.255.254"),
+		}},
+	})
+	zones := []string{key + ".zen.dq.spamhaus.net"}
+	ctx := context.Background()
+	r := f.Blocklists(ctx, netip.MustParseAddr("192.0.2.1"), zones)
+	if r.Refuse != "••••.zen.dq.spamhaus.net" {
+		t.Errorf("refuse: %q", r.Refuse)
+	}
+	r = f.Blocklists(ctx, netip.MustParseAddr("192.0.2.2"), zones)
+	if r.Score.String() != "3 (listed:••••.zen.dq.spamhaus.net)" {
+		t.Errorf("score: %v", r.Score)
+	}
+	f.Blocklists(ctx, netip.MustParseAddr("192.0.2.3"), zones)
+	if len(events) != 1 || strings.Contains(events[0].Detail, key) || !strings.Contains(events[0].Detail, "••••.zen.dq.spamhaus.net") {
+		t.Errorf("event: %+v", events)
+	}
+	if strings.Contains(logs.String(), key) {
+		t.Errorf("key in log: %s", logs.String())
 	}
 }
 

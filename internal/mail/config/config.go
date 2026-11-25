@@ -75,6 +75,28 @@ const (
 // DefaultBlocklists are used when Filter.Blocklists is nil.
 var DefaultBlocklists = []string{"zen.spamhaus.org"}
 
+// SecretZoneSuffix marks blocklist zones whose first label is an access
+// key (Spamhaus DQS: "<key>.zen.dq.spamhaus.net").
+const SecretZoneSuffix = ".dq.spamhaus.net"
+
+// ZoneMask replaces the access key of a secret zone wherever it is shown.
+const ZoneMask = "••••"
+
+// SecretZone tells whether the first label of zone is an access key.
+func SecretZone(zone string) bool {
+	return strings.HasSuffix(zone, SecretZoneSuffix) && strings.Count(zone, ".") > strings.Count(SecretZoneSuffix, ".")
+}
+
+// MaskZone is zone as it may be shown: in replies, logs, events and
+// headers. The access key of a secret zone is replaced by ZoneMask; the
+// raw zone is only for the DNS lookup.
+func MaskZone(zone string) string {
+	if !SecretZone(zone) {
+		return zone
+	}
+	return ZoneMask + zone[strings.IndexByte(zone, '.'):]
+}
+
 // WithDefaults returns f with zero values replaced by the defaults.
 func (f Filter) WithDefaults() Filter {
 	if f.Blocklists == nil {
@@ -314,7 +336,7 @@ func (c *Config) Validate() error {
 	}
 	for _, z := range c.Filter.Blocklists {
 		if !ValidDomain(z) {
-			return fmt.Errorf("blocklist %q is not a valid zone", z)
+			return fmt.Errorf("blocklist %q is not a valid zone", MaskZone(z))
 		}
 	}
 	if c.Filter.JunkScore < 0 || c.Filter.JunkScore > 1000 {
