@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/mail/directory"
 	"github.com/danielgtmn/ownpanel/internal/mail/sieve"
 	"github.com/danielgtmn/ownpanel/internal/mail/signin"
 	"github.com/danielgtmn/ownpanel/internal/mail/storage"
@@ -47,6 +49,10 @@ type session struct {
 	g      signin.Grant
 	authed bool
 	ended  bool
+	// target is the storage id whose scripts the session works on: the
+	// signed-in mailbox, or one it has the Manage right on (G3), named as
+	// the authorization identity of PLAIN.
+	target string
 
 	wmu sync.Mutex
 	w   *bufio.Writer
@@ -76,6 +82,23 @@ func (s *session) grant() (signin.Grant, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.g, s.authed
+}
+
+func (s *session) targetID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.target
+}
+
+// manageable returns the mailbox addr (any case) if the mailbox signed in
+// as grantee may manage its filters (the Manage right; never across
+// organisations, see directory.buildGrants).
+func manageable(dir *directory.Directory, addr, grantee string) (*config.Mailbox, bool) {
+	m, ok := dir.Mailbox(directory.Normalize(addr))
+	if !ok || m.StorageID == grantee || !dir.Rights(m.StorageID, grantee).Has(config.Manage) {
+		return nil, false
+	}
+	return m, true
 }
 
 // errEnd ends the session after its answer is written.
@@ -174,14 +197,25 @@ func (s *session) dispatch(cmd command) error {
 	}
 	// A password change, a revoked app password or a removed mailbox ends
 	// the session before anything else happens.
-	if !signin.Valid(s.srv.opts.Directory(), g) {
+	dir := s.srv.opts.Directory()
+	if !signin.Valid(dir, g) {
 		s.bye("", "Sign-in no longer valid")
 		return errEnd
+	}
+	// Working on another mailbox: the right is checked again each time, so
+	// taking it away ends the session.
+	target := s.targetID()
+	if target != g.StorageID {
+		m, ok := dir.MailboxByStorageID(target)
+		if !ok || !dir.Rights(m.StorageID, g.StorageID).Has(config.Manage) {
+			s.bye("", "Access to that mailbox was removed")
+			return errEnd
+		}
 	}
 	if cmd.tooBig() {
 		return s.reply("NO", "QUOTA/MAXSIZE", "Script too large")
 	}
-	return s.signedIn(g.StorageID, cmd)
+	return s.signedIn(target, cmd)
 }
 
 func isKnown(name string) bool {
@@ -409,8 +443,10 @@ func (s *session) startTLS() error {
 	return s.writeCaps("OK", "", "TLS active")
 }
 
-// authenticate signs in with PLAIN: authorization identity (empty or the
-// user), user and password.
+// authenticate signs in with PLAIN: authorization identity, user and
+// password. The authorization identity is empty or the user (their own
+// scripts), or the address of a mailbox the user may manage, such as a
+// shared mailbox, which has no password of its own.
 func (s *session) authenticate(cmd command) error {
 	if _, ok := s.grant(); ok {
 		return s.reply("NO", "", "Already signed in")
@@ -449,21 +485,29 @@ func (s *session) authenticate(cmd command) error {
 		return s.authFailed("Invalid sign-in data")
 	}
 	authz, user, pass := string(parts[0]), string(parts[1]), string(parts[2])
-	if authz != "" && !strings.EqualFold(authz, user) {
-		return s.authFailed("Signing in as someone else is not possible")
-	}
-	g, err := s.srv.opts.SignIn.Check(s.srv.opts.Directory(), s.ip, user, pass)
+	dir := s.srv.opts.Directory()
+	g, err := s.srv.opts.SignIn.Check(dir, s.ip, user, pass)
 	if errors.Is(err, signin.ErrThrottled) {
 		return s.reply("NO", "TRYLATER", "Too many failed sign-ins, try again later")
 	}
 	if err != nil {
 		return s.authFailed("Wrong address or password")
 	}
-	if err := s.srv.opts.Store.EnsureMailbox(s.ctx, g.StorageID); err != nil {
+	// Only after the password: whether a mailbox exists or may be managed
+	// is nothing to learn without one.
+	target := g.StorageID
+	if authz != "" && !strings.EqualFold(authz, user) && directory.Normalize(authz) != g.Address {
+		m, ok := manageable(dir, authz, g.StorageID)
+		if !ok {
+			return s.authFailed("You can't manage the filters of that mailbox")
+		}
+		target = m.StorageID
+	}
+	if err := s.srv.opts.Store.EnsureMailbox(s.ctx, target); err != nil {
 		return s.fail(err)
 	}
 	s.mu.Lock()
-	s.g, s.authed = g, true
+	s.g, s.authed, s.target = g, true, target
 	s.mu.Unlock()
 	if s.srv.opts.SignedIn != nil {
 		s.srv.opts.SignedIn(s.ctx, g.Mailbox, s.ip)
