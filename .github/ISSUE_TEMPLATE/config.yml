@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://github.com/danielgtmn/ownpanel/wiki
+    about: Installation, configuration and how everything works.
+  - name: Roadmap
+    url: https://github.com/danielgtmn/ownpanel/wiki/Roadmap
+    about: What is done, what comes next.
