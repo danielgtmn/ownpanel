@@ -434,6 +434,7 @@ func (s *Server) startIMAPS() service {
 		SignIn:    s.signIn,
 		TLSConfig: s.tls,
 		Logger:    s.log,
+		FreeBytes: s.opts.FreeBytes,
 	})
 }
 

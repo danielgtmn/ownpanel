@@ -44,6 +44,11 @@ type Options struct {
 	// start with TLS; there is no plain-text port.
 	TLSConfig *tls.Config
 	Logger    *slog.Logger
+	// FreeBytes reports free disk space (tests); nil means Store.FreeBytes.
+	// Below MinFreeBytes (0: smtpd.DefaultMinFreeBytes) APPEND is refused
+	// for now, like mail arriving over SMTP and submission.
+	FreeBytes    func() (int64, error)
+	MinFreeBytes int64
 
 	MaxConnections int
 }
@@ -96,6 +101,12 @@ func New(opts Options) *Server {
 	}
 	if opts.SignIn == nil {
 		opts.SignIn = signin.New(signin.Options{})
+	}
+	if opts.MinFreeBytes == 0 {
+		opts.MinFreeBytes = smtpd.DefaultMinFreeBytes
+	}
+	if opts.FreeBytes == nil {
+		opts.FreeBytes = opts.Store.FreeBytes
 	}
 	s := &Server{opts: opts, log: opts.Logger, sessions: map[*session]struct{}{}}
 	s.imap = imapserver.New(&imapserver.Options{

@@ -58,6 +58,7 @@ type env struct {
 	addr  string
 	dir   atomic.Pointer[directory.Directory]
 	quota atomic.Int64
+	free  atomic.Int64
 }
 
 func testConfig(t testing.TB) *config.Config {
@@ -73,6 +74,7 @@ func testConfig(t testing.TB) *config.Config {
 func start(t *testing.T) *env {
 	t.Helper()
 	e := &env{t: t}
+	e.free.Store(10 << 30)
 	st, err := storage.Open(t.TempDir(), storage.Options{Quota: func(string) int64 { return e.quota.Load() }})
 	if err != nil {
 		t.Fatal(err)
@@ -91,6 +93,7 @@ func start(t *testing.T) *env {
 		SignIn:    signin.New(signin.Options{Slots: slots}),
 		TLSConfig: &tls.Config{Certificates: []tls.Certificate{kp}},
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		FreeBytes: func() (int64, error) { return e.free.Load(), nil },
 	})
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -556,6 +559,15 @@ func TestAppend(t *testing.T) {
 	if _, err := appendMsg("Missing", simple("x")); code(err) != imap.ResponseCodeTryCreate {
 		t.Errorf("missing folder: %v", err)
 	}
+	// Low disk: refused for now, nothing stored.
+	e.free.Store(1 << 20)
+	if _, err := appendMsg("INBOX", simple("low disk")); code(err) != imap.ResponseCodeUnavailable {
+		t.Errorf("low disk: %v", err)
+	}
+	if st, err := e.store.FolderStatus(context.Background(), idAlice, "INBOX"); err != nil || st.Messages != 0 {
+		t.Errorf("stored on low disk: %+v %v", st, err)
+	}
+	e.free.Store(10 << 30)
 	e.quota.Store(100)
 	if _, err := appendMsg("INBOX", simple(strings.Repeat("y", 200))); code(err) != imap.ResponseCodeOverQuota {
 		t.Errorf("over quota: %v", err)

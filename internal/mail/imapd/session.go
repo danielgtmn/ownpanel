@@ -415,6 +415,9 @@ func (s *session) Append(name string, r imap.LiteralReader, options *imap.Append
 	if err != nil {
 		return nil, s.fail(err)
 	}
+	if err := s.checkDisk(); err != nil {
+		return nil, err
+	}
 	res, err := s.srv.opts.Store.Append(s.ctx, s.id(), name, r, storage.AppendOptions{
 		Flags:   flags,
 		Date:    options.Time,
@@ -424,6 +427,24 @@ func (s *session) Append(name string, r imap.LiteralReader, options *imap.Append
 		return nil, s.fail(errTryCreate(err))
 	}
 	return &imap.AppendData{UID: imap.UID(res.UID), UIDValidity: res.UIDValidity}, nil
+}
+
+// errDiskFull: the server's disk is nearly full; the client may try again
+// later.
+var errDiskFull = &imap.Error{Type: imap.StatusResponseTypeNo, Code: imap.ResponseCodeUnavailable,
+	Text: "The server is short of storage, try again later"}
+
+// checkDisk refuses to store messages below the free disk space SMTP and
+// submission keep.
+func (s *session) checkDisk() error {
+	free, err := s.srv.opts.FreeBytes()
+	if err != nil {
+		return s.fail(err)
+	}
+	if free < s.srv.opts.MinFreeBytes {
+		return errDiskFull
+	}
+	return nil
 }
 
 // storeFlags converts IMAP flags for the storage: \Recent is not stored
