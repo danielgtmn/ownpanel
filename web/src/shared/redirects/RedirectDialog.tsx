@@ -28,6 +28,8 @@ type FormProps = {
   kind: RedirectKind
   existing: Redirect | null
   domains: string[]
+  // Fills in the domain to redirect when adding a domain redirect.
+  initialDomain?: string
   onSubmit: (input: RedirectInput) => Promise<void>
 }
 
@@ -55,9 +57,12 @@ function SwitchField({
   )
 }
 
-function RedirectForm({ kind, existing, domains, onSubmit }: FormProps) {
+function RedirectForm({ kind, existing, domains, initialDomain, onSubmit }: FormProps) {
   const [draft, setDraft] = useState<RedirectDraft>(() =>
-    draftFrom(existing, kind === 'path' ? { domain: domains[0] ?? '', keepPath: false, keepQuery: false } : {}),
+    draftFrom(
+      existing,
+      kind === 'path' ? { domain: domains[0] ?? '', keepPath: false, keepQuery: false } : { domain: initialDomain ?? '' },
+    ),
   )
   const [errors, setErrors] = useState<FormErrors>({})
   const [busy, setBusy] = useState(false)
@@ -241,7 +246,15 @@ type RedirectDialogProps = FormProps & {
   onOpenChange: (open: boolean) => void
 }
 
-export function RedirectDialog({ open, onOpenChange, kind, existing, domains, onSubmit }: RedirectDialogProps) {
+export function RedirectDialog({
+  open,
+  onOpenChange,
+  kind,
+  existing,
+  domains,
+  initialDomain,
+  onSubmit,
+}: RedirectDialogProps) {
   const description =
     kind === 'path'
       ? 'Send visitors who open one path of this site to another path or address.'
@@ -253,7 +266,7 @@ export function RedirectDialog({ open, onOpenChange, kind, existing, domains, on
       title={existing ? 'Edit redirect' : 'Add redirect'}
       description={description}
     >
-      <RedirectForm kind={kind} existing={existing} domains={domains} onSubmit={onSubmit} />
+      <RedirectForm kind={kind} existing={existing} domains={domains} initialDomain={initialDomain} onSubmit={onSubmit} />
     </FormDialog>
   )
 }

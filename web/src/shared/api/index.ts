@@ -10,7 +10,8 @@ export {
   setUnauthorizedHandler,
   type RequestOptions,
 } from './client.ts'
-export { listSiteNames } from './sites.ts'
+export { listSiteNames, saveSiteDomains } from './sites.ts'
+export { listRecordNames, type RecordName } from './records.ts'
 export {
   getDomainStatus,
   getDomainStatuses,

@@ -10,6 +10,8 @@ export type DomainSources = {
   sites: SourceSite[]
   zones: SourceZone[]
   redirects: SourceRedirect[]
+  // Domains with redirects for single paths. They count as addresses of their domain, nothing more.
+  pathRedirectHosts?: string[]
 }
 
 export type FamilySite = {

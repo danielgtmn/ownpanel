@@ -1,5 +1,5 @@
-import { request, type DomainStatus } from '../../shared/api/index.ts'
-import type { DomainSources, PointStates } from '../../shared/families/index.ts'
+import { listRecordNames, request, type DomainStatus } from '../../shared/api/index.ts'
+import type { DomainSources, PointStates, SourceZone, ZoneRecords } from '../../shared/families/index.ts'
 
 type SiteData = { name: string; domains: string[] | null; current_release: string }
 type ZoneData = { zones?: { connection_id: number; connection_name: string; name: string }[] | null }
@@ -35,6 +35,11 @@ export async function loadSources(): Promise<DomainSources> {
     redirects: (redirects ?? [])
       .filter((redirect) => redirect.source_path === '')
       .map((redirect) => ({ id: redirect.id, source: redirect.source_domain, target: redirect.target })),
+    pathRedirectHosts: [
+      ...new Set(
+        (redirects ?? []).filter((redirect) => redirect.source_path !== '').map((redirect) => redirect.source_domain),
+      ),
+    ],
   }
 }
 
@@ -56,4 +61,23 @@ export async function loadPointStates(sources: DomainSources): Promise<PointStat
     ),
   ])
   return states
+}
+
+export type ZoneRecordsResult = { zones: ZoneRecords[]; failed: string[] }
+
+// Reads which names exist in each connected DNS account holding the domain. A zone that can't be read is reported, not fatal.
+export async function loadZoneRecords(zones: SourceZone[]): Promise<ZoneRecordsResult> {
+  const results = await Promise.all(
+    zones.map(async (zone) => {
+      try {
+        return { zone: zone.name, records: await listRecordNames(zone.connectionId, zone.name) }
+      } catch {
+        return { zone: zone.name, records: null }
+      }
+    }),
+  )
+  return {
+    zones: results.flatMap((result) => (result.records ? [{ zone: result.zone, records: result.records }] : [])),
+    failed: results.filter((result) => !result.records).map((result) => result.zone),
+  }
 }

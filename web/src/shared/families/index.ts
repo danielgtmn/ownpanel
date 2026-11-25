@@ -16,5 +16,18 @@ export {
   type SourceSite,
   type SourceZone,
 } from './families.ts'
+export {
+  addressActions,
+  addressState,
+  checksOnLoad,
+  collectAddresses,
+  recordHost,
+  subdomainHost,
+  type Address,
+  type AddressAction,
+  type AddressState,
+  type AddressUse,
+  type ZoneRecords,
+} from './addresses.ts'
 export { startsWith, type FamilyRow, type RowStatus } from './nav.ts'
 export { normalizeHost, registrableDomain } from './suffix.ts'
