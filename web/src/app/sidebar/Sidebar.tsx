@@ -65,6 +65,7 @@ export type SidebarProps = {
   column: { title: string; summary: string; rows: FamilyRow[]; currentRow: string | null; placeholders: boolean }
   allHref: string
   onChangePassword: () => void
+  onChangeEmail: () => void
   // The phone drawer always shows names next to the tiles.
   inDrawer?: boolean
 }
@@ -187,7 +188,15 @@ function TileMenu({ family, prefs, iconMissing }: { family: Family; prefs: RailP
   )
 }
 
-function Rail({ tile, families, railEntries, allHref, onChangePassword, inDrawer = false }: SidebarProps) {
+function Rail({
+  tile,
+  families,
+  railEntries,
+  allHref,
+  onChangePassword,
+  onChangeEmail,
+  inDrawer = false,
+}: SidebarProps) {
   const [tips] = useState(() => createTooltipController<Tip>())
   const [tileMenu] = useState(() => createMenuController<Family>())
   const [missing, setMissing] = useState<ReadonlySet<string>>(() => new Set())
@@ -347,6 +356,7 @@ function Rail({ tile, families, railEntries, allHref, onChangePassword, inDrawer
         </TipTrigger>
         <MenuContent side="right" align="end">
           <MenuItem onSelect={onChangePassword}>Change password</MenuItem>
+          <MenuItem onSelect={onChangeEmail}>E-mail address</MenuItem>
           <MenuItem onSelect={signOut}>Sign out</MenuItem>
           <MenuItem onSelect={signOutEverywhere}>Sign out everywhere</MenuItem>
         </MenuContent>

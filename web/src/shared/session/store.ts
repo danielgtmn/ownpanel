@@ -5,13 +5,16 @@ export type SessionState =
   | { status: 'loading' }
   | { status: 'unreachable'; message: string }
   | { status: 'setup' }
-  | { status: 'signedOut'; notice: string | null }
+  | { status: 'signedOut'; notice: string | null; passwordReset: boolean }
   | { status: 'signedIn'; user: User; setupComplete: boolean }
 
 export const SIGNED_OUT_NOTICE = 'You were signed out. Sign in again to continue where you left off.'
+export const PASSWORD_RESET_NOTICE = 'Your password was changed. Sign in with the new one.'
 
 const listeners = new Set<() => void>()
 let state: SessionState = { status: 'loading' }
+// Remembered from the last answer about the session, for the sign-in screen after signing out.
+let passwordReset = false
 
 function update(next: SessionState) {
   state = next
@@ -32,12 +35,22 @@ export function subscribeSession(listener: () => void) {
 export function toSessionState(info: SessionInfo, notice: string | null = null): SessionState {
   if (info.user) return { status: 'signedIn', user: info.user, setupComplete: info.setup_complete !== false }
   if (info.setup_required) return { status: 'setup' }
-  return { status: 'signedOut', notice }
+  return { status: 'signedOut', notice, passwordReset: info.password_reset === true }
+}
+
+async function readSession(): Promise<SessionInfo> {
+  const info = await request<SessionInfo>('/session', { silentUnauthorized: true })
+  passwordReset = info.password_reset === true
+  return info
+}
+
+function signedOut(notice: string | null): SessionState {
+  return { status: 'signedOut', notice, passwordReset }
 }
 
 export async function loadSession(notice: string | null = null): Promise<void> {
   try {
-    const info = await request<SessionInfo>('/session', { silentUnauthorized: true })
+    const info = await readSession()
     update(toSessionState(info, notice))
   } catch (error) {
     if (state.status === 'loading' || state.status === 'unreachable') {
@@ -62,7 +75,7 @@ export async function completeSetup(setupCode: string, name: string, password: s
 
 async function readSetupComplete(): Promise<boolean> {
   try {
-    const info = await request<SessionInfo>('/session', { silentUnauthorized: true })
+    const info = await readSession()
     return info.setup_complete !== false
   } catch {
     // Unknown: open the panel itself; an administrator can finish the setup under Settings.
@@ -76,16 +89,16 @@ export function markSetupComplete() {
 
 export async function signOutNow(): Promise<void> {
   await request<void>('/logout', { method: 'POST', silentUnauthorized: true })
-  update({ status: 'signedOut', notice: null })
+  update(signedOut(null))
 }
 
 export async function signOutEverywhereNow(): Promise<void> {
   await request<void>('/account/logout-everywhere', { method: 'POST', silentUnauthorized: true })
-  update({ status: 'signedOut', notice: null })
+  update(signedOut(null))
 }
 
 export function endSession() {
-  if (state.status === 'signedIn') update({ status: 'signedOut', notice: SIGNED_OUT_NOTICE })
+  if (state.status === 'signedIn') update(signedOut(SIGNED_OUT_NOTICE))
 }
 
 export async function changePassword(current: string, next: string): Promise<void> {
@@ -99,7 +112,7 @@ export async function changePassword(current: string, next: string): Promise<voi
     if (error instanceof ApiError && error.status === 401) {
       // A 401 here can mean a wrong current password or an ended login; ask which.
       try {
-        const info = await request<SessionInfo>('/session', { silentUnauthorized: true })
+        const info = await readSession()
         if (!info.user) endSession()
       } catch {
         // Could not tell; the original message is shown.
@@ -107,6 +120,28 @@ export async function changePassword(current: string, next: string): Promise<voi
     }
     throw error
   }
+}
+
+// Sets or, with "", removes the signed-in person's own address.
+export async function setOwnEmail(email: string): Promise<User> {
+  const user = await request<User>('/account/email', { method: 'PUT', body: { email } })
+  if (state.status === 'signedIn' && state.user.id === user.id) update({ ...state, user })
+  return user
+}
+
+// The server answers the same whether or not the address belongs to someone.
+export async function requestPasswordReset(email: string): Promise<void> {
+  await request<void>('/password-reset', { method: 'POST', body: { email }, silentUnauthorized: true })
+}
+
+// Every login of that person ends, so the session is read again afterwards.
+export async function resetPassword(token: string, password: string): Promise<void> {
+  await request<void>('/password-reset/confirm', {
+    method: 'POST',
+    body: { token, password },
+    silentUnauthorized: true,
+  })
+  await loadSession(PASSWORD_RESET_NOTICE)
 }
 
 setUnauthorizedHandler(endSession)

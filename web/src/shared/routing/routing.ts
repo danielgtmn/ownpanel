@@ -47,6 +47,13 @@ export function clearQuery() {
   window.dispatchEvent(new HashChangeEvent('hashchange'))
 }
 
+// Swaps the address without a history entry, so what was in it (like a one-time link) leaves the history.
+export function replaceHash(hash: string) {
+  const url = window.location.pathname + window.location.search + (hash && hash !== '#' ? hash : '')
+  window.history.replaceState(window.history.state, '', url)
+  window.dispatchEvent(new HashChangeEvent('hashchange'))
+}
+
 function subscribe(listener: () => void) {
   window.addEventListener('hashchange', listener)
   return () => window.removeEventListener('hashchange', listener)
