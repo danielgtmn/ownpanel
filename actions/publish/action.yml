@@ -1,0 +1,48 @@
+name: Publish to ownpanel
+description: Upload a built static site to an ownpanel site as a new version and make it live.
+author: ownpanel
+branding:
+  icon: upload-cloud
+  color: blue
+
+inputs:
+  panel:
+    description: Address of the panel, for example https://panel.example.com.
+    required: true
+  token:
+    description: >-
+      Access token with write access, best limited to this one site. Pass it
+      from a secret, for example secrets.OWNPANEL_TOKEN.
+    required: true
+  site:
+    description: Name of the site in the panel.
+    required: true
+  path:
+    description: Folder with the built site, for example dist. Its contents become the site's root.
+    required: true
+  timeout:
+    description: Seconds to wait for the upload and for the site to be served.
+    required: false
+    default: "300"
+
+outputs:
+  version:
+    description: Id of the new version, for example 20260131T120000.000Z-ab12cd.
+    value: ${{ steps.publish.outputs.version }}
+  url:
+    description: Address of the site (its first domain), empty if it has no domain.
+    value: ${{ steps.publish.outputs.url }}
+
+runs:
+  using: composite
+  steps:
+    - id: publish
+      shell: bash
+      # Inputs go through the environment, never into the script text.
+      env:
+        OWNPANEL_PANEL: ${{ inputs.panel }}
+        OWNPANEL_TOKEN: ${{ inputs.token }}
+        OWNPANEL_SITE: ${{ inputs.site }}
+        OWNPANEL_PATH: ${{ inputs.path }}
+        OWNPANEL_TIMEOUT: ${{ inputs.timeout }}
+      run: bash "$GITHUB_ACTION_PATH/publish.sh"

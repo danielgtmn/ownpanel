@@ -33,6 +33,7 @@ web/                  React app (see web/AGENTS.md)
 deploy/               systemd units, Caddy bootstrap, the root update worker
 install.sh update.sh  install, upgrade, update and uninstall on a server
 scripts/              dev.sh, smoke.sh, package.sh, commit-type.sh
+actions/publish/      GitHub Action that publishes a folder to a site (bash, tar, curl, jq)
 wiki/                 documentation (synced to the GitHub wiki)
 ```
 
@@ -64,6 +65,7 @@ go test -race ./...            # what CI runs
 cd web && npm ci && npm run lint && npm test -- --run && npm run build
 scripts/dev.sh                 # Caddy + ownpaneld locally (8080/8443/8600)
 INSECURE=1 scripts/smoke.sh    # end-to-end check against dev.sh
+actions/publish/publish_test.sh  # the publish action against a real ownpaneld
 make build                     # binary with the web app embedded
 scripts/package.sh <version>   # release archives as CI builds them
 ```

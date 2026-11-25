@@ -130,6 +130,24 @@ the panel domain in the setup steps (or start it with `-panel-domain
 panel.example.com`) and point that domain at the server: Caddy then serves
 the panel on it with an automatic certificate, like any site.
 
+## Publish from GitHub Actions
+
+A workflow that builds the site can publish it with the action in this
+repository, using a write token limited to the one site (stored as a secret):
+
+```yaml
+- uses: danielgtmn/ownpanel/actions/publish@main
+  with:
+    panel: https://panel.example.com
+    token: ${{ secrets.OWNPANEL_TOKEN }}
+    site: blog
+    path: dist
+```
+
+It packs `path`, uploads it, and sets the outputs `version` and `url`. See
+the wiki page [GitHub Action](https://github.com/danielgtmn/ownpanel/wiki/GitHub-Action)
+for examples (Vite, Astro, Hugo, Jekyll, plain HTML) and error messages.
+
 ## MCP
 
 ownpaneld speaks the Model Context Protocol on `/mcp`, so AI assistants can

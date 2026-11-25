@@ -53,6 +53,7 @@ The limits are enforced on the bytes actually read, not on sizes the archive dec
 | Way | How |
 |---|---|
 | Web interface | open the site and upload an archive |
+| GitHub Actions | the action `danielgtmn/ownpanel/actions/publish`; see [[GitHub Action|GitHub-Action]] |
 | API | `POST /api/sites/{name}/deployments` with the raw archive as the request body |
 | One-time upload link | `POST /api/uploads/{id}`, link created by an MCP client; see [[MCP|MCP]] |
 | MCP | `publish_files` (small sites, files given directly, up to 2000 files and 10 MB) or `create_upload_link` (archives) |
