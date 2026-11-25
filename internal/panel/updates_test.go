@@ -85,6 +85,30 @@ func TestIsOlder(t *testing.T) {
 	}
 }
 
+// A "running" status counts as dead only after systemd has stopped the
+// updater for good, not while it may still run.
+func TestStaleAfterMatchesUnit(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "deploy", "ownpanel-update.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var limit time.Duration
+	for _, line := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(line, "TimeoutStartSec="); ok {
+			if limit, err = time.ParseDuration(strings.Replace(v, "min", "m", 1)); err != nil {
+				t.Fatalf("TimeoutStartSec=%s: %v", v, err)
+			}
+		}
+	}
+	if limit == 0 {
+		t.Fatal("ownpanel-update.service has no TimeoutStartSec")
+	}
+	// systemd waits up to 90 seconds (TimeoutStopSec) after stopping it.
+	if updateStaleAfter < limit+2*time.Minute || updateStaleAfter > limit+10*time.Minute {
+		t.Fatalf("updateStaleAfter = %v, but the unit allows %v", updateStaleAfter, limit)
+	}
+}
+
 func TestReadStatus(t *testing.T) {
 	dir := t.TempDir()
 	u := newUpdater(UpdatesConfig{Dir: dir})
@@ -103,8 +127,12 @@ func TestReadStatus(t *testing.T) {
 	if st := u.readStatus(now); st.State != UpdateRunning || st.Step != "installing" || st.From != "v1.1.9" || st.To != "v1.2.0" || st.id != "auto" {
 		t.Fatalf("running: %+v", st)
 	}
-	// Running for too long: the update died.
-	if st := u.readStatus(now.Add(time.Hour)); st.State != UpdateFailed || !strings.Contains(st.Message, "stopped") {
+	// Still within the 30 minutes systemd gives the updater.
+	if st := u.readStatus(now.Add(30 * time.Minute)); st.State != UpdateRunning {
+		t.Fatalf("30 minutes: %+v", st)
+	}
+	// Running for longer than systemd allows: the update died.
+	if st := u.readStatus(now.Add(36 * time.Minute)); st.State != UpdateFailed || !strings.Contains(st.Message, "stopped") {
 		t.Fatalf("stale: %+v", st)
 	}
 	// A waiting request wins.

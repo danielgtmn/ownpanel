@@ -24,6 +24,9 @@ type fakeNS struct {
 type fakeRecord struct {
 	a, aaaa []string
 	cname   string
+	mx      map[string]uint16 // host -> preference
+	txt     [][]string        // records, each one or more strings
+	srv     []net.SRV
 }
 
 func newFakeNS(t *testing.T, records map[string]fakeRecord) *fakeNS {
@@ -94,6 +97,22 @@ func (s *fakeNS) answer(q dnsmessage.Message) dnsmessage.Message {
 		for _, v := range rec.a {
 			resp.Answers = append(resp.Answers, dnsmessage.Resource{
 				Header: hdr(name, dnsmessage.TypeA), Body: &dnsmessage.AResource{A: netip.MustParseAddr(v).As4()}})
+		}
+	} else if question.Type == dnsmessage.TypeMX {
+		for h, pref := range rec.mx {
+			resp.Answers = append(resp.Answers, dnsmessage.Resource{
+				Header: hdr(name, dnsmessage.TypeMX), Body: &dnsmessage.MXResource{Pref: pref, MX: dnsmessage.MustNewName(strings.TrimSuffix(h, ".") + ".")}})
+		}
+	} else if question.Type == dnsmessage.TypeTXT {
+		for _, v := range rec.txt {
+			resp.Answers = append(resp.Answers, dnsmessage.Resource{
+				Header: hdr(name, dnsmessage.TypeTXT), Body: &dnsmessage.TXTResource{TXT: v}})
+		}
+	} else if question.Type == dnsmessage.TypeSRV {
+		for _, v := range rec.srv {
+			resp.Answers = append(resp.Answers, dnsmessage.Resource{
+				Header: hdr(name, dnsmessage.TypeSRV), Body: &dnsmessage.SRVResource{Priority: v.Priority, Weight: v.Weight, Port: v.Port,
+					Target: dnsmessage.MustNewName(strings.TrimSuffix(v.Target, ".") + ".")}})
 		}
 	} else if question.Type == dnsmessage.TypeAAAA {
 		for _, v := range rec.aaaa {
@@ -400,5 +419,58 @@ func TestAuthoritativeNoZoneUsesSystem(t *testing.T) {
 	got, err := a.LookupNetIP(context.Background(), "ip", "lonely.test")
 	if err != nil || len(got) != 1 || got[0].String() != "192.0.2.3" {
 		t.Fatalf("%v %v", got, err)
+	}
+}
+
+func TestAuthoritativeMX(t *testing.T) {
+	ns := newFakeNS(t, map[string]fakeRecord{
+		"example.org":      {mx: map[string]uint16{"backup.example.net": 20, "mail.example.org": 10}},
+		"none.example.org": {a: []string{"192.0.2.1"}},
+		"null.example.org": {mx: map[string]uint16{"": 0}},
+	})
+	sys := &fakeSystem{
+		ns:    map[string][]string{"example.org": {"ns1.example.org"}},
+		addrs: map[string][]netip.Addr{"ns1.example.org": {netip.MustParseAddr("198.51.100.1")}},
+	}
+	a := newAuth(sys, map[string]string{"198.51.100.1:53": ns.addr()})
+	ctx := context.Background()
+
+	mx, err := a.LookupMX(ctx, "Example.org.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mx) != 2 || mx[0].Host != "mail.example.org." || mx[0].Pref != 10 || mx[1].Host != "backup.example.net." {
+		t.Fatalf("got %+v %+v", mx[0], mx[1])
+	}
+	for _, name := range []string{"none.example.org", "missing.example.org"} {
+		if _, err := a.LookupMX(ctx, name); !isNotFound(err) {
+			t.Fatalf("%s: want not found, got %v", name, err)
+		}
+	}
+	mx, err = a.LookupMX(ctx, "null.example.org")
+	if err != nil || len(mx) != 1 || mx[0].Host != "." {
+		t.Fatalf("null MX: %v %v", mx, err)
+	}
+}
+
+type mxSystem struct {
+	*fakeSystem
+	mx []*net.MX
+}
+
+func (m mxSystem) LookupMX(context.Context, string) ([]*net.MX, error) { return m.mx, nil }
+
+func TestAuthoritativeMXFallsBackToSystem(t *testing.T) {
+	sys := mxSystem{
+		fakeSystem: &fakeSystem{
+			ns:    map[string][]string{"example.org": {"ns1.example.org"}},
+			addrs: map[string][]netip.Addr{"ns1.example.org": {netip.MustParseAddr("198.51.100.1")}},
+		},
+		mx: []*net.MX{{Host: "mx.example.org.", Pref: 5}},
+	}
+	a := &Authoritative{System: sys, Dial: route(map[string]string{"198.51.100.1:53": deadAddr(t)}), Timeout: 200 * time.Millisecond}
+	mx, err := a.LookupMX(context.Background(), "example.org")
+	if err != nil || len(mx) != 1 || mx[0].Host != "mx.example.org." {
+		t.Fatalf("got %v %v", mx, err)
 	}
 }

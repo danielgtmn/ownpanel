@@ -2,12 +2,15 @@
 
 An open-source hosting panel. Current state: a **spike** that proves the core
 idea for static web hosting, with users, access tokens, a web interface and
-DNS records at Hetzner. No e-mail yet.
+DNS records at Hetzner, and e-mail with its own mail server.
 
 ## How it works
 
 - **Caddy** serves the sites and obtains certificates. It runs as its own
   process; its admin API is a Unix socket only ownpaneld can reach.
+- **ownpanel-mail** is the mail server (`ownpaneld mail`), a service of its
+  own with its own user; ownpaneld pushes its configuration over a local
+  socket. See the wiki pages E-Mail and E-Mail architecture.
 - **ownpaneld** (Go) keeps the panel's data in SQLite (`ownpanel.db`: users,
   sessions, access tokens, sites and their domains, DNS connections, activity
   log), builds a

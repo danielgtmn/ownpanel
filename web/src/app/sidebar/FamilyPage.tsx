@@ -9,7 +9,7 @@ import {
   type PointStates,
 } from '../../shared/families/index.ts'
 import { usePageTitle } from '../../shared/hooks/index.ts'
-import { hrefFor, newSiteHref } from '../../shared/routing/index.ts'
+import { hrefFor, newMailHref, newSiteHref } from '../../shared/routing/index.ts'
 import { EmptyState, ErrorState, LoadingState, PageHeader, Section, StatusBadge } from '../../shared/ui/index.ts'
 import { AddressesSection } from './AddressesSection.tsx'
 import type { DomainData } from './useDomainData.ts'
@@ -52,6 +52,28 @@ function FamilyContent({ family, sources, states }: { family: Family; sources: D
                       ? `On ${site.domains.join(', ')}.`
                       : 'No address yet.'}
                 </p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+      <Section title="E-mail" description={`Mailboxes and forwarding for addresses on ${family.domain} and its subdomains.`}>
+        {family.mailDomains.length === 0 ? (
+          <p className="muted">
+            E-mail is not turned on for this domain. <a href={newMailHref(family.domain)}>Turn on e-mail</a>
+          </p>
+        ) : (
+          <ul className="record-list" aria-label={`E-mail on ${family.domain}`}>
+            {family.mailDomains.map((mail) => (
+              <li className="record-row family-row" key={mail.domain}>
+                <div className="family-row-head">
+                  <a className="family-row-name" href={hrefFor('mail', mail.domain)}>
+                    E-mail for {mail.domain}
+                  </a>
+                  <StatusBadge tone={mail.active ? 'positive' : 'warning'}>
+                    {mail.active ? 'Receives mail' : 'Waiting for its mail records'}
+                  </StatusBadge>
+                </div>
               </li>
             ))}
           </ul>
@@ -100,7 +122,7 @@ export function FamilyPage({ domain, data, allHref }: { domain: string; data: Do
     return (
       <EmptyState
         title="Domain not found"
-        description={`None of your sites, redirects or DNS connections uses ${domain}.`}
+        description={`None of your sites, redirects, mail domains or DNS connections uses ${domain}.`}
         action={<a href={allHref}>Show all domains</a>}
       />
     )

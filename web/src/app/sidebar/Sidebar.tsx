@@ -39,7 +39,6 @@ import {
   AppsIcon,
   CopyIcon,
   ExternalIcon,
-  MailIcon,
   PanelCollapseIcon,
   PanelExpandIcon,
   PlusIcon,
@@ -72,10 +71,7 @@ export type SidebarProps = {
 
 const EXPAND_SHORTCUT = '['
 
-const placeholders = [
-  { key: 'mail', label: 'E-mail', icon: MailIcon },
-  { key: 'apps', label: 'Apps', icon: AppsIcon },
-]
+const placeholders = [{ key: 'apps', label: 'Apps', icon: AppsIcon }]
 
 function capitalize(text: string) {
   return text.charAt(0).toUpperCase() + text.slice(1)
@@ -218,7 +214,7 @@ function Rail({ tile, families, railEntries, allHref, onChangePassword, inDrawer
           <NavigationMenuItem>
             <TipTrigger
               tips={tips}
-              tip={{ title: 'All domains', detail: 'Sites, DNS and redirects' }}
+              tip={{ title: 'All domains', detail: 'Sites, DNS, redirects and e-mail' }}
               render={
                 <NavigationMenuLink
                   href={allHref}
@@ -293,8 +289,8 @@ function Rail({ tile, families, railEntries, allHref, onChangePassword, inDrawer
       <Menu>
         <TipTrigger
           tips={tips}
-          tip={{ title: 'Add', detail: 'A site, a domain or a redirect' }}
-          render={<MenuTrigger className="tile" data-kind="add" aria-label="Add a site, domain or redirect" />}
+          tip={{ title: 'Add', detail: 'A site, a domain, a redirect or e-mail' }}
+          render={<MenuTrigger className="tile" data-kind="add" aria-label="Add a site, domain, redirect or e-mail" />}
         >
           <span className="tile-face">
             <PlusIcon />
@@ -305,6 +301,7 @@ function Rail({ tile, families, railEntries, allHref, onChangePassword, inDrawer
           <MenuItem render={<a href={hrefWithQuery(['sites'], { new: '1' })} />}>New site</MenuItem>
           <MenuItem render={<a href={hrefWithQuery(['dns'], { add: '1' })} />}>Add a domain at your DNS provider</MenuItem>
           <MenuItem render={<a href={hrefWithQuery(['redirects'], { new: '1' })} />}>New redirect</MenuItem>
+          <MenuItem render={<a href={hrefWithQuery(['mail'], { new: '1' })} />}>Turn on e-mail for a domain</MenuItem>
         </MenuContent>
       </Menu>
 

@@ -12,4 +12,4 @@ export {
   useRoute,
   type Route,
 } from './routing.ts'
-export { newRedirectHref, newSiteHref, prefilledDomain } from './prefill.ts'
+export { newMailHref, newRedirectHref, newSiteHref, prefilledDomain } from './prefill.ts'

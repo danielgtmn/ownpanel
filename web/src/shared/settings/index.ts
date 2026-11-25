@@ -16,6 +16,9 @@ export { DnsRecords, PanelAddressDetails, PanelDomainForm, PanelStatus } from '.
 export {
   initialAddressSelection,
   LOCKED_NOTE,
+  normalizeDomain,
+  validateDomain,
+  validateEmail,
   panelReady,
   panelUrl,
   sameAddresses,

@@ -86,6 +86,7 @@ describe('route to selection', () => {
       ['Sites', '3'],
       ['DNS', '1'],
       ['Redirects', '1'],
+      ['E-mail', '0'],
     ])
   })
 })

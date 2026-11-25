@@ -20,6 +20,7 @@ import {
 } from '../../shared/settings/index.ts'
 import { ErrorState, FormDialog, LoadingState, PageHeader, Section } from '../../shared/ui/index.ts'
 import { ipAccessNotice } from './rules.ts'
+import { MailSection } from './MailSection.tsx'
 import { UpdatesSection } from './UpdatesSection.tsx'
 
 type Saved = (next: PanelSettings) => void
@@ -211,7 +212,7 @@ function Loaded({ initial }: { initial: PanelSettings }) {
 
   return (
     <>
-      <PageHeader title="Settings" description="How people reach this panel and the sites on this server." />
+      <PageHeader title="Settings" description="How people reach this panel, the sites and the mail on this server." />
       {notice ? (
         <div className="notice settings-notice">
           <p>{notice}</p>
@@ -223,6 +224,7 @@ function Loaded({ initial }: { initial: PanelSettings }) {
       <AddressesSection settings={settings} onSaved={setSettings} />
       <PanelAddressSection settings={settings} onSaved={setSettings} open={panelOpen} onOpenChange={setPanelOpen} />
       <CertificateSection settings={settings} onSaved={setSettings} />
+      <MailSection settings={settings} onSaved={setSettings} />
       <UpdatesSection />
     </>
   )

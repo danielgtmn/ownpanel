@@ -256,6 +256,9 @@ func (s *Service) validRedirect(in RedirectInput) (store.Redirect, error) {
 	if pd := s.PanelDomain(); pd != "" && d == pd {
 		return store.Redirect{}, errorf(Invalid, "the domain %s is the address of the panel itself", d)
 	}
+	if mh := s.MailHost(); mh != "" && d == mh {
+		return store.Redirect{}, errorf(Invalid, "the domain %s is the name of the mail server", d)
+	}
 	p, err := redirectPath(in.SourcePath)
 	if err != nil {
 		return store.Redirect{}, err

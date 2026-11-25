@@ -13,12 +13,26 @@ export type PanelSettings = {
   tls_mode: 'acme' | 'internal' | 'off'
   setup_complete: boolean
   ip_access: boolean
+  mail_host: string
+  mail_host_locked: boolean
+  postmaster_address: string
+  // Lists with a key come back hidden, like "••••.zen.dq.spamhaus.net"; sending them back unchanged keeps the key.
+  mail_blocklists: string[]
+  mail_blocklists_default: boolean
+  mail_junk_score: number
+  mail_greylisting: boolean
 }
 
 export type SettingsChange = {
   panel_domain?: string
   server_ips?: string[]
   acme_email?: string
+  mail_host?: string
+  postmaster_address?: string
+  mail_blocklists?: string[]
+  mail_blocklists_default?: boolean
+  mail_junk_score?: number
+  mail_greylisting?: boolean
 }
 
 export type DnsCheckState = 'points_here' | 'points_elsewhere' | 'no_record' | 'lookup_failed' | 'not_configured'
@@ -34,6 +48,13 @@ function normalize(settings: PanelSettings): PanelSettings {
     ...settings,
     server_ips: settings.server_ips ?? [],
     detected_ips: settings.detected_ips ?? [],
+    mail_host: settings.mail_host ?? '',
+    mail_host_locked: settings.mail_host_locked ?? false,
+    postmaster_address: settings.postmaster_address ?? '',
+    mail_blocklists: settings.mail_blocklists ?? [],
+    mail_blocklists_default: settings.mail_blocklists_default ?? true,
+    mail_junk_score: settings.mail_junk_score ?? 5,
+    mail_greylisting: settings.mail_greylisting ?? false,
   }
 }
 

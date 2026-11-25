@@ -7,6 +7,7 @@
 | **Caddy** | Serves the sites and obtains certificates. Runs as its own process. Its admin API is a Unix socket that only ownpaneld can reach. |
 | **ownpaneld** | The panel daemon (Go). Keeps the panel's data in SQLite, builds a complete Caddy config from it and loads it through Caddy's admin API. Serves the API, MCP and the web interface. |
 | **SQLite** | `ownpanel.db` in the data directory: users, sessions, access tokens, sites and domains, DNS connections, activity log. |
+| **ownpanel-mail** | The mail server (`ownpaneld mail`), its own service and user. Receives, stores and sends mail; ownpaneld pushes its full configuration over a local socket, like Caddy's. See [[E-Mail architecture|E-Mail-Architecture]]. |
 | **Web app** | React app built with Vite into `internal/webui/dist`. Embedded into the binary with the `webui` build tag (`make build`, `make build-linux`). A plain `go build` leaves it out and serves only the API. |
 
 Site files are not served by ownpaneld: Caddy reads them from the data directory.

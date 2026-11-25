@@ -23,7 +23,7 @@ Changing domains replaces the whole list: domains not listed stop being served.
 | Site has a live version | the files, compressed with zstd or gzip |
 | Site has no version yet | `503` with "This site has no content yet." |
 | Site has no domains | not served |
-| Host that no site claims | `404` with "Unknown site." |
+| Host that no site claims | `404` with "Unknown site." over plain HTTP. Over HTTPS there is no certificate for such a name, so the connection fails before any answer. |
 
 For HTTPS the domain must point at the server so a certificate can be issued. With `-tls acme` certificates are requested automatically; HTTP requests are redirected to HTTPS. See [[DNS|DNS]] for checking and fixing where a domain points.
 

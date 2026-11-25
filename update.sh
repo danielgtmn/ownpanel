@@ -35,7 +35,7 @@ load_installer() {
     lib=$INSTALLED_LIB
   else
     lib=$(mktemp)
-    curl -fsSL --retry 3 -o "$lib" "https://raw.githubusercontent.com/${OWNPANEL_REPO:-danielgtmn/ownpanel}/main/install.sh" ||
+    curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 -o "$lib" "https://raw.githubusercontent.com/${OWNPANEL_REPO:-danielgtmn/ownpanel}/main/install.sh" ||
       { printf 'Error: could not download install.sh\n' >&2; exit 1; }
   fi
   # shellcheck source=install.sh
@@ -76,6 +76,9 @@ opt_force=0
 opt_status_file=""
 opt_request_id=""
 opt_rollback=1
+# The state and step last written to the status file (see finish).
+reported=""
+last_step=""
 
 parse_args() {
   while [ $# -gt 0 ]; do
@@ -119,6 +122,8 @@ json_escape() { printf '%s' "$1" | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"
 # report <state> <step> <message>: writes the status file, replacing it
 # atomically (the panel reads it while this runs). Never fails the update.
 report() {
+  reported=$1
+  [ "$1" != running ] || last_step=$2
   [ -n "$opt_status_file" ] && [ "$opt_check" = 0 ] || return 0
   local finished="" tmpf
   case $1 in succeeded | failed | rolled_back) finished=$(now) ;; esac
@@ -141,9 +146,49 @@ die() {
   exit 1
 }
 
+# The status must never stay "running" once this script is gone: stopped by
+# a signal (systemd stops the updater after 30 minutes, or someone presses
+# Ctrl-C) or ended by an error that die did not catch, the last word is
+# "failed". die, rollback and the end of main report a final state
+# themselves, so then this does nothing.
+# shellcheck disable=SC2329 # run by the traps in main
+finish() {
+  local rc=$? why=${1:-}
+  trap - EXIT INT TERM
+  if [ "${reported:-}" = running ]; then
+    if [ -z "$why" ]; then why="The update stopped with an error (exit $rc)."; fi
+    case $last_step in
+      installing | verifying | rolling_back)
+        why="$why It may be half installed: check that the panel answers; the backup is in $DATA/backups." ;;
+      *) why="$why Nothing was changed." ;;
+    esac
+    report failed "" "$why"
+  fi
+  # A download still running in the background (see download_asset).
+  local job
+  for job in $(jobs -p); do kill "$job" 2>/dev/null || true; done
+  rm -rf "${tmp:-}"
+  [ -z "${1:-}" ] || exit 1
+  exit "$rc"
+}
+
+# shellcheck disable=SC2329 # run by the traps in main
+stopped() {
+  printf 'Error: stopped by %s\n' "$1" >&2
+  finish "The update was stopped before it finished."
+}
+
+# release_moved is called by fetch_release (install.sh) when the nightly was
+# replaced during the download and the newer build is downloaded instead.
+release_moved() {
+  target=$rel_version
+  report running downloading "The nightly build changed meanwhile; downloading $target."
+}
+
 # Files an update replaces and a rollback puts back.
 previous_files() {
   printf '%s\n' "$BIN/ownpaneld" "$BIN/caddy" "$UNITS/ownpaneld.service" "$UNITS/ownpanel-caddy.service" \
+    "$UNITS/ownpanel-mail.service" \
     "$ETC/caddy-bootstrap.json" "$RELEASE_FILE" "$ENV_FILE"
 }
 
@@ -185,15 +230,21 @@ healthy() {
 rollback() {
   step "Rolling back to ownpanel $old_version"
   report running rolling_back "The new version did not start; going back to $old_version."
-  systemctl stop ownpaneld ownpanel-caddy 2>/dev/null || true
+  systemctl stop ownpaneld ownpanel-mail ownpanel-caddy 2>/dev/null || true
   local f
   while IFS= read -r f; do
     if [ -f "$f.previous" ]; then
       cp -p "$f.previous" "$f.rollback" && mv -f "$f.rollback" "$f"
     fi
   done < <(previous_files)
+  # A version from before the mail service has no mail unit to go back to.
+  if [ ! -f "$UNITS/ownpanel-mail.service.previous" ] && [ -f "$UNITS/ownpanel-mail.service" ]; then
+    systemctl disable ownpanel-mail 2>/dev/null || true
+    rm -f "$UNITS/ownpanel-mail.service"
+  fi
   systemctl daemon-reload
   systemctl start ownpanel-caddy ownpaneld || true
+  [ -f "$UNITS/ownpanel-mail.service" ] && { systemctl start ownpanel-mail || true; }
   if healthy "$old_version"; then
     say "ownpanel $old_version is running again."
     report rolled_back "" "The update to $target failed, so $old_version was put back. $1"
@@ -225,7 +276,9 @@ main() {
   fi
 
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
+  trap finish EXIT
+  trap 'stopped SIGTERM' TERM
+  trap 'stopped SIGINT' INT
   report running checking "Looking for the new version."
 
   if [ -n "$opt_from_dir" ]; then

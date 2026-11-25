@@ -5,6 +5,8 @@ import { normalizeHost, registrableDomain } from './suffix.ts'
 export type SourceSite = { name: string; domains: string[]; live: boolean; release?: string }
 export type SourceZone = { connectionId: number; connectionName: string; name: string }
 export type SourceRedirect = { id: number; source: string; target: string }
+// A domain with e-mail turned on. active: its mail records point to this server, so it receives mail.
+export type SourceMailDomain = { domain: string; active: boolean }
 
 export type DomainSources = {
   sites: SourceSite[]
@@ -12,6 +14,8 @@ export type DomainSources = {
   redirects: SourceRedirect[]
   // Domains with redirects for single paths. They count as addresses of their domain, nothing more.
   pathRedirectHosts?: string[]
+  // Missing when the signed-in person may not see e-mail (for example a token limited to sites).
+  mailDomains?: SourceMailDomain[]
 }
 
 export type FamilySite = {
@@ -28,6 +32,7 @@ export type Family = {
   zones: SourceZone[]
   redirects: SourceRedirect[]
   servedDomains: string[]
+  mailDomains: SourceMailDomain[]
 }
 
 export type FamilyStatus = 'ok' | 'attention' | 'pending' | 'idle'
@@ -39,7 +44,7 @@ function familyOf(families: Map<string, Family>, host: string): Family | null {
   if (!domain) return null
   let family = families.get(domain)
   if (!family) {
-    family = { domain, sites: [], zones: [], redirects: [], servedDomains: [] }
+    family = { domain, sites: [], zones: [], redirects: [], servedDomains: [], mailDomains: [] }
     families.set(domain, family)
   }
   return family
@@ -82,6 +87,11 @@ export function buildFamilies(sources: DomainSources): Family[] {
     addServed(family, source)
   }
 
+  for (const mail of sources.mailDomains ?? []) {
+    const domain = normalizeHost(mail.domain)
+    familyOf(families, domain)?.mailDomains.push({ ...mail, domain })
+  }
+
   return [...families.values()]
     .map((family) => ({
       ...family,
@@ -89,6 +99,7 @@ export function buildFamilies(sources: DomainSources): Family[] {
       zones: [...family.zones].sort((a, b) => a.connectionName.localeCompare(b.connectionName)),
       redirects: [...family.redirects].sort((a, b) => a.source.localeCompare(b.source)),
       servedDomains: [...family.servedDomains].sort(),
+      mailDomains: [...family.mailDomains].sort((a, b) => a.domain.localeCompare(b.domain)),
     }))
     .sort((a, b) => a.domain.localeCompare(b.domain))
 }
@@ -100,7 +111,9 @@ export function findFamily(families: Family[], domain: string): Family | undefin
 
 export function familyStatus(family: Family, states: PointStates): FamilyStatus {
   if (family.sites.some((site) => !site.live)) return 'attention'
-  if (family.servedDomains.length === 0) return 'idle'
+  // A mail domain waits until its mail records point here; that needs someone to act.
+  if (family.mailDomains.some((mail) => !mail.active)) return 'attention'
+  if (family.servedDomains.length === 0) return family.mailDomains.length > 0 ? 'ok' : 'idle'
   let pending = false
   for (const host of family.servedDomains) {
     const state = states[host]
@@ -122,6 +135,9 @@ export function attentionText(family: Family, states: PointStates): string {
   })
   if (away.length === 1) parts.push(`${away[0]} doesn't point to this server yet`)
   else if (away.length > 1) parts.push(`${away.length} addresses don't point to this server yet`)
+  const waiting = family.mailDomains.filter((mail) => !mail.active).map((mail) => mail.domain)
+  if (waiting.length === 1) parts.push(`e-mail for ${waiting[0]} waits for its mail records`)
+  else if (waiting.length > 1) parts.push(`e-mail for ${waiting.length} domains waits for its mail records`)
   // No capital letter added: a sentence may start with a domain, which is written as it is.
   return parts.length === 0 ? '' : `${parts.join(', and ')}.`
 }
@@ -139,6 +155,7 @@ export function familySummary(family: Family): string {
   const parts: string[] = []
   if (family.sites.length > 0) parts.push(plural(family.sites.length, 'site', 'sites'))
   if (family.redirects.length > 0) parts.push(plural(family.redirects.length, 'redirect', 'redirects'))
+  if (family.mailDomains.length > 0) parts.push('E-mail')
   parts.push(family.zones.length > 0 ? 'DNS connected' : 'DNS not connected')
   return parts.join(' · ')
 }
