@@ -24,6 +24,8 @@ On a server installed with `install.sh`, flags live in `/etc/ownpanel/ownpaneld.
 | `-https-port` | `443` | Port for HTTPS. |
 | `-acme-email` | empty | Contact address given to the certificate authority. Optional; only used with `-tls acme`. Overrides the panel settings (see below). |
 | `-panel-domain` | empty | Serve the panel itself through Caddy on this domain, with a certificate like any site. The domain cannot also be used by a site. Also makes `/mcp` reachable on that domain and builds upload links on it. Overrides the panel settings (see below). |
+| `-mail-admin` | empty | Admin socket of the mail service (`ownpaneld mail`) as `unix:///absolute/path.sock`; the installer passes `unix:///run/ownpanel-mail/admin.sock`. Empty: no mail service; mail domains and mailboxes are only stored. See [[E-Mail architecture|E-Mail-Architecture]]. |
+| `-mail-host` | empty | Name of the mail server (MX target, what mail programs connect to), e.g. `mail.example.com`. It cannot be a site, redirect or mail domain; it may be the panel domain. Overrides the panel settings (see below). |
 | `-reconcile-interval` | `30s` | How often the web server is re-synced in the background (a Go duration such as `30s` or `1m`). |
 | `-releases-api` | `https://api.github.com` | Where the panel looks for new releases ([[Installation|Installation#updating]]). Only change it for testing. |
 | `-server-ip` | none | Public IPv4/IPv6 address of this server that domains should point at. Repeat the flag or separate values with commas. Must be a public address unless `-tls` is `internal` or `off`. Overrides the panel settings (see below). Without addresses (here or in the settings) the domain status and "point to this server" are unavailable. |
@@ -34,7 +36,9 @@ On a server installed with `install.sh`, flags live in `/etc/ownpanel/ownpaneld.
 
 The panel domain, the server's public addresses and the certificate e-mail are normally entered in the panel: in the first-run wizard right after the first admin is created, and later by admins under the panel settings (`GET`/`PUT /api/settings`). They are stored in the database (`settings` table) and applied at once, without a restart.
 
-The flags `-panel-domain`, `-server-ip` and `-acme-email` still work and **win** over the stored values. A value set by flag is shown as locked ("set in the server configuration") and cannot be changed in the panel; remove the flag and restart to manage it in the panel again. Installs that pass these flags behave as before.
+The mail server's name (`mail_host`) and the postmaster address (receives `postmaster@` and `abuse@` of the mail server and of domains without mailboxes) are panel settings too, changed by admins only. The certificate for the mail server is kept in `<data>/mail-tls`: with `-tls acme` from the public CA (the challenge comes in through Caddy on port 80, once the name points at this server), otherwise self-signed.
+
+The flags `-panel-domain`, `-server-ip`, `-acme-email` and `-mail-host` still work and **win** over the stored values. A value set by flag is shown as locked ("set in the server configuration") and cannot be changed in the panel; remove the flag and restart to manage it in the panel again. Installs that pass these flags behave as before.
 
 Rules for the settings: the panel domain is a plain host name with at least one dot, not an IP address and not a domain of any site. Server addresses follow the rules of `-server-ip`. The e-mail must be a plain address (`you@example.com`). The panel suggests the machine's own addresses (it reads its network interfaces; no outside service is asked).
 

@@ -41,8 +41,23 @@ Version ids come from `get_site`; a version id starts with a UTC timestamp. Erro
 | `list_redirects` | `site` (optional) | Lists the redirects you can see, or only the path redirects of one site. Each with `id`, `owner`, `source_domain`, `source_path`, `target`, `code`, `keep_path`, `keep_query`, `created_at`. Read-only. See [[Redirects|Redirects]]. |
 | `set_redirect` | `id` (optional), `source_domain`, `source_path` (optional), `target`, `code` (optional, default 301), `keep_path`, `keep_query` (optional) | Creates a redirect, or replaces the one with `id`. Without `source_path` the whole domain redirects; with it, one path (`/old`) or a prefix (`/blog/*`) on a domain of one of your sites. Returns the redirect. |
 | `delete_redirect` | `id`, `confirm_source` | Deletes a redirect. `confirm_source` must equal its `source_domain` followed by its `source_path` (like `www.example.com` or `example.com/old`), otherwise nothing happens. |
+| `get_mail_status` | none | Whether the mail service runs and is up to date, the mail server's name (`mail_host`) and the ports for mail programs. Read-only. |
+| `get_mail_records` | `domain` | The DNS records the mail domain needs (MX, SPF, DKIM, DMARC, SRV for mail programs) with what its nameservers answer and a status each (`ok`, `missing`, `different`, `conflict`, `unknown`), plus `can_apply`, `connection_id`, `zone` and `apply_note`. Read-only. |
+| `set_up_mail_records` | `domain`, `confirm` (optional) | Writes those records into the domain's zone in your own DNS connection. Other TXT values are kept, an existing DMARC record is never changed, an SPF record that cannot be merged safely is skipped. Without `confirm`, nothing is written when replacing MX records that point elsewhere is needed (mail would move here): show the returned `changes` to the user and call again with `confirm: true` only if they agree. |
+| `get_mail_health` | none | Admins only: whether the mail service runs, `mail_host` points here, the server addresses have it as PTR, outgoing port 25 works, the certificate is valid, every port listens and postmaster mail has somewhere to go. Read-only. |
+| `list_mail_domains` | none | Lists the mail domains you can see: `domain`, `owner`, `active`, `problem` (why not active yet), `checked_at`, counts, `dkim_selector`, `dkim_record`, `created_at`. Read-only. |
+| `enable_mail_domain` | `domain` | Enables e-mail for a domain of one of your sites or redirects, or one in a zone of your DNS connections (admins: any). It receives mail once its MX record points to `mail_host`. |
+| `check_mail_domain` | `domain` | Looks at the MX record now and activates the domain if it points to `mail_host`. |
+| `delete_mail_domain` | `domain`, `confirm_domain` | Deletes e-mail for the domain with every mailbox, alias and all stored mail. `confirm_domain` must equal `domain`. |
+| `list_mailboxes` | `domain` (optional) | Lists mailboxes with `id`, `address`, quota, send limits, usage and whether sending is blocked. Read-only. |
+| `set_mailbox_limits` | `id`, `quota_bytes`, `send_per_hour`, `send_per_day` (each optional) | Changes the limits; owners can only lower them. |
+| `unblock_mailbox` | `id` | Lifts a sending block of the mail service (admins only). |
+| `delete_mailbox` | `id`, `confirm_address` | Deletes a mailbox and its stored mail. `confirm_address` must equal its address. |
+| `list_mail_aliases` | `domain` (optional) | Lists aliases with `id`, `address`, `catch_all`, `targets`. Read-only. |
+| `set_mail_alias` | `id` (optional), `domain` (for new aliases), `local_part`, `targets` | Creates an alias, or replaces the one with `id`. `*` is the catch-all. An address is either a mailbox or an alias. |
+| `delete_mail_alias` | `id`, `confirm_address` | Deletes an alias. `confirm_address` must equal its address. |
 
-Tools that change something need a `write` token. Read-only tools are `list_sites`, `get_site` and `check_site_domains`.
+Tools that change something need a `write` token. Read-only tools are `list_sites`, `get_site`, `check_site_domains`, `list_redirects`, `get_mail_status`, `get_mail_records`, `get_mail_health`, `list_mail_domains`, `list_mailboxes` and `list_mail_aliases`. Tokens limited to sites cannot use the e-mail tools.
 
 ### `publish_files`
 
@@ -73,3 +88,5 @@ curl --fail-with-body -X POST --data-binary @site.zip '<url>'
 ## Not available
 
 DNS connections and records cannot be managed through MCP; use the web interface or the [[API|API]].
+
+Mailboxes cannot be created and their passwords cannot be set through MCP, on purpose: mailbox passwords should never pass through an AI agent. Use the web interface or the [[API|API]] (`POST /api/mail/domains/{domain}/mailboxes`, `POST /api/mail/mailboxes/{id}/password`).

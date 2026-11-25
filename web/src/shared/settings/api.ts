@@ -13,12 +13,17 @@ export type PanelSettings = {
   tls_mode: 'acme' | 'internal' | 'off'
   setup_complete: boolean
   ip_access: boolean
+  mail_host: string
+  mail_host_locked: boolean
+  postmaster_address: string
 }
 
 export type SettingsChange = {
   panel_domain?: string
   server_ips?: string[]
   acme_email?: string
+  mail_host?: string
+  postmaster_address?: string
 }
 
 export type DnsCheckState = 'points_here' | 'points_elsewhere' | 'no_record' | 'lookup_failed' | 'not_configured'
@@ -34,6 +39,9 @@ function normalize(settings: PanelSettings): PanelSettings {
     ...settings,
     server_ips: settings.server_ips ?? [],
     detected_ips: settings.detected_ips ?? [],
+    mail_host: settings.mail_host ?? '',
+    mail_host_locked: settings.mail_host_locked ?? false,
+    postmaster_address: settings.postmaster_address ?? '',
   }
 }
 

@@ -58,6 +58,12 @@ type env struct {
 
 func newEnv(t *testing.T, panelDomain string, opts ...Option) *env {
 	t.Helper()
+	return newEnvWith(t, panelDomain, nil, opts...)
+}
+
+// newEnvWith is newEnv with a chance to change the panel's configuration.
+func newEnvWith(t *testing.T, panelDomain string, change func(*panel.Config), opts ...Option) *env {
+	t.Helper()
 	dir := t.TempDir()
 	st, err := store.Open(filepath.Join(dir, "ownpanel.db"))
 	if err != nil {
@@ -65,13 +71,17 @@ func newEnv(t *testing.T, panelDomain string, opts ...Option) *env {
 	}
 	t.Cleanup(func() { st.Close() })
 	sitesDir := filepath.Join(dir, "sites")
-	svc, err := panel.New(panel.Config{
+	cfg := panel.Config{
 		Store: st, Deploys: &deploy.Manager{Base: sitesDir}, Web: fakeWeb{},
 		Caddy:         caddy.Options{TLSMode: caddy.TLSOff, PanelDomain: panelDomain, PanelUpstream: "127.0.0.1:8600"},
 		SetupCodeFile: filepath.Join(dir, "setup-code"),
 		ServerIPs:     []netip.Addr{netip.MustParseAddr("192.0.2.10")},
 		Resolver:      fakeResolver{"here.example.com": "192.0.2.10", "away.example.com": "198.51.100.7"},
-	})
+	}
+	if change != nil {
+		change(&cfg)
+	}
+	svc, err := panel.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,18 +277,33 @@ func TestToolsAndAnnotations(t *testing.T) {
 	}
 	type want struct{ readOnly, destructive, idempotent bool }
 	wants := map[string]want{
-		"list_sites":         {readOnly: true, idempotent: true},
-		"get_site":           {readOnly: true, idempotent: true},
-		"create_site":        {},
-		"set_site_domains":   {destructive: true, idempotent: true},
-		"delete_site":        {destructive: true},
-		"make_version_live":  {idempotent: true},
-		"publish_files":      {},
-		"create_upload_link": {},
-		"check_site_domains": {readOnly: true, idempotent: true},
-		"list_redirects":     {readOnly: true, idempotent: true},
-		"set_redirect":       {destructive: true},
-		"delete_redirect":    {destructive: true},
+		"list_sites":          {readOnly: true, idempotent: true},
+		"get_site":            {readOnly: true, idempotent: true},
+		"create_site":         {},
+		"set_site_domains":    {destructive: true, idempotent: true},
+		"delete_site":         {destructive: true},
+		"make_version_live":   {idempotent: true},
+		"publish_files":       {},
+		"create_upload_link":  {},
+		"check_site_domains":  {readOnly: true, idempotent: true},
+		"list_redirects":      {readOnly: true, idempotent: true},
+		"set_redirect":        {destructive: true},
+		"delete_redirect":     {destructive: true},
+		"get_mail_status":     {readOnly: true, idempotent: true},
+		"list_mail_domains":   {readOnly: true, idempotent: true},
+		"get_mail_records":    {readOnly: true, idempotent: true},
+		"set_up_mail_records": {destructive: true},
+		"get_mail_health":     {readOnly: true, idempotent: true},
+		"enable_mail_domain":  {},
+		"check_mail_domain":   {idempotent: true},
+		"delete_mail_domain":  {destructive: true},
+		"list_mailboxes":      {readOnly: true, idempotent: true},
+		"set_mailbox_limits":  {idempotent: true},
+		"unblock_mailbox":     {idempotent: true},
+		"delete_mailbox":      {destructive: true},
+		"list_mail_aliases":   {readOnly: true, idempotent: true},
+		"set_mail_alias":      {destructive: true},
+		"delete_mail_alias":   {destructive: true},
 	}
 	got := map[string]bool{}
 	for _, tool := range res.Tools {

@@ -18,6 +18,7 @@ import (
 
 	"github.com/danielgtmn/ownpanel/internal/caddy"
 	"github.com/danielgtmn/ownpanel/internal/dns"
+	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/store"
 )
 
@@ -37,6 +38,8 @@ const (
 	keyServerIPs     = "server_ips"
 	keyACMEEmail     = "acme_email"
 	keySetupComplete = "setup_complete"
+	keyMailHost      = "mail_host"
+	keyPostmaster    = "postmaster_address"
 )
 
 // certCheckTimeout bounds the certificate check of the wizard.
@@ -53,6 +56,10 @@ type settingsState struct {
 	serverIPs     []netip.Addr
 	acmeEmail     string
 	setupComplete bool
+	mailHost      string
+	// postmasterAddress receives postmaster@ and abuse@ of the mail host
+	// and of domains without mailboxes.
+	postmasterAddress string
 }
 
 // DetectAddresses returns the global unicast addresses of the host's
@@ -100,14 +107,19 @@ type Settings struct {
 	TLSMode           string       `json:"tls_mode"`
 	SetupComplete     bool         `json:"setup_complete"`
 	IPAccess          bool         `json:"ip_access"`
+	MailHost          string       `json:"mail_host"`
+	MailHostLocked    bool         `json:"mail_host_locked"`
+	PostmasterAddress string       `json:"postmaster_address"`
 }
 
 // SettingsUpdate changes some settings; nil fields stay as they are, an
 // empty value clears the setting.
 type SettingsUpdate struct {
-	PanelDomain *string
-	ServerIPs   *[]string
-	ACMEEmail   *string
+	PanelDomain       *string
+	ServerIPs         *[]string
+	ACMEEmail         *string
+	MailHost          *string
+	PostmasterAddress *string
 }
 
 // DNSCheck tells whether the panel domain points at this server.
@@ -156,9 +168,11 @@ func (s *Service) loadSettings(ctx context.Context) error {
 		return err
 	}
 	st := settingsState{
-		panelDomain:   m[keyPanelDomain],
-		acmeEmail:     m[keyACMEEmail],
-		setupComplete: m[keySetupComplete] == "true",
+		panelDomain:       m[keyPanelDomain],
+		acmeEmail:         m[keyACMEEmail],
+		setupComplete:     m[keySetupComplete] == "true",
+		mailHost:          m[keyMailHost],
+		postmasterAddress: m[keyPostmaster],
 	}
 	if v := m[keyServerIPs]; v != "" {
 		// Stored addresses were checked when saved; the TLS mode may have
@@ -198,6 +212,15 @@ func (s *Service) effectiveServerIPs() []netip.Addr {
 		return slices.Clone(s.serverIPs)
 	}
 	return s.state().serverIPs
+}
+
+// MailHost is the mail server's name: -mail-host, else the one from the
+// settings; "" if none.
+func (s *Service) MailHost() string {
+	if s.mailHostFlag != "" {
+		return s.mailHostFlag
+	}
+	return s.state().mailHost
 }
 
 func (s *Service) acmeEmail() string {
@@ -260,6 +283,11 @@ func (s *Service) caddyOptions() caddy.Options {
 	if o.PanelUpstream != "" {
 		o.PanelIPs = s.accessIPs()
 		o.IPRedirect = !s.ipAccess()
+		// The mail host's certificate comes from the public CA only with
+		// -tls acme; its challenges reach the panel through port 80.
+		if o.TLSMode == caddy.TLSACME && s.certs != nil {
+			o.MailHost = s.MailHost()
+		}
 	}
 	return o
 }
@@ -285,6 +313,9 @@ func (s *Service) settingsView() Settings {
 		TLSMode:           s.opts.TLSMode,
 		SetupComplete:     st.setupComplete,
 		IPAccess:          s.ipAccess(),
+		MailHost:          s.MailHost(),
+		MailHostLocked:    s.mailHostFlag != "",
+		PostmasterAddress: st.postmasterAddress,
 	}
 	for _, a := range s.detected() {
 		v.DetectedIPs = append(v.DetectedIPs, DetectedIP{IP: a.String(), Public: isPublicUnicast(a)})
@@ -342,6 +373,39 @@ func (s *Service) validPanelDomain(ctx context.Context, domain string) (string, 
 			return "", err
 		}
 		return "", errorf(Conflict, "the domain %s redirects elsewhere; remove that redirect first", d)
+	}
+	return d, nil
+}
+
+// validMailHost normalizes a mail host: a plain host name with a dot, not
+// an address, not a site or redirect domain and not a mail domain. It may
+// be the panel domain.
+func (s *Service) validMailHost(ctx context.Context, domain string) (string, error) {
+	if _, err := netip.ParseAddr(strings.Trim(strings.TrimSpace(domain), "[]")); err == nil {
+		return "", errorf(Invalid, "the mail server needs a name like mail.example.com, not an IP address")
+	}
+	d, err := store.NormalizeDomain(domain)
+	labels := strings.Split(d, ".")
+	if err != nil || strings.Trim(labels[len(labels)-1], "0123456789") == "" {
+		return "", errorf(Invalid, "%q is not a valid name; enter one like mail.example.com", strings.TrimSpace(domain))
+	}
+	sites, err := s.store.Sites(ctx)
+	if err != nil {
+		return "", storeError(err)
+	}
+	for _, site := range sites {
+		if slices.Contains(site.Domains, d) {
+			return "", errorf(Conflict, "the domain %s is already used by the site %q", d, site.Name)
+		}
+	}
+	if used, err := s.visibleDomainRedirect(ctx, System, d); err != nil || used {
+		if err != nil {
+			return "", err
+		}
+		return "", errorf(Conflict, "the domain %s redirects elsewhere; remove that redirect first", d)
+	}
+	if _, err := s.store.MailDomain(ctx, d); err == nil {
+		return "", errorf(Conflict, "e-mail is enabled for %s as a mail domain; the mail server needs a name of its own, like mail.%s", d, d)
 	}
 	return d, nil
 }
@@ -421,6 +485,32 @@ func (s *Service) UpdateSettings(ctx context.Context, a Actor, u SettingsUpdate)
 			}
 		}
 	}
+	if u.MailHost != nil {
+		if s.mailHostFlag != "" {
+			return Settings{}, lockedError("-mail-host")
+		}
+		d := strings.TrimSpace(*u.MailHost)
+		if d != "" {
+			var err error
+			if d, err = s.validMailHost(ctx, d); err != nil {
+				return Settings{}, err
+			}
+		}
+		if d != cur.mailHost {
+			next.mailHost, values[keyMailHost] = d, d
+			changed = append(changed, "mail server name "+orRemoved(d))
+		}
+	}
+	if u.PostmasterAddress != nil {
+		e := strings.ToLower(strings.TrimSpace(*u.PostmasterAddress))
+		if e != "" && !config.ValidAddress(e) {
+			return Settings{}, errorf(Invalid, "%q is not a valid e-mail address", strings.TrimSpace(*u.PostmasterAddress))
+		}
+		if e != cur.postmasterAddress {
+			next.postmasterAddress, values[keyPostmaster] = e, e
+			changed = append(changed, "postmaster address "+orRemoved(e))
+		}
+	}
 	if len(values) == 0 {
 		return s.settingsView(), nil
 	}
@@ -435,6 +525,19 @@ func (s *Service) UpdateSettings(ctx context.Context, a Actor, u SettingsUpdate)
 	}
 	s.record(ctx, a, "settings.update", "", strings.Join(changed, "; "))
 	err := s.syncSaved(ctx)
+	_, mailHost := values[keyMailHost]
+	_, postmaster := values[keyPostmaster]
+	_, email := values[keyACMEEmail]
+	if mailHost || postmaster || email {
+		if mailHost || email {
+			// Certificates for the new name are looked for before the push;
+			// new ones are requested by the background loop.
+			s.refreshMailCerts(context.WithoutCancel(ctx), false)
+		}
+		if merr := s.mailSaved(ctx); err == nil {
+			err = merr
+		}
+	}
 	return s.settingsView(), err
 }
 

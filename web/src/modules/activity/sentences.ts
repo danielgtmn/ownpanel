@@ -28,6 +28,19 @@ function describeRole(role: string): string {
   return ROLES[role] ?? role
 }
 
+function formatMiB(mib: number): string {
+  if (mib >= 1024) return `${(mib / 1024).toLocaleString('en', { maximumFractionDigits: 1 })} GB`
+  return `${mib} MB`
+}
+
+// "quota 5120 MiB, 100 messages per hour, 500 per day" from the panel.
+function describeMailLimits(detail: string): string {
+  const match = /^(?:quota (\d+) MiB|no quota), (\d+) messages per hour, (\d+) per day$/.exec(detail)
+  if (!match) return detail
+  const storage = match[1] ? `Storage ${formatMiB(Number(match[1]))}` : 'No storage limit'
+  return `${storage} · ${match[2]} messages an hour · ${match[3]} a day`
+}
+
 export function describeDetail({ action, detail }: Pick<Activity, 'action' | 'detail'>): string {
   if (!detail) return ''
   switch (action) {
@@ -66,9 +79,36 @@ export function describeDetail({ action, detail }: Pick<Activity, 'action' | 'de
       return detail === 'off' ? 'Off' : `On: ${detail}`
     case 'update.result':
       return detail.charAt(0).toUpperCase() + detail.slice(1)
+    case 'settings.update':
+      return detail.charAt(0).toUpperCase() + detail.slice(1)
+    case 'mail.domain.enable':
+      return ''
+    case 'mail.domain.activate': {
+      const match = /^MX points to (\S+)$/.exec(detail)
+      return match ? `Its mail records point to ${match[1]}` : detail
+    }
+    case 'mail.domain.delete':
+      return detail.replace(/(\d+) aliases/, (_, count: string) =>
+        count === '1' ? '1 forwarding address' : `${count} forwarding addresses`,
+      )
+    case 'mail.mailbox.create':
+    case 'mail.mailbox.limits':
+      return describeMailLimits(detail)
+    case 'mail.alias.create':
+    case 'mail.alias.update':
+    case 'mail.alias.delete':
+      return detail
+        .replace(/^was (\S+); /, 'Was $1 · ')
+        .replace(/(^|· )to /, (_, start: string) => `${start}To `)
+        .replace(/\*@/g, 'all other addresses @')
     default:
       return detail
   }
+}
+
+// "*@example.com" is the forwarding of every other address.
+function mailAddress(target: string): string {
+  return target.startsWith('*@') ? `all other addresses @${target.slice(2)}` : target
 }
 
 export function describeActivity({ actor, action, target }: Entry): string {
@@ -106,6 +146,38 @@ export function describeActivity({ actor, action, target }: Entry): string {
       return `${who} changed the automatic updates`
     case 'update.result':
       return 'An update of the panel finished'
+    case 'settings.update':
+      return `${who} changed the settings`
+    case 'mail.domain.enable':
+      return about(target, (t) => `${who} turned on e-mail for ${t}`, `${who} turned on e-mail for a domain`)
+    case 'mail.domain.activate':
+      return about(target, (t) => `${t} started receiving mail here`, 'A domain started receiving mail here')
+    case 'mail.domain.delete':
+      return about(target, (t) => `${who} deleted the e-mail of ${t}`, `${who} deleted the e-mail of a domain`)
+    case 'mail.mailbox.create':
+      return about(target, (t) => `${who} created the mailbox ${t}`, `${who} created a mailbox`)
+    case 'mail.mailbox.password':
+      return about(target, (t) => `${who} changed the password of ${t}`, `${who} changed the password of a mailbox`)
+    case 'mail.mailbox.limits':
+      return about(target, (t) => `${who} changed the limits of ${t}`, `${who} changed the limits of a mailbox`)
+    case 'mail.mailbox.delete':
+      return about(target, (t) => `${who} deleted the mailbox ${t}`, `${who} deleted a mailbox`)
+    case 'mail.mailbox.unblock':
+      return about(target, (t) => `${who} let ${t} send again`, `${who} let a mailbox send again`)
+    case 'mail.alias.create':
+      return about(target, (t) => `${who} added forwarding for ${mailAddress(t)}`, `${who} added forwarding`)
+    case 'mail.alias.update':
+      return about(target, (t) => `${who} changed the forwarding of ${mailAddress(t)}`, `${who} changed forwarding`)
+    case 'mail.alias.delete':
+      return about(target, (t) => `${who} deleted the forwarding of ${mailAddress(t)}`, `${who} deleted forwarding`)
+    case 'mail.mailbox.blocked':
+      return about(target, (t) => `The mail server stopped ${t} from sending`, 'The mail server stopped a mailbox from sending')
+    case 'mail.mailbox.sign-in-failures':
+      return about(target, (t) => `Many failed sign-ins to ${t}`, 'Many failed sign-ins to a mailbox')
+    case 'mail.delivery.bounced':
+      return about(target, (t) => `Mail from ${t} could not be delivered`, 'Mail could not be delivered')
+    case 'mail.listener.failed':
+      return 'Part of the mail server stopped accepting connections'
     default:
       return about(target, (t) => `${who} made a change to ${t}`, `${who} made a change`)
   }

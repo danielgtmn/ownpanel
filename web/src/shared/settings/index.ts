@@ -15,6 +15,9 @@ export { LockedField } from './LockedField.tsx'
 export { DnsRecords, PanelAddressDetails, PanelDomainForm, PanelStatus } from './PanelAddress.tsx'
 export {
   initialAddressSelection,
+  normalizeDomain,
+  validateDomain,
+  validateEmail,
   panelReady,
   panelUrl,
   sameAddresses,

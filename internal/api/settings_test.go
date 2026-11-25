@@ -74,7 +74,8 @@ func newSettingsEnv(t *testing.T, flagDomain string) (*env, *failingWeb) {
 }
 
 var settingsKeys = []string{"panel_domain", "panel_domain_locked", "server_ips", "server_ips_locked", "detected_ips",
-	"acme_email", "acme_email_locked", "tls_mode", "setup_complete", "ip_access"}
+	"acme_email", "acme_email_locked", "tls_mode", "setup_complete", "ip_access",
+	"mail_host", "mail_host_locked", "postmaster_address"}
 
 type settingsBody struct {
 	PanelDomain       string   `json:"panel_domain"`

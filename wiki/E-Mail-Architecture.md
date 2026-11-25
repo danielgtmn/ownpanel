@@ -169,6 +169,10 @@ Caddy's certificates are private to Caddy, so the panel obtains one for
   issued itself and passes others through. The `-tags caddy` test covers
   both cases.
 - With `-tls internal` or `off` the panel makes a self-signed certificate.
+- The ACME library always tries the TLS-ALPN challenge first; it fails
+  because Caddy holds port 443, so every issuance costs one failed
+  validation before HTTP-01 succeeds. Within the CA's limits, but a reason to
+  replace autocert with a direct HTTP-01 client *later*.
 
 The service only opens its ports once `mail_host`, a certificate and at
 least one domain are configured.
@@ -207,6 +211,23 @@ domains in the background and on request.
 | Set up DNS records | own connections only | own connections only | no | no | no |
 | Record events | — | — | — | — | yes |
 
+Details of these rules:
+
+- Once active, a domain stays active, even if its MX record changes later
+  (a DNS hiccup must not stop mail). Inactive domains are looked at every
+  5 minutes, and on request at most every 5 seconds.
+- Admins may also enable mail for a domain another person's site uses; the
+  per-person caps do not apply to them.
+- `mail_host` cannot itself be a mail domain (its `postmaster@` goes to the
+  postmaster address), and is refused for sites and redirects.
+- Setting a mailbox password needs mail write access, which already means
+  a password sign-in or a write token not limited to sites. There is no MCP
+  tool that takes a mailbox password (nor one that creates a mailbox), so
+  passwords never pass through an AI agent.
+- The panel reaches the service through `-mail-admin
+  unix:///run/ownpanel-mail/admin.sock`; without the flag mail data is only
+  stored.
+
 Password hashes and DKIM keys are never returned. An admin can read any
 mailbox by setting its password; [[Security|Security]] says so. Mailbox users
 have no panel account and cannot change their own password yet (*later*).
@@ -235,8 +256,9 @@ have no panel account and cannot change their own password yet (*later*).
   SMTP 465 (TLS) or 587 (STARTTLS), user name = full address.
 - IMAP (implicit TLS on 993 only, RFC 8314): `INBOX`, `Sent`, `Drafts`,
   `Junk`, `Trash`, `Archive` with special-use flags; IDLE, MOVE, UIDPLUS.
-  Envelope and body structure are stored at delivery, so FETCH does not
-  re-parse. Quota is enforced on delivery and APPEND (`NO [OVERQUOTA]`) and
+  Envelope and body structure are read from the message file on FETCH
+  (storing them at delivery is *later*). LITERAL+ is not offered, so an
+  oversized APPEND is refused before the client sends it. Quota is enforced on delivery and APPEND (`NO [OVERQUOTA]`) and
   shown in the panel; the IMAP QUOTA command is not offered (the library has
   none).
 - Submission on 587 (STARTTLS required before AUTH) and 465 (TLS); AUTH

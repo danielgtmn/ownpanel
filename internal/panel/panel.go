@@ -70,6 +70,21 @@ type Config struct {
 	// Updates says where new releases come from and where the root-side
 	// updater picks up requests. Without Dir, updates are not offered.
 	Updates UpdatesConfig
+
+	// Mail is the mail service's admin socket (-mail-admin); nil means no
+	// mail service is set up: mail domains, mailboxes and aliases are still
+	// stored, but nothing is pushed. *config.Client satisfies it.
+	Mail MailService
+	// MailHost, when set, comes from -mail-host: it overrides (and locks)
+	// the setting.
+	MailHost string
+	// MailTLSDir keeps the ACME account and the certificates of the mail
+	// host; "" means none are obtained (tests).
+	MailTLSDir string
+	// MXResolver looks up MX records to activate mail domains; nil means
+	// Resolver if it can, else (only when Resolver is nil too) asking the
+	// authoritative nameservers.
+	MXResolver dns.MXResolver
 }
 
 // Service owns every use case of the panel.
@@ -106,6 +121,15 @@ type Service struct {
 	certAddr      string
 
 	updates *updater
+
+	mail         MailService
+	mailHostFlag string
+	mx           dns.MXResolver
+	certs        *mailCerts
+	// mailSyncMu serializes mailSync, independent of syncMu.
+	mailSyncMu sync.Mutex
+	// mailHealth caches the outbound port check of MailHealth.
+	mailHealth mailHealthState
 }
 
 // New returns a Service. It rejects invalid web server options up front, and
@@ -132,6 +156,16 @@ func New(cfg Config) (*Service, error) {
 		certRoots:      cfg.CertRoots,
 		certAddr:       cfg.CertCheckAddr,
 		updates:        newUpdater(cfg.Updates),
+		mail:           cfg.Mail,
+		mx:             cfg.MXResolver,
+		certs:          newMailCerts(cfg.MailTLSDir, cfg.Caddy.TLSMode),
+	}
+	if cfg.MailHost != "" {
+		d, err := store.NormalizeDomain(cfg.MailHost)
+		if err != nil {
+			return nil, fmt.Errorf("mail host: %w", err)
+		}
+		s.mailHostFlag = d
 	}
 	if s.interfaces == nil {
 		s.interfaces = DetectAddresses
@@ -143,6 +177,13 @@ func New(cfg Config) (*Service, error) {
 	if s.resolver == nil {
 		s.resolver = dns.NewAuthoritative(net.DefaultResolver)
 	}
+	if s.mx == nil {
+		if mx, ok := s.resolver.(dns.MXResolver); ok {
+			s.mx = mx
+		} else {
+			s.mx = noMX{}
+		}
+	}
 	if d := cfg.Caddy.PanelDomain; d != "" && s.store != nil {
 		sites, err := s.store.Sites(context.Background())
 		if err != nil {
@@ -151,6 +192,17 @@ func New(cfg Config) (*Service, error) {
 		for _, site := range sites {
 			if slices.Contains(site.Domains, d) {
 				return nil, fmt.Errorf("panel domain %s is already used by site %q", d, site.Name)
+			}
+		}
+	}
+	if d := s.mailHostFlag; d != "" && s.store != nil {
+		sites, err := s.store.Sites(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		for _, site := range sites {
+			if slices.Contains(site.Domains, d) {
+				return nil, fmt.Errorf("mail host %s is already used by site %q", d, site.Name)
 			}
 		}
 	}
@@ -244,6 +296,9 @@ func (s *Service) SaveSite(ctx context.Context, a Actor, name string, domains []
 	}
 	if d := s.PanelDomain(); d != "" && slices.Contains(clean, d) {
 		return Site{}, errorf(Invalid, "domain %q is the address of the panel itself", d)
+	}
+	if d := s.MailHost(); d != "" && slices.Contains(clean, d) {
+		return Site{}, errorf(Invalid, "domain %q is the name of the mail server", d)
 	}
 
 	existing, err := s.store.Site(ctx, name)
@@ -424,7 +479,9 @@ func (s *Service) syncSaved(ctx context.Context) error {
 
 // Run syncs once, then every interval until ctx is done, so drift (e.g. a
 // restarted Caddy) heals by itself. While out of sync it retries sooner.
+// The mail service is kept in sync next to it, independently (runMail).
 func (s *Service) Run(ctx context.Context, interval time.Duration) {
+	go s.runMail(ctx, interval)
 	healthy := true
 	for {
 		err := s.Sync(ctx, System)

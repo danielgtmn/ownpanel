@@ -143,8 +143,8 @@ func (s *Store) SetPassword(ctx context.Context, id int64, hash, keepSession str
 }
 
 // DeleteUser removes a user with their sessions, tokens and DNS
-// connections. It refuses while
-// the user owns sites, and for the last admin.
+// connections. It refuses while the user owns sites, domain redirects or
+// mail domains, and for the last admin.
 func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
 		u, err := scanUser(tx.QueryRow(`SELECT `+userCols+` FROM users WHERE id = ?`, id))
@@ -164,6 +164,9 @@ func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 			return conflictf("%s still owns sites; delete them first", u.Name)
 		}
 		if err := ownsNoDomainRedirects(tx, id, u.Name); err != nil {
+			return err
+		}
+		if err := ownsNoMailDomains(tx, id, u.Name); err != nil {
 			return err
 		}
 		_, err = tx.Exec(`DELETE FROM users WHERE id = ?`, id)

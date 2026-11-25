@@ -17,6 +17,7 @@ import {
 } from '../../shared/settings/index.ts'
 import { ErrorState, LoadingState, PageHeader, Section } from '../../shared/ui/index.ts'
 import { ipAccessNotice } from './rules.ts'
+import { MailSection } from './MailSection.tsx'
 import { UpdatesSection } from './UpdatesSection.tsx'
 
 function AddressesSection({ settings, onSaved }: { settings: PanelSettings; onSaved: (next: PanelSettings) => void }) {
@@ -73,7 +74,7 @@ function Loaded({ initial }: { initial: PanelSettings }) {
 
   return (
     <>
-      <PageHeader title="Settings" description="How people reach this panel and the sites on this server." />
+      <PageHeader title="Settings" description="How people reach this panel, the sites and the mail on this server." />
       {notice ? <p className="notice settings-notice">{notice}</p> : null}
       <AddressesSection settings={settings} onSaved={setSettings} />
       <Section
@@ -88,6 +89,7 @@ function Loaded({ initial }: { initial: PanelSettings }) {
       <Section title="Certificate notices">
         <CertificateEmailForm settings={settings} onSaved={setSettings} />
       </Section>
+      <MailSection settings={settings} onSaved={setSettings} />
       <UpdatesSection />
     </>
   )

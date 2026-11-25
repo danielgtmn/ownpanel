@@ -26,15 +26,17 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	// A field that is missing (or null) stays unchanged; "" or [] clears it.
 	var body struct {
-		PanelDomain *string          `json:"panel_domain"`
-		ServerIPs   *json.RawMessage `json:"server_ips"`
-		ACMEEmail   *string          `json:"acme_email"`
+		PanelDomain       *string          `json:"panel_domain"`
+		ServerIPs         *json.RawMessage `json:"server_ips"`
+		ACMEEmail         *string          `json:"acme_email"`
+		MailHost          *string          `json:"mail_host"`
+		PostmasterAddress *string          `json:"postmaster_address"`
 	}
-	example := `{"panel_domain": "panel.example.com", "server_ips": ["203.0.113.5"], "acme_email": "you@example.com"}`
+	example := `{"panel_domain": "panel.example.com", "server_ips": ["203.0.113.5"], "acme_email": "you@example.com", "mail_host": "mail.example.com", "postmaster_address": "you@example.com"}`
 	if !decodeJSON(w, r, &body, example) {
 		return
 	}
-	u := panel.SettingsUpdate{PanelDomain: body.PanelDomain, ACMEEmail: body.ACMEEmail}
+	u := panel.SettingsUpdate{PanelDomain: body.PanelDomain, ACMEEmail: body.ACMEEmail, MailHost: body.MailHost, PostmasterAddress: body.PostmasterAddress}
 	if body.ServerIPs != nil && string(*body.ServerIPs) != "null" {
 		var ips []string
 		if err := json.Unmarshal(*body.ServerIPs, &ips); err != nil {

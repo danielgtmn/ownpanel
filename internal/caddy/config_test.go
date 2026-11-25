@@ -100,3 +100,81 @@ func TestParseAdmin(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildMailHostChallengeRoute(t *testing.T) {
+	base := Options{AdminListen: "127.0.0.1:2019", StorageDir: "/data/caddy", HTTPPort: 80, HTTPSPort: 443,
+		PanelUpstream: "127.0.0.1:8600", MailHost: "mail.example.com"}
+	servers := func(o Options) map[string]any {
+		t.Helper()
+		cfg, err := Build(o, []Site{{Name: "a", Domains: []string{"a.example.com"}, Root: "/r", Live: true}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(cfg)
+		var out struct {
+			Apps struct {
+				HTTP struct {
+					Servers map[string]any `json:"servers"`
+				} `json:"http"`
+			} `json:"apps"`
+		}
+		if err := json.Unmarshal(b, &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.Apps.HTTP.Servers
+	}
+	firstRoute := func(srv any) string {
+		t.Helper()
+		routes := srv.(map[string]any)["routes"].([]any)
+		b, _ := json.Marshal(routes[0])
+		return string(b)
+	}
+	const want = `{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8600"}]}],"match":[{"host":["mail.example.com"],"path":["/.well-known/acme-challenge/*"]}],"terminal":true}`
+	sitesHave := func(s map[string]any) bool {
+		b, _ := json.Marshal(s["sites"])
+		return strings.Contains(string(b), "mail.example.com")
+	}
+
+	// ACME without addresses: a server of its own on the HTTP port.
+	o := base
+	o.TLSMode = TLSACME
+	s := servers(o)
+	if len(s) != 2 || s["mail_http"] == nil || firstRoute(s["mail_http"]) != want {
+		t.Fatalf("own HTTP server: %v", s)
+	}
+	if l := s["mail_http"].(map[string]any)["listen"].([]any); len(l) != 1 || l[0] != ":80" {
+		t.Fatalf("listen %v", l)
+	}
+	if sitesHave(s) {
+		t.Fatal("the mail host must not be in the HTTPS server")
+	}
+
+	// With access by address: merged into the existing HTTP server, first.
+	o.PanelIPs = []string{"192.0.2.1"}
+	s = servers(o)
+	if len(s) != 2 || s["mail_http"] != nil || firstRoute(s["ip_http"]) != want {
+		t.Fatalf("merged HTTP server: %v", s)
+	}
+	if len(s["ip_http"].(map[string]any)["routes"].([]any)) != 2 || sitesHave(s) {
+		t.Fatalf("ip routes kept, nothing on HTTPS: %v", s)
+	}
+
+	// Plain HTTP: the only server is on the HTTP port.
+	o = base
+	o.TLSMode = TLSOff
+	s = servers(o)
+	if len(s) != 1 || firstRoute(s["sites"]) != want {
+		t.Fatalf("TLS off: %v", s)
+	}
+
+	// Without a mail host nothing changes; without the panel's address it fails.
+	o = base
+	o.TLSMode, o.MailHost = TLSACME, ""
+	if s := servers(o); len(s) != 1 {
+		t.Fatalf("no mail host: %v", s)
+	}
+	o.MailHost, o.PanelUpstream = "mail.example.com", ""
+	if _, err := Build(o, nil); err == nil {
+		t.Fatal("a mail host without the panel's address must fail")
+	}
+}
