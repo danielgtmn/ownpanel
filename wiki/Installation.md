@@ -24,6 +24,8 @@ When it is done, the installer prints:
 
 The setup code is only valid until the first administrator exists. Show it again with `sudo cat /var/lib/ownpanel/setup-code`.
 
+On an upgrade or a second run, once an administrator exists, the installer just tells you to open the panel at its usual address: the domain set in the panel (or with `--panel-domain`, which it then names), and `https://<server address>/`, which leads there.
+
 To set everything up front without the browser, pass the options (all optional):
 
 ```sh
