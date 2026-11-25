@@ -109,7 +109,7 @@ func TestPermissionMatrix(t *testing.T) {
 			[]Kind{ok, ok, Forbidden, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
 		{"list own tokens", func(w world, a Actor) error { _, err := w.svc.Tokens(ctx, a); return err },
 			[]Kind{ok, Forbidden, ok, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
-		{"create token", func(w world, a Actor) error { _, err := w.svc.CreateToken(ctx, a, "t", "read", nil); return err },
+		{"create token", func(w world, a Actor) error { _, err := w.svc.CreateToken(ctx, a, "t", "read", nil, 0); return err },
 			[]Kind{ok, Forbidden, ok, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
 		{"change password", func(w world, a Actor) error {
 			err := w.svc.ChangePassword(ctx, a, "wrong", "irrelevant-password", "")
@@ -213,13 +213,13 @@ func TestPanelDomainIsReserved(t *testing.T) {
 func TestTokenSitesMustBeVisible(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
-	_, err := w.svc.CreateToken(ctx, bob, "t", "write", []string{"bobsite", "rootsite"})
+	_, err := w.svc.CreateToken(ctx, bob, "t", "write", []string{"bobsite", "rootsite"}, 0)
 	wantKind(t, err, Invalid)
-	_, err = w.svc.CreateToken(ctx, bob, "t", "write", []string{})
+	_, err = w.svc.CreateToken(ctx, bob, "t", "write", []string{}, 0)
 	wantKind(t, err, Invalid)
-	_, err = w.svc.CreateToken(ctx, bob, "t", "admin", nil)
+	_, err = w.svc.CreateToken(ctx, bob, "t", "admin", nil, 0)
 	wantKind(t, err, Invalid)
-	nt, err := w.svc.CreateToken(ctx, bob, " deploy ", "write", []string{"bobsite", "bobsite"})
+	nt, err := w.svc.CreateToken(ctx, bob, " deploy ", "write", []string{"bobsite", "bobsite"}, 0)
 	if err != nil || nt.Name != "deploy" || !reflect.DeepEqual(nt.Sites, []string{"bobsite"}) {
 		t.Fatalf("%+v %v", nt, err)
 	}

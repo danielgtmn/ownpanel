@@ -26,16 +26,21 @@ While no user exists, ownpaneld writes a one-time code to `<data>/setup-code` (m
 
 ## Sessions
 
-- Signing in with name and password starts a session that lasts **30 days**. The browser gets the cookie `ownpanel_session` (`HttpOnly`, `SameSite=Strict`, `Secure` when the request came over HTTPS).
+- Signing in with name and password starts a session. It ends after **3 days without use**; every use pushes that back, but never past **30 days** after signing in. Then you sign in again.
+- Over HTTPS the browser gets the cookie `__Host-ownpanel_session` (`Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, no `Domain`). Over plain HTTP, as in local development, it is `ownpanel_session` without `Secure`. After an update from a version that used `ownpanel_session` over HTTPS, the old cookie is removed and you sign in once more.
 - Only a hash of the session secret is stored.
 - Changing your password ends all your other sessions; an admin setting another person's password ends all of that person's sessions.
-- Signing out ends the session. Expired sessions are cleaned up whenever someone signs in.
+- Signing out ends the session. **Sign out everywhere** in the account menu ends all of your sessions on every device, this one included; access tokens keep working. Expired sessions are cleaned up whenever someone signs in.
 
 Requests made with the cookie that change something must send the header `X-Ownpanel-Request: 1`; see [[API|API]].
 
 ## Login throttling
 
-After 5 failed attempts for the same name from the same address within 15 minutes, further attempts are refused (`429`, "try again in N minutes") until the oldest failure leaves the window. A successful sign-in clears the count. The same limiter applies to the setup code and to the "current password" check when changing a password. A name that does not exist takes as long as a wrong password, so the answer does not reveal which names exist.
+After 5 failed attempts for the same name from the same address within 15 minutes, further attempts are refused (`429`, "try again in N minutes") until the oldest failure leaves the window. A successful sign-in clears the count. The same limit applies to the setup code and to the "current password" check when changing a password. In addition, one address may fail at most 20 sign-ins within 15 minutes across all names. Attempts are stored (hashed) in the database, so restarting ownpaneld does not reset them.
+
+Checking a password takes a lot of memory and time on purpose. At most 16 sign-ins and password changes are checked at once; while all are busy, further ones get `429` ("try again in a minute") right away.
+
+A name that does not exist takes as long as a wrong password, so the answer does not reveal which names exist.
 
 The counter is kept in memory; see [[Security|Security]].
 
@@ -47,9 +52,10 @@ Access tokens let scripts, CI and AI agents use the API and MCP without a passwo
 - A token has a name (1 to 64 characters), an access level and a scope:
   - **Access:** `read` (can only look) or `write`.
   - **Scope:** all the user's sites, or a chosen list (at least one site, each must be visible to you).
-- A token never has more rights than its user has right now: if the user is demoted or deleted, the token follows. Tokens do not expire; revoke them.
+- A token can expire: when creating it you choose 30 days, 90 days (suggested), 1 year or never (the API accepts 1 to 3650 days). An expired token is refused like an unknown one (`401`), including its open upload links. It stays in the list, marked as no longer working, until you delete it.
+- A token never has more rights than its user has right now: if the user is demoted or deleted, the token follows.
 - If a site that a limited token names is deleted, it is removed from the token's list.
-- Tokens can only be created, listed and revoked when **signed in with a password**, not with another token. The list shows name, access, sites, creation time and last use.
+- Tokens can only be created, listed and revoked when **signed in with a password**, not with another token. The list shows name, access, sites, creation time, last use and expiry.
 - Revoking a token also invalidates its open upload links.
 
 ### What each kind of credential may do
@@ -90,6 +96,7 @@ Admins can read the newest entries (web interface: **Activity**; API: `GET /api/
 | `setup` | first admin created |
 | `account.login` | someone signed in |
 | `account.password` | someone changed their own password |
+| `account.logout_everywhere` | someone signed out everywhere |
 | `user.create`, `user.update`, `user.delete` | admin changes to people |
 | `token.create`, `token.delete` | token created or revoked |
 | `site.create`, `site.domains`, `site.delete` | site changes |

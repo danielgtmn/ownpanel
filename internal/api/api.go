@@ -22,8 +22,15 @@ const MaxUploadBytes = 512 << 20
 // maxJSONBytes caps request bodies that are JSON.
 const maxJSONBytes = 1 << 20
 
-// SessionCookie holds the session secret.
-const SessionCookie = "ownpanel_session"
+// The session secret is kept in SecureSessionCookie when the panel is
+// reached over HTTPS: the prefix makes the browser insist on Secure, Path=/
+// and no Domain, so no other host or plain-HTTP page can set or overwrite
+// it. Over plain HTTP (local development) it is SessionCookie, which is also
+// the name older versions used everywhere.
+const (
+	SessionCookie       = "ownpanel_session"
+	SecureSessionCookie = "__Host-ownpanel_session"
+)
 
 // CSRFHeader must be sent (with value "1") on every changing request that
 // is authenticated by the session cookie. Other sites cannot set custom
@@ -92,8 +99,8 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 				return
 			}
 			actor = a
-		} else if c, err := r.Cookie(SessionCookie); err == nil && c.Value != "" {
-			a, err := s.Panel.SessionActor(r.Context(), c.Value)
+		} else if secret := sessionSecret(w, r); secret != "" {
+			a, err := s.Panel.SessionActor(r.Context(), secret)
 			if err == nil {
 				actor = a
 			} else if panel.KindOf(err) != panel.Unauthenticated {
@@ -154,28 +161,50 @@ func isHTTPS(r *http.Request) bool {
 	return r.TLS != nil || (r.Header.Get("X-Forwarded-Proto") == "https" && peerIsLoopback(r))
 }
 
-func setSessionCookie(w http.ResponseWriter, r *http.Request, secret string) {
+// sessionCookieName is the cookie that holds the session for r.
+func sessionCookieName(r *http.Request) string {
+	if isHTTPS(r) {
+		return SecureSessionCookie
+	}
+	return SessionCookie
+}
+
+// sessionSecret returns the session cookie value of r, or "". Over HTTPS a
+// cookie under the old name is ignored and removed: it was set without the
+// protection of the prefix.
+func sessionSecret(w http.ResponseWriter, r *http.Request) string {
+	if isHTTPS(r) {
+		if _, err := r.Cookie(SessionCookie); err == nil {
+			writeSessionCookie(w, SessionCookie, "", -1, true)
+		}
+	}
+	c, err := r.Cookie(sessionCookieName(r))
+	if err != nil {
+		return ""
+	}
+	return c.Value
+}
+
+func writeSessionCookie(w http.ResponseWriter, name, value string, maxAge int, secure bool) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     SessionCookie,
-		Value:    secret,
+		Name:     name,
+		Value:    value,
 		Path:     "/",
-		MaxAge:   int(panel.SessionLifetime / time.Second),
+		MaxAge:   maxAge,
 		HttpOnly: true,
-		Secure:   isHTTPS(r),
+		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,
 	})
 }
 
+// setSessionCookie stores the session secret. The cookie may live as long
+// as a session can; the panel ends idle sessions earlier.
+func setSessionCookie(w http.ResponseWriter, r *http.Request, secret string) {
+	writeSessionCookie(w, sessionCookieName(r), secret, int(panel.SessionLifetime/time.Second), isHTTPS(r))
+}
+
 func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     SessionCookie,
-		Value:    "",
-		Path:     "/",
-		MaxAge:   -1,
-		HttpOnly: true,
-		Secure:   isHTTPS(r),
-		SameSite: http.SameSiteStrictMode,
-	})
+	writeSessionCookie(w, sessionCookieName(r), "", -1, isHTTPS(r))
 }
 
 // decodeJSON reads a JSON body into v; on failure it answers 400 with

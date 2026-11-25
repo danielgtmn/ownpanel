@@ -5,7 +5,7 @@ ownpaneld speaks the Model Context Protocol, so AI assistants can manage sites: 
 ## Endpoint and authentication
 
 - **Endpoint:** `/mcp` on the panel's address, using streamable HTTP in stateless mode (every request carries its own credentials; there is no MCP session to remember).
-- **Authentication:** `Authorization: Bearer op_…` with an access token. **Only access tokens work.** The browser session cookie is never accepted, so a signed-in browser cannot use MCP. A missing or invalid token gets `401` with a `WWW-Authenticate` header.
+- **Authentication:** `Authorization: Bearer op_…` with an access token. **Only access tokens work.** The browser session cookie is never accepted, so a signed-in browser cannot use MCP. A missing, invalid or expired token gets `401` with a `WWW-Authenticate` header.
 - **Rights:** the token's rights apply. A `read` token can only look; a token limited to some sites only sees and publishes those; and it never has more rights than its user has. See [[Users and Access|Users-and-Access]].
 - **Reachability:** with `-panel-domain panel.example.com`, use `https://panel.example.com/mcp`. Without it, `/mcp` is only reachable on the daemon's own address (`127.0.0.1:8600`; the Host must be local), for example through an SSH tunnel.
 - Browsers' cross-site requests are refused; clients that are not browsers send no `Origin` header and are unaffected.
