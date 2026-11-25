@@ -478,14 +478,20 @@ and its sessions end) and back (a password is set). Import (exists) works for sh
   `Shared/<address>/…`, listed in a plain `LIST` and always subscribed;
   `UNSUBSCRIBE` is accepted and changes nothing. `Shared` and
   `Shared/<address>` are `\Noselect` parents; `NAMESPACE` announces
-  `Shared/`. Personal folder names `Shared/<something with @>/…` are
-  reserved. COPY/MOVE across mailboxes work: copying out needs Read,
+  `Shared/`. Own folder names `Shared/<something with @>/…` are reserved:
+  CREATE and RENAME refuse them, also for folders below a renamed parent.
+  Own folders of such names from before (an import, another server) are
+  kept, listed and reachable as long as no mailbox of that address is
+  shared with the person; then the shared mailbox's folder of the same name
+  wins. COPY/MOVE across mailboxes work: copying out needs Read,
   copying or moving in needs Write on the destination, moving out needs
   Write; quota is charged to the destination. RENAME across mailboxes is
-  refused. Removing a grant while one of its folders is selected ends that
-  connection (`BYE Access to this shared mailbox was removed`); removing
-  Write makes the selected folder read-only. New mail in a shared folder
-  reaches IDLE sessions.
+  refused. Removing a grant while one of its folders is selected, or
+  changing that mailbox's kind, ends that connection (`BYE Access to this
+  shared mailbox was removed or changed`); removing Write makes the
+  selected folder read-only, and CLOSE then closes it without expunging.
+  Each session applies configuration changes in order, always the latest.
+  New mail in a shared folder reaches IDLE sessions.
 - **Per-user `\Seen`** in `mail.db` migration 8, table `shared_seen`.
   Deviation: the plan keyed it by (storage id, folder, uid, reader); it is
   keyed by the message row and the reader instead, so the read state moves
@@ -494,23 +500,33 @@ and its sessions end) and back (a password is set). Import (exists) works for sh
   readers may still set and clear their own `\Seen` (not after EXAMINE).
   Migration 8 also adds `messages.msgid` for de-duplicating sent copies.
 - **Submission** (`internal/mail/submission/session.go`): send-as allows
-  the shared address and its aliases as From and MAIL FROM. On behalf
+  the shared address and its aliases as From and MAIL FROM; an alias
+  counts only when it delivers to that mailbox alone (send-as on one member
+  does not cover a group). On behalf
   allows From = exactly the shared address only with a `Sender` holding
   the signed-in mailbox's own address or one of its aliases; MAIL FROM may
   be the shared address or stay the person's own. Both sending limits
-  count (one message once for each; the domain once); a blocked shared
-  mailbox cannot be sent for. **Keep a copy** stores the message in the
+  count (one message once for each; the domain once), and so do those of
+  every other mailbox named in From or held as Sender through send-as; a
+  blocked mailbox among them cannot be sent for. **Keep a copy** stores the message in the
   shared mailbox's `\Sent` folder, marked read for the sender, and skips a
   later APPEND (or a repeated send) with the same Message-ID there.
 - **Distribution groups:** the policy of the addressed alias is checked at
   submission against the signed-in mailbox and the mailbox it sends for,
-  and on port 25 against the envelope sender, which then also needs the
-  aligned SPF or DKIM pass that all mail claiming our domains needs
-  (loopback exempt). `members` counts the alias's targets, aliases of
+  and on port 25 against the envelope sender, which then needs SPF or DKIM
+  to pass for exactly its domain (stricter than the relaxed alignment for
+  other mail of our domains, so a sibling domain cannot speak for it;
+  loopback exempt). `members` counts the alias's targets, aliases of
   member mailboxes and a member sending as a shared mailbox. Refusal:
   `550 5.7.1 This address accepts mail only from certain senders`; the null
   sender is refused for restricted groups.
-- **Panel:** migration `0015_shared_mailboxes.sql`; API and MCP tools as in
+- **Panel:** migrations `0015_shared_mailboxes.sql` and
+  `0016_mailbox_grants_at.sql` (when the panel last changed a mailbox's
+  grants: pushed as `Mailbox.GrantsSetAt`, so an older self-delegation
+  reported late neither comes back in the panel nor stays in the mail
+  service's overlay, like a password reset). Late password or app password
+  changes of a mailbox that became shared are ignored, and `DropInvalid`
+  strips sign-in data from a shared mailbox instead of leaving it out; API and MCP tools as in
   [[API|API]] and [[MCP|MCP]] (`set_mailbox_kind` only makes mailboxes
   shared: making one personal needs a password). Activity actions
   `mail.mailbox.kind`, `mail.mailbox.keep-sent-copy`, `mail.mailbox.grant`,
