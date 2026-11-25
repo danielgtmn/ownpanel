@@ -17,7 +17,7 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/dns"
 	"github.com/danielgtmn/ownpanel/internal/dns/hetzner"
 	"github.com/danielgtmn/ownpanel/internal/dns/hetzner/hetznertest"
-	"github.com/danielgtmn/ownpanel/internal/secrets"
+	"github.com/danielgtmn/panzerschrank"
 )
 
 const (
@@ -79,9 +79,9 @@ func newDNSWorld(t *testing.T) *dnsWorld {
 		now: time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC),
 	}
 	d.reject = hetznertest.New(t, "never-accepted")
-	key := make([]byte, secrets.KeySize)
+	key := make([]byte, panzerschrank.KeySize)
 	rand.Read(key)
-	box, err := secrets.New(key)
+	box, err := panzerschrank.New(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +333,7 @@ func TestCheckDNSConnectionReportsProblems(t *testing.T) {
 		t.Fatalf("%+v %v", c, err)
 	}
 	// With another secret key the stored token cannot be read.
-	other, _ := secrets.New(bytes.Repeat([]byte{7}, secrets.KeySize))
+	other, _ := panzerschrank.New(bytes.Repeat([]byte{7}, panzerschrank.KeySize))
 	d.svc.secrets = other
 	c, err = d.svc.CheckDNSConnection(ctx, bob, d.bobConn)
 	if err != nil || !strings.Contains(c.LastError, "secret key has changed") {

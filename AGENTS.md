@@ -25,7 +25,6 @@ internal/store/       SQLite; migrations in store/migrations/NNNN_name.sql
 internal/caddy/       builds the full Caddy config and loads it
 internal/deploy/      releases of a site (unpack, versions, make live)
 internal/dns/         provider-neutral DNS + hetzner/ (Cloud API only)
-internal/secrets/     encryption at rest for provider tokens
 internal/backup/      the backup command
 internal/webui/       serves the embedded web app
 internal/timeouts/    time limits of the HTTP server (Caddy has its own in caddy/)
@@ -48,6 +47,10 @@ wiki/                 documentation (synced to the GitHub wiki)
   limits, strict validation, no shelling out with user input).
 - **Secrets** (passwords, access tokens, provider tokens) never appear in
   logs, activity entries, API responses after creation, or error messages.
+  Secrets stored in the database are sealed with
+  [panzerschrank](https://github.com/danielgtmn/panzerschrank) and the key in
+  `<data>/secret.key`; the purpose strings passed to `Seal`/`Open` are part
+  of the stored format and must never change.
 - **Root stays out of the panel.** `ownpaneld` runs unprivileged. Anything
   that needs root goes through `install.sh`/`update.sh` and the validated
   request files of the update worker.
