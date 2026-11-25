@@ -1,19 +1,17 @@
 package panel
 
 import (
-	"sync"
 	"unicode/utf8"
 
 	"github.com/danielgtmn/ownpanel/internal/passwd"
 )
 
+// Password length of panel users, in characters (sesam is configured with
+// the same bounds; checking here first keeps the panel's wording).
 const (
 	minPasswordLen = 10
 	maxPasswordLen = 200
 )
-
-// hashSlots bounds concurrent hashing: each one takes 64 MiB.
-var hashSlots = passwd.NewSlots(4)
 
 func validatePassword(pw string) error {
 	n := utf8.RuneCountInString(pw)
@@ -23,18 +21,8 @@ func validatePassword(pw string) error {
 	return nil
 }
 
-func hashPassword(pw string) (string, error) { return hashSlots.Hash(pw) }
+// Mailbox passwords are hashed here (panel users' passwords by sesam).
+// mailboxHashSlots bounds concurrent hashing: each one takes 64 MiB.
+var mailboxHashSlots = passwd.NewSlots(4)
 
-// verifyPassword compares pw with an encoded argon2id hash in constant time.
-// Malformed hashes never match.
-func verifyPassword(encoded, pw string) bool { return hashSlots.Verify(encoded, pw) }
-
-// dummyHash is verified against when a user does not exist, so a login for
-// an unknown name takes as long as one with a wrong password.
-var dummyHash = sync.OnceValue(func() string {
-	h, err := hashPassword(randomString(32))
-	if err != nil {
-		panic(err)
-	}
-	return h
-})
+func hashPassword(pw string) (string, error) { return mailboxHashSlots.Hash(pw) }

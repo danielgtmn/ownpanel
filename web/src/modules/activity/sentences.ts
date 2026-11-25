@@ -58,6 +58,17 @@ function describeNotForwarded(detail: string): string {
   return `${match[2] ? `To ${match[2]}` : 'Delivery report'} · ${why}`
 }
 
+const ACCOUNT_CHANGES: Record<string, string> = {
+  'password changed': 'New password',
+  'with e-mail address': 'With e-mail address',
+  'e-mail address changed': 'New e-mail address',
+  'e-mail address removed': 'E-mail address removed',
+}
+
+function describeAccountChange(part: string): string {
+  return ACCOUNT_CHANGES[part] ?? part.replace(/^role (\w+)$/, (_, role: string) => `Role: ${describeRole(role)}`)
+}
+
 // "import 3 from me@x.org at imap.x.org (continued)" from the panel, or
 // "import 3 from old.mbox: 5 copied, 1 already there, 0 failed: reason"
 // from the mail service.
@@ -88,16 +99,9 @@ export function describeDetail({ action, detail }: Pick<Activity, 'action' | 'de
     case 'site.domains':
       return `Domains: ${detail}`
     case 'user.create':
-      return detail.replace(/^role (\w+)$/, (_, role: string) => `Role: ${describeRole(role)}`)
     case 'user.update':
-      return detail
-        .split(', ')
-        .map((part) =>
-          part === 'password changed'
-            ? 'New password'
-            : part.replace(/^role (\w+)$/, (_, role: string) => `Role: ${describeRole(role)}`),
-        )
-        .join(' · ')
+    case 'account.email':
+      return detail.split(', ').map(describeAccountChange).join(' · ')
     case 'token.create': {
       const match = /^(read|write) access, (?:all sites|sites (.+))$/.exec(detail)
       if (!match) return detail
@@ -105,6 +109,7 @@ export function describeDetail({ action, detail }: Pick<Activity, 'action' | 'de
       return `${rights} · ${match[2] ? `Only ${match[2]}` : 'All sites'}`
     }
     case 'setup':
+    case 'account.password_reset_failed':
       return ''
     case 'update.request': {
       const match = /^(\S+) to (\S+) \((stable|nightly)\)(, an older version)?$/.exec(detail)
@@ -191,6 +196,12 @@ export function describeActivity({ actor, action, target }: Entry): string {
       return `${who} changed their password`
     case 'account.login':
       return `${who} signed in`
+    case 'account.email':
+      return `${who} changed their e-mail address`
+    case 'account.password_reset':
+      return 'Someone chose a new password with a link sent by e-mail'
+    case 'account.password_reset_failed':
+      return 'A link to choose a new password could not be sent'
     case 'setup':
       return `${who} set up the panel`
     case 'update.request':

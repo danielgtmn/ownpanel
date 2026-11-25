@@ -13,6 +13,7 @@ import { hrefFor, navigate, useRoute } from '../shared/routing/index.ts'
 import { useSession } from '../shared/session/index.ts'
 import { EmptyState, MenuIcon } from '../shared/ui/index.ts'
 import { ChangePasswordDialog } from './ChangePasswordDialog.tsx'
+import { EmailAddressDialog } from './EmailAddressDialog.tsx'
 import { defaultModule, moduleFor, visibleModules } from './modules.ts'
 import { lazyPage } from './lazyPage.ts'
 import { ModulePage, PageFrame } from './ModulePage.tsx'
@@ -43,6 +44,7 @@ export function Shell() {
   const phone = useMediaQuery('(max-width: 760px)')
   const [menuOpen, setMenuOpen] = useState(false)
   const [changingPassword, setChangingPassword] = useState(false)
+  const [changingEmail, setChangingEmail] = useState(false)
   const [lastTile, setLastTile] = useState(ALL)
   const mainRef = useRef<HTMLElement>(null)
   const firstRender = useRef(true)
@@ -104,6 +106,7 @@ export function Shell() {
       placeholders: tile !== ALL && selected !== undefined,
     },
     onChangePassword: () => setChangingPassword(true),
+    onChangeEmail: () => setChangingEmail(true),
   }
 
   const content = familyDomain ? (
@@ -148,6 +151,7 @@ export function Shell() {
         <div className="shell-content">{content}</div>
       </main>
       <ChangePasswordDialog open={changingPassword} onOpenChange={setChangingPassword} />
+      <EmailAddressDialog open={changingEmail} onOpenChange={setChangingEmail} />
     </div>
   )
 }

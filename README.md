@@ -67,6 +67,10 @@ locked in the panel).
 
 - **Admins** see and manage all sites, users and the activity log.
 - **Members** see and manage only the sites they created.
+- People sign in with their name or an optional **e-mail address**. With an
+  address stored and the panel able to send e-mail through its own mail
+  server, a forgotten password can be reset with a link that works once and
+  for an hour.
 - Everyone can change their own password and create **access tokens** for
   scripts and CI (`Authorization: Bearer op_…`). A token is shown once. It has
   `read` or `write` access and either covers all of the user's sites or a
@@ -75,16 +79,16 @@ locked in the panel).
   and can expire after 30, 90 or 365 days, or never.
 - A sign-in ends after 3 days without use and at the latest after 30 days;
   "sign out everywhere" ends all of a person's sign-ins. After 5 failed
-  sign-ins for a name from one address (or 20 for any names) within 15
-  minutes, further attempts are refused until the window passes, also across
-  restarts.
+  sign-ins for an account (from any address), or 20 sign-ins from one address
+  for any names, within 15 minutes, further attempts are refused until the
+  window passes, also across restarts.
 - Every change is recorded in the activity log, with the token's name when a
   token was used.
 
 ## Web interface
 
 The daemon serves the web app on the same address as the API; the app signs
-in with name and password. For development run `scripts/dev.sh` and
+in with name or e-mail address and password. For development run `scripts/dev.sh` and
 `npm run dev` in `web/`. For production `make build` builds the app and
 embeds it into `bin/ownpaneld` (`make build-linux` for a server). A plain
 `go build` leaves the app out and only serves the API.
@@ -97,10 +101,13 @@ made with the cookie must send `X-Ownpanel-Request: 1`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/session` | setup needed? setup steps done (`setup_complete`)? who is signed in? |
+| `GET` | `/api/session` | setup needed? setup steps done (`setup_complete`)? who is signed in? can a forgotten password be reset by e-mail (`password_reset`)? |
 | `POST` | `/api/setup` | first admin, body `{"setup_code", "name", "password"}` |
-| `POST` | `/api/login`, `/api/logout` | sign in (body `{"name", "password"}`) and out |
+| `POST` | `/api/login`, `/api/logout` | sign in (body `{"name", "password"}`; `name` may be the e-mail address) and out |
+| `POST` | `/api/password-reset` | `{"email"}`: send a link to choose a new password (always `204`; `404` when the panel cannot send e-mail) |
+| `POST` | `/api/password-reset/confirm` | `{"token", "password"}`: set the new password and end all sessions of that person |
 | `PUT` | `/api/account/password` | body `{"current", "new"}`; ends your other sessions |
+| `PUT` | `/api/account/email` | body `{"email"}` (`""` removes it) |
 | `GET` `POST` | `/api/tokens` | your access tokens; create with `{"name", "access": "read"\|"write", "sites": [..] \| null}` |
 | `DELETE` | `/api/tokens/{id}` | revoke a token |
 | `GET` | `/api/sites` | list sites |
@@ -110,8 +117,8 @@ made with the cookie must send `X-Ownpanel-Request: 1`.
 | `POST` | `/api/uploads/{id}` | upload a `.zip` or `tar.gz` through a one-time upload link (the link is the credential; see MCP) |
 | `POST` | `/api/sites/{name}/rollback` | previous release, or body `{"release": "<id>"}` |
 | `GET` | `/api/sites/{name}/icon` | the site's icon from its live release (`<link rel="icon">` in `index.html`, else `favicon.svg`/`.png`/`.ico`, `apple-touch-icon.png`); `404` if none |
-| `GET` `POST` | `/api/users` | admins: list, create with `{"name", "password", "role"}` |
-| `PUT` `DELETE` | `/api/users/{id}` | admins: change `{"role"}` and/or `{"password"}`, delete |
+| `GET` `POST` | `/api/users` | admins: list, create with `{"name", "email", "password", "role"}` (`email` optional) |
+| `PUT` `DELETE` | `/api/users/{id}` | admins: change any of `{"role", "email", "password"}`, delete |
 | `GET` | `/api/activity?limit=50` | admins: newest activity first |
 | `GET` | `/api/server` | `{"ips": [..]}`: the server's addresses (`-server-ip`, else the panel settings) |
 | `GET` `PUT` | `/api/settings` | admins: panel domain, server addresses, certificate e-mail (with `*_locked` when set by flag), detected addresses, `setup_complete`, `ip_access`; change with any of `{"panel_domain", "server_ips", "acme_email"}` |
@@ -306,8 +313,10 @@ them to the restored database.
 ## Known gaps
 
 - No per-site system users or quotas; all site files belong to one user.
-- Sign-in throttling is kept in memory and trusts `X-Forwarded-For` from
-  local connections, so it resets on restart and local users can get around it.
+- Sign-in throttling trusts `X-Forwarded-For` from local connections, so
+  local users can get around the per-address limit. The limit per account
+  lets anyone who knows a name or e-mail address lock that account for 15
+  minutes at a time.
 
 ## Documentation
 

@@ -27,6 +27,7 @@ import (
 //	POST   /mailboxes/{storage_id}/unblock  204, 404 if unknown
 //	DELETE /mailboxes/{storage_id}          204 (also when there was no data), 409 while configured
 //	POST   /checks/outbound                 OutboundCheck
+//	POST   /send                            body OutgoingMail; 204 once the message is stored or queued, 400 with an error text
 //
 // Import and export of a mailbox (the mailbox must be configured, else
 // 404; see "Import and export" in wiki/E-Mail-Architecture.md):
@@ -58,6 +59,7 @@ const (
 	PathEvents   = "/events"
 	PathMailbox  = "/mailboxes/"
 	PathOutbound = "/checks/outbound"
+	PathSend     = "/send"
 
 	// Below PathMailbox + storage id.
 	PathImports      = "/imports"
@@ -303,6 +305,20 @@ type ImportJob struct {
 
 	// Position is internal to the service (how far a file job got).
 	Position int64 `json:"-"`
+}
+
+// OutgoingMail is a message the panel itself sends (password reset links
+// and the like). The service writes the message, signs it for the domain
+// of From and delivers or queues it. From must be a plain address in a
+// configured domain; bounces are dropped, so it is typically a no-reply
+// address. Text is required; HTML, when set, is sent as an alternative.
+type OutgoingMail struct {
+	From     string `json:"from"`
+	FromName string `json:"from_name,omitempty"`
+	To       string `json:"to"`
+	Subject  string `json:"subject"`
+	Text     string `json:"text"`
+	HTML     string `json:"html,omitempty"`
 }
 
 // Status is what the service reports about itself.
@@ -560,6 +576,12 @@ func (c *Client) DeleteMailbox(ctx context.Context, storageID string) error {
 		return errors.New("invalid storage id")
 	}
 	return c.do(ctx, http.MethodDelete, PathMailbox+url.PathEscape(storageID), nil, nil)
+}
+
+// Send hands a message to the service. An *Error with status 400 carries
+// the reason the service refused it (for example an unknown recipient).
+func (c *Client) Send(ctx context.Context, m OutgoingMail) error {
+	return c.do(ctx, http.MethodPost, PathSend, m, nil)
 }
 
 // CheckOutbound asks the service to try a connection to port 25 elsewhere.

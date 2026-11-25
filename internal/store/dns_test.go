@@ -9,11 +9,11 @@ import (
 func TestDNSConnectionsCRUD(t *testing.T) {
 	s, _ := open(t)
 	s.Now = func() time.Time { return time.Unix(1_800_000_000, 0) }
-	alice, err := s.CreateUser(ctx, "alice", "h", RoleAdmin, false)
+	alice, err := s.CreateUser(ctx, "alice", "", RoleAdmin, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bob, err := s.CreateUser(ctx, "bob", "h", RoleMember, false)
+	bob, err := s.CreateUser(ctx, "bob", "", RoleMember, false)
 	if err != nil {
 		t.Fatal(err)
 	}

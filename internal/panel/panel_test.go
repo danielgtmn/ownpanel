@@ -1,6 +1,8 @@
 package panel
 
 import (
+	"github.com/danielgtmn/sesam"
+
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
@@ -77,10 +79,46 @@ func newService(t *testing.T) (*Service, *fakeWeb, string) {
 	t.Helper()
 	svc, web, sites := newEmptyService(t)
 	// The first user gets id 1, which the admin actor refers to.
-	if _, err := svc.store.CreateUser(context.Background(), admin.Name, "unused", store.RoleAdmin, true); err != nil {
+	addUser(t, svc, admin.Name, store.RoleAdmin)
+	return svc, web, sites
+}
+
+// addUser adds a user with a sign-in (password "<name>-password") straight
+// to the store, without an actor.
+func addUser(t *testing.T, svc *Service, name, role string) store.User {
+	t.Helper()
+	ctx := context.Background()
+	au, err := svc.auth.CreateUser(ctx, sesam.NewUser{Username: name})
+	if err != nil {
 		t.Fatal(err)
 	}
-	return svc, web, sites
+	if err := svc.pw.SetPasswordHash(ctx, au.ID, userHash(t, name+"-password")); err != nil {
+		t.Fatal(err)
+	}
+	u, err := svc.store.CreateUser(ctx, name, au.ID, role, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+// userHashes keeps one hash per password for the whole test run: hashing
+// is slow on purpose, and the permission matrices build hundreds of
+// services. The hash has the format the panel used before sesam, which
+// sesam accepts.
+var userHashes sync.Map
+
+func userHash(t *testing.T, pw string) string {
+	t.Helper()
+	if h, ok := userHashes.Load(pw); ok {
+		return h.(string)
+	}
+	h, err := mailboxHashSlots.Hash(pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userHashes.Store(pw, h)
+	return h
 }
 
 // newEmptyService has no users yet, like a fresh install.

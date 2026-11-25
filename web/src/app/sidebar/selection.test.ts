@@ -7,8 +7,8 @@ import { visibleModules } from '../modules.ts'
 import { loadPointStates, loadSources } from './data.ts'
 import { ALL, currentRow, familyRows, overviewRows, railEntries, selectTile } from './selection.ts'
 
-const admin: User = { id: 1, name: 'anna', role: 'admin', created_at: '2026-01-01T00:00:00Z' }
-const member: User = { id: 2, name: 'max', role: 'member', created_at: '2026-01-01T00:00:00Z' }
+const admin: User = { id: 1, name: 'anna', email: '', role: 'admin', created_at: '2026-01-01T00:00:00Z' }
+const member: User = { id: 2, name: 'max', email: '', role: 'member', created_at: '2026-01-01T00:00:00Z' }
 
 const sources: DomainSources = {
   sites: [

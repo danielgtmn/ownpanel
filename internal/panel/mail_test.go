@@ -55,6 +55,18 @@ type fakeMail struct {
 	unblocked []string
 	events    []config.Event
 	usage     []config.MailboxStatus
+	sent      []config.OutgoingMail
+	sendErr   error
+}
+
+func (f *fakeMail) Send(_ context.Context, m config.OutgoingMail) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.sendErr != nil {
+		return f.sendErr
+	}
+	f.sent = append(f.sent, m)
+	return nil
 }
 
 func (f *fakeMail) Load(_ context.Context, cfg *config.Config) error {
@@ -785,7 +797,7 @@ func TestMailboxLimitsAndValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	after := w.mail.last().Mailboxes[0].PasswordHash
-	if after == before || !verifyPassword(after, "a-new-mailbox-password") {
+	if after == before || !mailboxHashSlots.Verify(after, "a-new-mailbox-password") {
 		t.Fatal("new password not pushed")
 	}
 

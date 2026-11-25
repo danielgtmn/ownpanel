@@ -6,6 +6,7 @@ export {
   parseHash,
   parseQuery,
   parseRoute,
+  replaceHash,
   useHash,
   usePathSegments,
   useQuery,
