@@ -236,6 +236,14 @@ service. How it is built, where it is more precise than the plan above:
   new hash, name, switch, app password with MAC, or revoked id) and
   `mailbox.app-password-used` (id and network, at most once an hour per app
   password, revision 0).
+- **One mailbox never stops the push:** an app password the mail service
+  reports for a mailbox that already has 50 (one was made in the panel at
+  the same time) is not recorded, but its revision is, so the mail service
+  drops it too; the activity log notes it. Before every push the panel
+  leaves out, or cuts down, any domain, mailbox or alias the mail service
+  would refuse (`config.DropInvalid`: app passwords beyond 50, invalid DKIM
+  keys, invalid alias targets, a damaged password hash, …) and logs it, so
+  the configuration of everyone else still loads.
 - **Organisations** are owned by one panel user. An admin who groups
   domains of different owners does it with an organisation of their own or
   of one of the owners; the activity log notes "domains of different

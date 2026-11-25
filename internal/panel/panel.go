@@ -137,6 +137,10 @@ type Service struct {
 	certs        *mailCerts
 	// mailSyncMu serializes mailSync, independent of syncMu.
 	mailSyncMu sync.Mutex
+	// mailLeftOut is what buildMailConfig last left out, so it is logged
+	// once (mailsync.go).
+	mailLeftOutMu sync.Mutex
+	mailLeftOut   string
 	// mailHealth caches the outbound port check of MailHealth.
 	mailHealth mailHealthState
 	// setupHosts knows which names for setting up mail programs point

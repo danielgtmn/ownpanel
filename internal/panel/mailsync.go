@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -118,10 +119,29 @@ func (s *Service) buildMailConfig(ctx context.Context) (*config.Config, error) {
 			cfg.Aliases = append(cfg.Aliases, config.Alias{Address: a.LocalPart + "@" + a.Domain, Targets: a.Targets})
 		}
 	}
+	// One domain, mailbox or alias the mail service would refuse must not
+	// stop the push for everyone: it is left out or cut down, and logged.
+	s.logLeftOut(cfg.DropInvalid())
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("the mail configuration is not valid: %w", err)
 	}
 	return cfg, nil
+}
+
+// logLeftOut logs what buildMailConfig left out of the configuration, once
+// for as long as it stays the same (the configuration is built on every
+// round of the background loop and for the status).
+func (s *Service) logLeftOut(notes []string) {
+	key := strings.Join(notes, "\n")
+	s.mailLeftOutMu.Lock()
+	defer s.mailLeftOutMu.Unlock()
+	if key == s.mailLeftOut {
+		return
+	}
+	s.mailLeftOut = key
+	for _, n := range notes {
+		slog.Error("mail configuration: left out of the push", "what", n)
+	}
 }
 
 // mailSync pushes the configuration to the mail service when it differs

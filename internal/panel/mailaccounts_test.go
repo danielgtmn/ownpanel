@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/store"
 )
 
 func activityText(t *testing.T, w *mailWorld) string {
@@ -394,5 +395,93 @@ func TestLongStandaloneDomain(t *testing.T) {
 	}
 	if o := pushedDomain(t, cfg, "bobsite.example.com").Organisation; o != "" {
 		t.Fatalf("standalone pushed as %q", o)
+	}
+}
+
+// TestAppPasswordEventOverLimit: an app password the mail service reports
+// for a mailbox that already has the most it may have (created in the
+// panel at the same time) is not recorded, but its revision is, and the
+// push still works for everyone.
+func TestAppPasswordEventOverLimit(t *testing.T) {
+	ctx := context.Background()
+	w := newMailWorld(t)
+	svc := w.svc
+	box, _ := svc.store.Mailbox(ctx, w.bobBox)
+	for i := 0; i < config.MaxAppPasswords; i++ {
+		if _, err := svc.CreateAppPassword(ctx, bob, w.bobBox, "Device"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key, _ := svc.appPasswordKey(ctx)
+	id, secret, _ := config.NewAppPassword()
+	w.mail.set(func(f *fakeMail) {
+		f.events = []config.Event{{ID: 1, At: w.now, Kind: config.EventAppPasswordCreated, StorageID: box.StorageID,
+			Account: &config.AccountChange{Revision: 1, AppPassword: &config.AppPassword{
+				ID: id, Name: "One too many", MAC: config.AppPasswordMAC(key, box.StorageID, id, secret), Created: w.now}}}}
+	})
+	if err := svc.recordMailEvents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if aps, _ := svc.store.AppPasswords(ctx, w.bobBox); len(aps) != config.MaxAppPasswords {
+		t.Fatalf("%d app passwords", len(aps))
+	}
+	got, _ := svc.store.Mailbox(ctx, w.bobBox)
+	if got.Revision != 1 {
+		t.Fatalf("revision %d", got.Revision)
+	}
+	if !strings.Contains(activityText(t, w), "not taken: the mailbox has the most app passwords it may have") {
+		t.Fatalf("not noted: %s", activityText(t, w))
+	}
+	if pm := pushedMailbox(t, w.mail.last(), "info@bobsite.example.com"); pm.Revision != 1 || len(pm.AppPasswords) != config.MaxAppPasswords {
+		t.Fatalf("pushed revision %d, %d app passwords", pm.Revision, len(pm.AppPasswords))
+	}
+}
+
+// TestBuildMailConfigSkipsBadMailbox: data of one mailbox or domain that
+// the mail service would refuse never stops the push for everyone; it is
+// left out or cut down, with a log line.
+func TestBuildMailConfigSkipsBadMailbox(t *testing.T) {
+	ctx := context.Background()
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(old)
+	w := newMailWorld(t)
+	svc := w.svc
+	key, _ := svc.appPasswordKey(ctx)
+	box, _ := svc.store.Mailbox(ctx, w.bobBox)
+	for i := 0; i < config.MaxAppPasswords+3; i++ {
+		id, secret, _ := config.NewAppPassword()
+		if _, err := svc.store.CreateAppPassword(ctx, store.AppPassword{ID: id, MailboxID: box.ID, Name: "Device",
+			MAC: config.AppPasswordMAC(key, box.StorageID, id, secret)}, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A mailbox whose stored hash is damaged.
+	_, err := svc.store.CreateMailbox(ctx, store.Mailbox{StorageID: newStorageID(), Domain: "bobsite.example.com", LocalPart: "broken",
+		PasswordHash: "not-a-hash", SendPerHour: 1, SendPerDay: 1}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.mailSync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cfg := w.mail.last()
+	if pm := pushedMailbox(t, cfg, "info@bobsite.example.com"); len(pm.AppPasswords) != config.MaxAppPasswords {
+		t.Fatalf("%d app passwords pushed", len(pm.AppPasswords))
+	}
+	pushedMailbox(t, cfg, "root@rootsite.example.com")
+	for _, m := range cfg.Mailboxes {
+		if m.Address == "broken@bobsite.example.com" {
+			t.Fatal("broken mailbox pushed")
+		}
+	}
+	if !strings.Contains(logs.String(), "broken@bobsite.example.com") || !strings.Contains(logs.String(), "info@bobsite.example.com") {
+		t.Fatalf("not logged: %s", logs.String())
+	}
+	// The status still compares the same configuration.
+	st, err := svc.MailStatus(ctx, admin)
+	if err != nil || !st.InSync {
+		t.Fatalf("status %+v %v", st, err)
 	}
 }

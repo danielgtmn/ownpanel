@@ -548,7 +548,7 @@ func (s *Service) applyAccountEvent(ctx context.Context, e config.Event) (bool, 
 	default:
 		return false, nil
 	}
-	r, err := s.store.ApplyMailboxChange(ctx, e.StorageID, mc)
+	r, err := s.store.ApplyMailboxChange(ctx, e.StorageID, mc, config.MaxAppPasswords)
 	if err != nil || !r.Applied {
 		return false, err
 	}
@@ -557,6 +557,9 @@ func (s *Service) applyAccountEvent(ctx context.Context, e config.Event) (bool, 
 	}
 	if r.Overridden {
 		detail = strings.TrimSpace(detail + " (not taken: changed in the panel at the same time)")
+	}
+	if r.TooManyAppPasswords {
+		detail = strings.TrimSpace(detail + " (not taken: the mailbox has the most app passwords it may have)")
 	}
 	addr := r.Mailbox.LocalPart + "@" + r.Mailbox.Domain
 	s.record(ctx, Actor{Name: addr}, "mail."+e.Kind, addr, detail)

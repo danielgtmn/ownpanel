@@ -276,14 +276,20 @@ type MailboxChangeResult struct {
 	Overridden bool
 	// Revoked is the app password that was removed (RevokeAppPassword).
 	Revoked *AppPassword
+	// TooManyAppPasswords is set when AddAppPassword was not recorded
+	// because the mailbox has the most app passwords it may have (one was
+	// created in the panel at the same time). The revision is recorded
+	// all the same, so the mail service drops its copy.
+	TooManyAppPasswords bool
 }
 
 // ApplyMailboxChange records a change of the mailbox with storageID if its
-// revision is newer than the mailbox's. The password, display name and
+// revision is newer than the mailbox's. An added app password is not
+// recorded when the mailbox has maxAppPasswords already (<= 0: no limit). The password, display name and
 // AppPasswordsOnly are taken only when the panel did not set them itself
 // at or after ch.At (seconds); app passwords are always added or removed.
 // The mailbox's revision becomes ch.Revision either way.
-func (s *Store) ApplyMailboxChange(ctx context.Context, storageID string, ch MailboxChange) (MailboxChangeResult, error) {
+func (s *Store) ApplyMailboxChange(ctx context.Context, storageID string, ch MailboxChange, maxAppPasswords int) (MailboxChangeResult, error) {
 	var r MailboxChangeResult
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		m, err := scanMailbox(tx.QueryRow(`SELECT `+mailboxCols+mailboxFrom+` WHERE m.storage_id = ?`, storageID))
@@ -319,7 +325,13 @@ func (s *Store) ApplyMailboxChange(ctx context.Context, storageID string, ch Mai
 		if ch.AddAppPassword != nil {
 			a := *ch.AddAppPassword
 			a.MailboxID = m.ID
-			if err := insertAppPassword(tx, a, s.now(), 0); err != nil && !errors.Is(err, ErrConflict) {
+			var n int
+			if err := tx.QueryRow(`SELECT count(*) FROM mailbox_app_passwords WHERE mailbox_id = ?`, m.ID).Scan(&n); err != nil {
+				return err
+			}
+			if maxAppPasswords > 0 && n >= maxAppPasswords {
+				r.TooManyAppPasswords = true
+			} else if err := insertAppPassword(tx, a, s.now(), 0); err != nil && !errors.Is(err, ErrConflict) {
 				return err
 			}
 		}

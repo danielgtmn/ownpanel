@@ -276,36 +276,13 @@ func (c *Config) Validate() error {
 	}
 	domains := map[string]bool{}
 	for _, d := range c.Domains {
-		if !ValidDomain(d.Name) {
-			return fmt.Errorf("domain %q is not valid", d.Name)
+		if err := validateDomain(d); err != nil {
+			return err
 		}
 		if domains[d.Name] {
 			return fmt.Errorf("domain %q is listed twice", d.Name)
 		}
 		domains[d.Name] = true
-		active := 0
-		selectors := map[string]bool{}
-		for _, k := range d.DKIM {
-			if !selectorRe.MatchString(k.Selector) || selectors[k.Selector] {
-				return fmt.Errorf("domain %s: DKIM selector %q is not valid or listed twice", d.Name, k.Selector)
-			}
-			selectors[k.Selector] = true
-			if _, err := ParseDKIMKey(k.PrivateKeyPEM); err != nil {
-				return fmt.Errorf("domain %s: DKIM key %s: %v", d.Name, k.Selector, err)
-			}
-			if k.Active {
-				active++
-			}
-		}
-		if len(d.DKIM) > 0 && active != 1 {
-			return fmt.Errorf("domain %s: exactly one DKIM key must be active", d.Name)
-		}
-		if d.SendPerHour < 0 {
-			return fmt.Errorf("domain %s: negative send limit", d.Name)
-		}
-		if d.Organisation != "" && !ValidOrganisation(d.Organisation) {
-			return fmt.Errorf("domain %s: organisation %q is not valid", d.Name, d.Organisation)
-		}
 	}
 	if c.AppPasswordKey != "" {
 		if k, err := hex.DecodeString(c.AppPasswordKey); err != nil || len(k) != AppPasswordKeyBytes || strings.ToLower(c.AppPasswordKey) != c.AppPasswordKey {
@@ -316,8 +293,8 @@ func (c *Config) Validate() error {
 	storage := map[string]bool{}
 	appIDs := map[string]bool{}
 	for _, m := range c.Mailboxes {
-		if !ValidAddress(m.Address) {
-			return fmt.Errorf("mailbox address %q is not valid", m.Address)
+		if err := validateMailbox(m); err != nil {
+			return err
 		}
 		_, d, _ := SplitAddress(m.Address)
 		if !domains[d] {
@@ -327,19 +304,10 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("address %s is used twice", m.Address)
 		}
 		addresses[m.Address] = true
-		if !ValidStorageID(m.StorageID) || storage[m.StorageID] {
+		if storage[m.StorageID] {
 			return fmt.Errorf("mailbox %s: storage id is not valid or used twice", m.Address)
 		}
 		storage[m.StorageID] = true
-		if !passwd.WellFormed(m.PasswordHash) {
-			return fmt.Errorf("mailbox %s: password hash is not an argon2id hash", m.Address)
-		}
-		if m.QuotaBytes < 0 || m.SendPerHour < 0 || m.SendPerDay < 0 || m.Revision < 0 {
-			return fmt.Errorf("mailbox %s: negative limit", m.Address)
-		}
-		if !ValidDisplayName(m.DisplayName) {
-			return fmt.Errorf("mailbox %s: the display name is not valid", m.Address)
-		}
 		if len(m.AppPasswords) > MaxAppPasswords {
 			return fmt.Errorf("mailbox %s: more than %d app passwords", m.Address, MaxAppPasswords)
 		}
@@ -347,32 +315,27 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("mailbox %s: app passwords need an app password key", m.Address)
 		}
 		for _, ap := range m.AppPasswords {
-			if !ValidAppPasswordID(ap.ID) || appIDs[ap.ID] {
-				return fmt.Errorf("mailbox %s: app password id %q is not valid or used twice", m.Address, ap.ID)
+			if err := validateAppPassword(ap); err != nil || appIDs[ap.ID] {
+				if err == nil {
+					err = fmt.Errorf("app password id %q is not valid or used twice", ap.ID)
+				}
+				return fmt.Errorf("mailbox %s: %w", m.Address, err)
 			}
 			appIDs[ap.ID] = true
-			if !macRe.MatchString(ap.MAC) || ap.Name == "" || !ValidDisplayName(ap.Name) {
-				return fmt.Errorf("mailbox %s: app password %s is not valid", m.Address, ap.ID)
-			}
 		}
 	}
 	for _, a := range c.Aliases {
-		l, d, ok := SplitAddress(a.Address)
-		if !ok || (l != "*" && !ValidLocalPart(l)) || !domains[d] {
+		_, d, _ := SplitAddress(a.Address)
+		if err := validateAlias(a); err != nil {
+			return err
+		}
+		if !domains[d] {
 			return fmt.Errorf("alias %q is not valid or its domain is not configured", a.Address)
 		}
 		if addresses[a.Address] {
 			return fmt.Errorf("address %s is used twice", a.Address)
 		}
 		addresses[a.Address] = true
-		if len(a.Targets) == 0 || len(a.Targets) > MaxTargets {
-			return fmt.Errorf("alias %s needs 1 to %d targets", a.Address, MaxTargets)
-		}
-		for _, t := range a.Targets {
-			if !ValidAddress(t) {
-				return fmt.Errorf("alias %s: target %q is not a valid address", a.Address, t)
-			}
-		}
 	}
 	if c.PostmasterAddress != "" {
 		if _, err := mail.ParseAddress(c.PostmasterAddress); err != nil || !ValidAddress(c.PostmasterAddress) {
@@ -394,6 +357,221 @@ func (c *Config) Validate() error {
 		return errors.New("junk score out of range")
 	}
 	return nil
+}
+
+// validateDomain checks one domain on its own.
+func validateDomain(d Domain) error {
+	if !ValidDomain(d.Name) {
+		return fmt.Errorf("domain %q is not valid", d.Name)
+	}
+	if err := validateDKIM(d.DKIM); err != nil {
+		return fmt.Errorf("domain %s: %w", d.Name, err)
+	}
+	if d.SendPerHour < 0 {
+		return fmt.Errorf("domain %s: negative send limit", d.Name)
+	}
+	if d.Organisation != "" && !ValidOrganisation(d.Organisation) {
+		return fmt.Errorf("domain %s: organisation %q is not valid", d.Name, d.Organisation)
+	}
+	return nil
+}
+
+func validateDKIMKey(k DKIMKey) error {
+	if !selectorRe.MatchString(k.Selector) {
+		return fmt.Errorf("DKIM selector %q is not valid or listed twice", k.Selector)
+	}
+	if _, err := ParseDKIMKey(k.PrivateKeyPEM); err != nil {
+		return fmt.Errorf("DKIM key %s: %v", k.Selector, err)
+	}
+	return nil
+}
+
+func validateDKIM(keys []DKIMKey) error {
+	active := 0
+	selectors := map[string]bool{}
+	for _, k := range keys {
+		if selectors[k.Selector] {
+			return fmt.Errorf("DKIM selector %q is not valid or listed twice", k.Selector)
+		}
+		if err := validateDKIMKey(k); err != nil {
+			return err
+		}
+		selectors[k.Selector] = true
+		if k.Active {
+			active++
+		}
+	}
+	if len(keys) > 0 && active != 1 {
+		return errors.New("exactly one DKIM key must be active")
+	}
+	return nil
+}
+
+// validateMailbox checks one mailbox on its own, without its app
+// passwords and without what depends on the others.
+func validateMailbox(m Mailbox) error {
+	if !ValidAddress(m.Address) {
+		return fmt.Errorf("mailbox address %q is not valid", m.Address)
+	}
+	if !ValidStorageID(m.StorageID) {
+		return fmt.Errorf("mailbox %s: storage id is not valid or used twice", m.Address)
+	}
+	if !passwd.WellFormed(m.PasswordHash) {
+		return fmt.Errorf("mailbox %s: password hash is not an argon2id hash", m.Address)
+	}
+	if m.QuotaBytes < 0 || m.SendPerHour < 0 || m.SendPerDay < 0 || m.Revision < 0 {
+		return fmt.Errorf("mailbox %s: negative limit", m.Address)
+	}
+	if !ValidDisplayName(m.DisplayName) {
+		return fmt.Errorf("mailbox %s: the display name is not valid", m.Address)
+	}
+	return nil
+}
+
+func validateAppPassword(ap AppPassword) error {
+	if !ValidAppPasswordID(ap.ID) {
+		return fmt.Errorf("app password id %q is not valid or used twice", ap.ID)
+	}
+	if !macRe.MatchString(ap.MAC) || ap.Name == "" || !ValidDisplayName(ap.Name) {
+		return fmt.Errorf("app password %s is not valid", ap.ID)
+	}
+	return nil
+}
+
+// validateAlias checks one alias on its own, without its domain.
+func validateAlias(a Alias) error {
+	l, _, ok := SplitAddress(a.Address)
+	if !ok || (l != "*" && !ValidLocalPart(l)) {
+		return fmt.Errorf("alias %q is not valid or its domain is not configured", a.Address)
+	}
+	if len(a.Targets) == 0 || len(a.Targets) > MaxTargets {
+		return fmt.Errorf("alias %s needs 1 to %d targets", a.Address, MaxTargets)
+	}
+	for _, t := range a.Targets {
+		if !ValidAddress(t) {
+			return fmt.Errorf("alias %s: target %q is not a valid address", a.Address, t)
+		}
+	}
+	return nil
+}
+
+// DropInvalid takes out of c, or cuts down, every domain, mailbox and alias
+// that Validate would refuse, so that the data of one of them never stops
+// the configuration of everyone from being loaded. It returns what it did,
+// one line each, without secrets. What concerns the whole service
+// (hostname, certificates, keys, filter, limits, postmaster) is left to
+// Validate.
+//
+//   - A domain with an invalid name, listed twice or with a negative limit
+//     is left out, and with it its mailboxes and aliases. Invalid DKIM keys
+//     are left out; if then not exactly one is active, the domain is pushed
+//     without DKIM keys. An invalid organisation id makes it stand alone.
+//   - A mailbox that is not valid on its own, or whose address or storage id
+//     is used twice, is left out. An invalid display name is removed.
+//     Invalid app passwords and ids used twice are left out, and beyond
+//     MaxAppPasswords the newest ones (the list is oldest first).
+//   - An alias that is not valid or whose address is used twice is left
+//     out; invalid targets are left out, beyond MaxTargets the last ones.
+func (c *Config) DropInvalid() []string {
+	var out []string
+	note := func(format string, args ...any) { out = append(out, fmt.Sprintf(format, args...)) }
+
+	domains := map[string]bool{}
+	keptDomains := make([]Domain, 0, len(c.Domains))
+	for _, d := range c.Domains {
+		if !ValidDomain(d.Name) || domains[d.Name] || d.SendPerHour < 0 {
+			note("domain %q left out: not valid or listed twice", d.Name)
+			continue
+		}
+		if d.Organisation != "" && !ValidOrganisation(d.Organisation) {
+			note("domain %s: organisation id not valid; it stands alone", d.Name)
+			d.Organisation = ""
+		}
+		if validateDKIM(d.DKIM) != nil {
+			keys := make([]DKIMKey, 0, len(d.DKIM))
+			selectors := map[string]bool{}
+			for _, k := range d.DKIM {
+				if err := validateDKIMKey(k); err != nil || selectors[k.Selector] {
+					note("domain %s: DKIM key %q left out", d.Name, k.Selector)
+					continue
+				}
+				selectors[k.Selector] = true
+				keys = append(keys, k)
+			}
+			if validateDKIM(keys) != nil {
+				note("domain %s: no single active DKIM key; mail is sent without a DKIM signature", d.Name)
+				keys = []DKIMKey{}
+			}
+			d.DKIM = keys
+		}
+		domains[d.Name] = true
+		keptDomains = append(keptDomains, d)
+	}
+	c.Domains = keptDomains
+
+	addresses := map[string]bool{}
+	storage := map[string]bool{}
+	appIDs := map[string]bool{}
+	keptMailboxes := make([]Mailbox, 0, len(c.Mailboxes))
+	for _, m := range c.Mailboxes {
+		if !ValidDisplayName(m.DisplayName) {
+			note("mailbox %q: display name not valid; removed", m.Address)
+			m.DisplayName = ""
+		}
+		_, d, _ := SplitAddress(m.Address)
+		if err := validateMailbox(m); err != nil || !domains[d] || addresses[m.Address] || storage[m.StorageID] {
+			note("mailbox %q left out: not valid, its domain left out, or its address or storage id used twice", m.Address)
+			continue
+		}
+		addresses[m.Address], storage[m.StorageID] = true, true
+		if len(m.AppPasswords) > 0 && c.AppPasswordKey == "" {
+			note("mailbox %s: app passwords left out: no app password key", m.Address)
+			m.AppPasswords = nil
+		}
+		if len(m.AppPasswords) > 0 {
+			aps := make([]AppPassword, 0, min(len(m.AppPasswords), MaxAppPasswords))
+			for _, ap := range m.AppPasswords {
+				if validateAppPassword(ap) != nil || appIDs[ap.ID] {
+					note("mailbox %s: app password %q left out: not valid or its id used twice", m.Address, ap.ID)
+					continue
+				}
+				if len(aps) == MaxAppPasswords {
+					note("mailbox %s: app password %q left out: more than %d", m.Address, ap.ID, MaxAppPasswords)
+					continue
+				}
+				appIDs[ap.ID] = true
+				aps = append(aps, ap)
+			}
+			m.AppPasswords = aps
+		}
+		keptMailboxes = append(keptMailboxes, m)
+	}
+	c.Mailboxes = keptMailboxes
+
+	keptAliases := make([]Alias, 0, len(c.Aliases))
+	for _, a := range c.Aliases {
+		targets := make([]string, 0, min(len(a.Targets), MaxTargets))
+		for _, t := range a.Targets {
+			switch {
+			case !ValidAddress(t):
+				note("alias %q: target %q left out: not a valid address", a.Address, t)
+			case len(targets) == MaxTargets:
+				note("alias %q: target %q left out: more than %d", a.Address, t, MaxTargets)
+			default:
+				targets = append(targets, t)
+			}
+		}
+		a.Targets = targets
+		_, d, _ := SplitAddress(a.Address)
+		if validateAlias(a) != nil || !domains[d] || addresses[a.Address] {
+			note("alias %q left out: not valid, its domain left out, or its address used twice", a.Address)
+			continue
+		}
+		addresses[a.Address] = true
+		keptAliases = append(keptAliases, a)
+	}
+	c.Aliases = keptAliases
+	return out
 }
 
 // Hash is a fingerprint of the configuration: the panel compares it with
