@@ -174,7 +174,7 @@ There are three ways, all ending in the same steps: look up the release, downloa
 
 ### In the panel
 
-**Settings → Updates** shows the installed version and channel, the newest version of each channel with a link to its release notes, and a button **Update to vX.Y.Z**. After you confirm, the page shows the progress; the panel restarts in the middle, the page waits for it and reloads itself with the new version. Switching to the other channel works the same way; if that would install an older version (e.g. from a nightly build back to the last stable release), the panel says so and asks again.
+**Settings → Updates** shows the installed version and channel, the newest version of each channel with a link to its release notes, and a button **Update to vX.Y.Z**. After you confirm, the page shows the progress; the panel restarts in the middle, the page waits for it and reloads itself with the new version. Other open tabs of the panel reload themselves too as soon as they hear from it, before asking you to sign in again. Switching to the other channel works the same way; if that would install an older version (e.g. from a nightly build back to the last stable release), the panel says so and asks again.
 
 The panel looks for new versions on GitHub at most every 30 minutes. If GitHub cannot be reached it says so, and nothing else is affected. **Check for updates** looks right away (at most once a minute) and the page shows when it last looked.
 
