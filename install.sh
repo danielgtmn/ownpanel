@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs ownpanel (ownpaneld and Caddy as systemd services) on Debian 12+ or
+# Installs ownpanel (ownpaneld, its mail service and Caddy as systemd services) on Debian 12+ or
 # Ubuntu 22.04+ (amd64, arm64). Run it again to upgrade in place.
 #
 #   curl -fsSL https://raw.githubusercontent.com/danielgtmn/ownpanel/main/install.sh | sudo bash
@@ -40,12 +40,14 @@ RELEASE_FILE=$ETC/release
 SETUP_CODE=$DATA/setup-code
 # Requests from the panel to the root-side updater (see ownpanel-update).
 UPDATE_DIR=$DATA/update
-DEFAULT_ARGS="-tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock"
-SERVICES=(ownpanel-caddy ownpaneld)
+MAIL_DATA=/var/lib/ownpanel-mail
+MAIL_ADMIN_ARG="-mail-admin unix:///run/ownpanel-mail/admin.sock"
+DEFAULT_ARGS="-tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock $MAIL_ADMIN_ARG"
+SERVICES=(ownpanel-caddy ownpanel-mail ownpaneld)
 UPDATE_UNITS=(ownpanel-update.service ownpanel-update.path ownpanel-update.timer)
 # Files of a release, relative to its directory.
 RELEASE_FILES=(ownpaneld caddy VERSION install.sh update.sh
-  deploy/ownpaneld.service deploy/ownpanel-caddy.service deploy/caddy-bootstrap.json
+  deploy/ownpaneld.service deploy/ownpanel-caddy.service deploy/ownpanel-mail.service deploy/caddy-bootstrap.json
   deploy/ownpanel-update deploy/ownpanel-update.service deploy/ownpanel-update.path deploy/ownpanel-update.timer)
 
 usage() {
@@ -66,8 +68,9 @@ Options:
   --from-dir DIR            install from an unpacked release directory instead of downloading
   -y, --yes                 do not ask for confirmation (only --purge asks)
   --uninstall               stop and remove services and binaries; keeps data and settings
-  --purge                   with --uninstall: also delete /var/lib/ownpanel, /etc/ownpanel
-                            and the users ownpanel and caddy
+  --purge                   with --uninstall: also delete /var/lib/ownpanel, /var/lib/ownpanel-mail
+                            (all stored mail), /etc/ownpanel and the users ownpanel,
+                            ownpanel-mail and caddy
   -h, --help                show this help
 
 Options given on an upgrade replace the stored ones; everything else in
@@ -538,6 +541,10 @@ choose_settings() {
   done
 
   new_args=$base
+  # Installs from before the mail service do not pass its socket yet.
+  if [ -z "$(flag_values "$new_args" mail-admin)" ]; then
+    new_args="$new_args $MAIL_ADMIN_ARG"
+  fi
   if [ ${#ips[@]} -gt 0 ]; then
     new_args="$(without_flag "$new_args" server-ip) -server-ip $(IFS=,; echo "${ips[*]}")"
   fi
@@ -568,13 +575,21 @@ version=$new_version
 EOF
 }
 
-# Something other than our Caddy on port 80 or 443 stops sites from working.
+# Something other than our Caddy on port 80 or 443 stops sites from working;
+# another mail server on the mail ports stops ownpanel's mail service. Only a
+# warning: the panel shows a busy port under Mail health, and updates must
+# never stop because of it (many servers run a local mailer for cron).
 check_ports() {
   command -v ss >/dev/null || return 0
   local busy
   busy=$(ss -Hltnp '( sport = :80 or sport = :443 )' 2>/dev/null | grep -v '"caddy"' || true)
   if [ -n "$busy" ]; then
     warn "another program listens on port 80 or 443; Caddy cannot serve your sites until it is stopped:"
+    printf '%s\n' "$busy" >&2
+  fi
+  busy=$(ss -Hltnp '( sport = :25 or sport = :465 or sport = :587 or sport = :993 )' 2>/dev/null | grep -v '"ownpaneld"' || true)
+  if [ -n "$busy" ]; then
+    warn "another program listens on a mail port (25, 465, 587 or 993); ownpanel's e-mail cannot use it until that program is stopped (e.g. systemctl disable --now exim4 or postfix):"
     printf '%s\n' "$busy" >&2
   fi
   if [ "$installed" = 0 ] && [ -e "$BIN/caddy" ]; then
@@ -593,8 +608,12 @@ plan_changes() {
     [ -n "$old_channel" ] && [ "$old_channel" != "$channel" ] && changes+=("channel $old_channel -> $channel")
     cmp -s "$src/ownpaneld" "$BIN/ownpaneld" || [ "$old_version" != "$new_version" ] || changes+=("ownpaneld binary replaced")
     cmp -s "$src/caddy" "$BIN/caddy" || changes+=("Caddy $(caddy_version "$BIN/caddy") -> $(caddy_version "$src/caddy")")
-    for f in ownpaneld.service ownpanel-caddy.service "${UPDATE_UNITS[@]}"; do
-      cmp -s "$src/deploy/$f" "$UNITS/$f" || changes+=("unit file $f updated")
+    for f in ownpaneld.service ownpanel-caddy.service ownpanel-mail.service "${UPDATE_UNITS[@]}"; do
+      if [ ! -f "$UNITS/$f" ]; then
+        changes+=("unit file $f added")
+      else
+        cmp -s "$src/deploy/$f" "$UNITS/$f" || changes+=("unit file $f updated")
+      fi
     done
     for f in install.sh update.sh deploy/ownpanel-update; do
       cmp -s "$src/$f" "$LIB/${f#deploy/}" || changes+=("$LIB/${f#deploy/} updated")
@@ -614,11 +633,16 @@ install_files() {
   id -u caddy >/dev/null 2>&1 || useradd --system --home "$DATA/caddy-home" --shell /usr/sbin/nologin caddy
   id -u ownpanel >/dev/null 2>&1 || useradd --system --home "$DATA" --shell /usr/sbin/nologin ownpanel
   usermod -a -G caddy ownpanel
+  # The mail service runs as its own user; ownpaneld reaches its admin socket
+  # through the group ownpanel-mail (see ownpanel-mail.service). The mail data
+  # in $MAIL_DATA stays 0700, so the membership grants nothing else.
+  id -u ownpanel-mail >/dev/null 2>&1 || useradd --system --user-group --home "$MAIL_DATA" --shell /usr/sbin/nologin ownpanel-mail
+  usermod -a -G ownpanel-mail ownpanel
 
-  [ "$installed" = 1 ] && systemctl stop ownpaneld ownpanel-caddy 2>/dev/null || true
+  [ "$installed" = 1 ] && systemctl stop ownpaneld ownpanel-mail ownpanel-caddy 2>/dev/null || true
 
   install -m 0755 "$src/ownpaneld" "$src/caddy" "$BIN/"
-  install -m 0644 "$src/deploy/ownpaneld.service" "$src/deploy/ownpanel-caddy.service" "$UNITS/"
+  install -m 0644 "$src/deploy/ownpaneld.service" "$src/deploy/ownpanel-caddy.service" "$src/deploy/ownpanel-mail.service" "$UNITS/"
   # The updater: update.sh, the installer it loads, and the root-side worker
   # that carries out update requests from the panel. install replaces files
   # by unlinking them first, so an update.sh running this installer is not
@@ -656,11 +680,13 @@ install_files() {
 
 open_firewall() {
   if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; then
-    ufw allow 80/tcp >/dev/null
-    ufw allow 443/tcp >/dev/null
-    say "Firewall (ufw): allowed 80/tcp and 443/tcp."
+    local p
+    for p in 80 443 25 465 587 993; do ufw allow "$p/tcp" >/dev/null; done
+    say "Firewall (ufw): allowed 80, 443 (web) and 25, 465, 587, 993 (e-mail) over TCP."
   else
-    say "Firewall: make sure 80/tcp and 443/tcp are open to the Internet (no ufw active here)."
+    say "Firewall: make sure 80, 443 (web) and 25, 465, 587, 993 (e-mail) are open over TCP"
+    say "to the Internet (no ufw active here). Many hosting providers block port 25 until"
+    say "you ask them to unblock it; see the E-Mail page of the ownpanel wiki."
   fi
   say "Do not open port 8600; the panel only listens on this machine."
 }
@@ -776,7 +802,8 @@ do_install() {
   step "Plan ($os_name, linux/$arch)"
   printf '  %s\n' "${changes[@]}"
   [ "$installed" = 0 ] && say "  settings: OWNPANELD_ARGS=$new_args"
-  [ "$installed" = 1 ] && say "  Your data in $DATA is kept. Both services restart; sites are offline for a few seconds."
+  [ "$installed" = 1 ] && say "  Your data in $DATA is kept. The services restart; sites are offline for a few seconds" &&
+    say "  (other mail servers retry delivery on their own)."
   check_ports
 
   install_files
@@ -788,7 +815,8 @@ do_install() {
 do_uninstall() {
   if [ "$opt_purge" = 1 ]; then
     say "This removes ownpanel and DELETES all its data: every site, the database,"
-    say "certificates and the secret key in $DATA, and the settings in $ETC."
+    say "certificates and the secret key in $DATA, all stored mail in $MAIL_DATA,"
+    say "and the settings in $ETC."
     if [ "$opt_yes" = 0 ]; then
       interactive || die "--purge deletes all data; add --yes to confirm (questions are not asked when the script is piped in)"
       confirm "Delete everything?" n || die "cancelled; nothing was changed"
@@ -804,7 +832,7 @@ do_uninstall() {
       say "Removed $s"
     fi
   done
-  for s in ownpaneld ownpanel-caddy; do
+  for s in ownpaneld ownpanel-mail ownpanel-caddy; do
     if [ -f "$UNITS/$s.service" ]; then
       systemctl disable --now "$s" 2>&1 | grep -v '^Removed' || true
       rm -f "$UNITS/$s.service"
@@ -824,15 +852,16 @@ do_uninstall() {
   fi
 
   if [ "$opt_purge" = 1 ]; then
-    rm -rf "$DATA" "$ETC" /var/lib/ownpanel-update
-    say "Deleted $DATA and $ETC"
+    rm -rf "$DATA" "$MAIL_DATA" "$ETC" /var/lib/ownpanel-update
+    say "Deleted $DATA, $MAIL_DATA and $ETC"
     if id -u ownpanel >/dev/null 2>&1; then userdel ownpanel && say "Removed user ownpanel"; fi
+    if id -u ownpanel-mail >/dev/null 2>&1; then userdel ownpanel-mail && say "Removed user ownpanel-mail"; fi
     # The caddy user may belong to a Caddy package; only remove ours.
     if [ "$(getent passwd caddy | cut -d: -f6)" = "$DATA/caddy-home" ]; then
       userdel caddy && say "Removed user caddy"
     fi
   else
-    say "Kept your data in $DATA and the settings in $ETC."
+    say "Kept your data in $DATA and $MAIL_DATA and the settings in $ETC."
     say "Installing again picks them up; --uninstall --purge deletes them."
   fi
   say "Firewall rules and DNS records were not changed."

@@ -44,7 +44,17 @@ type Options struct {
 	// IPRedirect makes the PanelIPs routes redirect to https://PanelDomain
 	// instead of serving the panel (once set up with a domain).
 	IPRedirect bool
+
+	// MailHost, when set, is the mail server's name: plain HTTP requests
+	// for it below /.well-known/acme-challenge/ are passed to the panel,
+	// which obtains the mail server's certificate itself. The route goes
+	// into the server on the HTTP port only, never into a host matcher on
+	// the HTTPS port, so Caddy does not request a certificate for it.
+	MailHost string
 }
+
+// acmeChallengePath is where ACME HTTP-01 challenges are answered.
+const acmeChallengePath = "/.well-known/acme-challenge/*"
 
 // Site is what the web server needs to know about one site.
 type Site struct {
@@ -137,11 +147,26 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 		"handle": []obj{{"handler": "static_response", "status_code": 404, "body": "Unknown site.\n"}},
 	})
 
+	var mailRoute obj
+	if opts.MailHost != "" {
+		if opts.PanelUpstream == "" {
+			return nil, fmt.Errorf("mail host %s needs the panel's address", opts.MailHost)
+		}
+		mailRoute = obj{
+			"match":    []obj{{"host": []string{opts.MailHost}, "path": []string{acmeChallengePath}}},
+			"handle":   []obj{proxyTo(opts.PanelUpstream)},
+			"terminal": true,
+		}
+	}
+
 	server := withTimeouts(obj{"routes": routes})
 	servers := obj{"sites": server}
 	if opts.TLSMode == TLSOff {
 		server["listen"] = []string{fmt.Sprintf(":%d", opts.HTTPPort)}
 		server["automatic_https"] = obj{"disable": true}
+		if mailRoute != nil {
+			server["routes"] = append([]obj{mailRoute}, routes...)
+		}
 	} else {
 		server["listen"] = []string{fmt.Sprintf(":%d", opts.HTTPSPort)}
 		if len(ips) > 0 {
@@ -163,6 +188,16 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 				})
 			}
 			servers["ip_http"] = withTimeouts(obj{"listen": []string{fmt.Sprintf(":%d", opts.HTTPPort)}, "routes": redirects})
+		}
+		// One server on the HTTP port: the mail host's challenges go first
+		// into the existing one, or into one of their own. Caddy adds its
+		// HTTP->HTTPS redirects (and answers its own challenges) there too.
+		if mailRoute != nil {
+			if httpServer, ok := servers["ip_http"].(obj); ok {
+				httpServer["routes"] = append([]obj{mailRoute}, httpServer["routes"].([]obj)...)
+			} else {
+				servers["mail_http"] = withTimeouts(obj{"listen": []string{fmt.Sprintf(":%d", opts.HTTPPort)}, "routes": []obj{mailRoute}})
+			}
 		}
 	}
 

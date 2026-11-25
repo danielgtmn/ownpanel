@@ -59,6 +59,20 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 
 **Zone:** `{"connection_id", "connection_name", "name", "read_only", "nameservers": [..]}`. `nameservers` are the provider's nameservers to enter at the domain's registrar.
 
+**Mail domain:** `{"domain", "owner", "active", "activated_at", "checked_at", "problem", "mailboxes", "aliases", "dkim_selector", "dkim_record", "created_at"}`. `active` turns true once the domain's MX record (asked at its authoritative nameservers) points to the mail host; only then is mail received for it. `problem` says why it is not active yet. `dkim_record` is the public TXT value for `<dkim_selector>._domainkey.<domain>`; the private key is never returned.
+
+**Mailbox:** `{"id", "address", "domain", "local_part", "owner", "quota_bytes", "send_per_hour", "send_per_day", "created_at", "usage"}`. `quota_bytes` `0` means no limit. `usage` is `{"used_bytes", "messages", "blocked", "blocked_reason", "blocked_at"}` as reported by the mail service, or `null` when it could not be asked. Password hashes are never returned.
+
+**Alias:** `{"id", "address", "domain", "local_part", "catch_all", "targets": [..], "owner", "created_at"}`. Local part `*` is the domain's catch-all.
+
+**Mail status:** `{"mail_host", "service_set_up", "reachable", "in_sync", "problem", "listeners": [{"name", "address", "listening", "error"}], "certificate_expires", "queue_length", "client": {"server", "imap_port", "smtp_port", "smtp_starttls_port", "user_name_is_address"}}`.
+
+**Mail records:** `{"domain", "mail_host", "records": [{"kind", "type", "name", "fqdn", "want", "found", "status", "note"}], "can_apply", "connection_id", "zone", "apply_note"}`. `kind` is `mx`, `spf`, `dkim`, `dmarc`, `srv-submissions` or `srv-imaps`; `found` are the values the domain's authoritative nameservers answer; `status` is `ok`, `missing`, `different`, `conflict` (needs a person, never changed automatically: several SPF or DMARC records, SPF with `+all`/`?all` or more than 10 lookups) or `unknown` (the lookup failed). For SPF, `want` is the existing record with `mx` added; an existing DMARC record is `ok` whatever it says. `can_apply` is true when the domain lies in a zone of exactly one of **your own** DNS connections with write access (never someone else's, also not for admins) and you may write; `connection_id` and `zone` then name it and `name` is relative to that zone, otherwise `connection_id` is `0`, `zone` is empty, `name` is relative to the mail domain and `apply_note` says why.
+
+**Mail record changes:** `{"changes": [{"kind", "type", "name", "action", "old", "new", "needs_confirm", "note"}], "applied"}`. `action` is `create`, `replace`, `add` (to other TXT values, which stay), `keep` or `skip`. Only replacing MX records that do not point to the mail host has `needs_confirm` (mail would move here). `applied` is `false` only when such a change was not confirmed; nothing was written then.
+
+**Mail health:** `{"mail_host", "checks": [{"id", "state", "found", "expected", "detail"}]}` with the checks `service`, `mail_host_dns`, `ptr`, `outbound_port`, `certificate`, `listeners`, `postmaster`, `blocklists` in this order; `state` is `ok`, `warning`, `error` or `unknown` (a lookup or the mail service could not be asked). IPv4 addresses without a PTR naming `mail_host` are an error, IPv6 ones a warning. The outbound port check is reused for 10 minutes.
+
 ## Routes
 
 "Anyone" means any authenticated person or token. "Write" means a token needs `write` access; limited tokens work only on their sites. "Admin" means the admin role with a password sign-in or an unrestricted `write` token. Details are in [[Users and Access|Users-and-Access]].
@@ -102,7 +116,7 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 | `GET` | `/api/users` | admin | | list of User |
 | `POST` | `/api/users` | admin | `{"name", "password", "role"}` | `201` User |
 | `PUT` | `/api/users/{id}` | admin | `{"role"}` and/or `{"password"}` | User |
-| `DELETE` | `/api/users/{id}` | admin | | `204`; `409` for the last admin or a user who owns sites |
+| `DELETE` | `/api/users/{id}` | admin | | `204`; `409` for the last admin or a user who owns sites, domain redirects or mail domains |
 | `GET` | `/api/activity?limit=50` | admin | `limit` 1 to 200 (default 50) | list of Activity, newest first |
 
 ### Server and DNS
@@ -136,6 +150,42 @@ Entries of `GET /api/dns/zones` are Zone objects, with `nameservers`.
 | `POST` | `/api/redirects` | write; domain redirects need a token that is not limited to sites | `{"source_domain", "source_path", "target", "code", "keep_path", "keep_query"}` | `201` Redirect |
 | `PUT` | `/api/redirects/{id}` | write; owner, admin, or (path redirects) whoever may change the site | same as `POST` | Redirect |
 | `DELETE` | `/api/redirects/{id}` | same | | `204` |
+
+### E-mail
+
+"Mail read" is anyone except tokens limited to sites; "mail write" additionally needs write access and a person (a password sign-in or a `write` token not limited to sites). Members see and change the mail domains they own; admins all. See [[E-Mail architecture|E-Mail-Architecture]].
+
+| Method | Path | Who | Request | Response |
+|---|---|---|---|---|
+| `GET` | `/api/mail/status` | mail read | | Mail status (includes the settings for mail programs) |
+| `POST` | `/api/mail/checks/outbound` | admin (also read-only token) | | `{"ok", "target", "error"}`: whether the mail service can reach port 25 elsewhere |
+| `GET` | `/api/mail/health` | admin (also read-only token) | | Mail health; checks run in parallel within 10 seconds |
+| `GET` | `/api/mail/domains` | mail read | | list of Mail domain you may see, sorted by name |
+| `POST` | `/api/mail/domains` | mail write; members only for a domain of their site or domain redirect, or in a zone of their own DNS connection; admins any domain | `{"domain": "example.com"}` | `201` Mail domain. `400` if another person's site or redirect uses the domain (not naming it) or for the mail host itself, `403` for a domain you do not control, `409` if e-mail is already enabled for it or you have 20 mail domains |
+| `GET` | `/api/mail/domains/{domain}` | mail read, own | | Mail domain |
+| `POST` | `/api/mail/domains/{domain}/check` | mail read, own | | Mail domain, after looking at the MX record again (at most every 5 seconds) |
+| `POST` | `/api/mail/domains/{domain}/activate` | admin (signed in or unrestricted write token) | | Mail domain, receiving mail at once without waiting for its MX record (for a gateway in front of the server, split DNS or tests) |
+| `GET` | `/api/mail/domains/{domain}/records` | mail read, own | | Mail records; `409` until the mail host is set |
+| `POST` | `/api/mail/domains/{domain}/records` | mail write, own, and the domain's zone in exactly one of your own DNS connections | `{"confirm": false}` (empty body is the same) | Mail record changes. Without `confirm`, nothing is written if a change needs confirmation; otherwise every `create`, `replace` and `add` is written through the DNS provider and the domain is checked for activation. `409` if no (or more than one) own connection holds the zone or the mail host is not set |
+| `DELETE` | `/api/mail/domains/{domain}` | mail write, own | `{"confirm": "<domain>"}` | `204`; deletes all mailboxes, aliases and stored mail of the domain |
+| `GET` | `/api/mail/domains/{domain}/mailboxes` | mail read, own | | list of Mailbox, in the order they were created |
+| `POST` | `/api/mail/domains/{domain}/mailboxes` | mail write, own | `{"local_part", "password", "quota_bytes", "send_per_hour", "send_per_day"}` (limits optional) | `201` Mailbox. Defaults: 5 GiB, 100 per hour, 500 per day; members can only choose lower values. `409` if the address is taken (also by an alias) or you have 200 mailboxes |
+| `GET` | `/api/mail/mailboxes` | mail read | | list of every Mailbox you may see |
+| `GET` | `/api/mail/mailboxes/{id}` | mail read, own | | Mailbox |
+| `PATCH` | `/api/mail/mailboxes/{id}` | mail write, own; only admins raise values | `{"quota_bytes", "send_per_hour", "send_per_day"}`, missing fields stay | Mailbox |
+| `POST` | `/api/mail/mailboxes/{id}/password` | mail write, own | `{"password"}` (10 to 200 characters) | `204` |
+| `POST` | `/api/mail/mailboxes/{id}/unblock` | admin | | `204`; lifts a sending block of the mail service |
+| `DELETE` | `/api/mail/mailboxes/{id}` | mail write, own | | `204`; the mail service deletes the stored mail (retried later if it cannot be reached) |
+| `GET` | `/api/mail/domains/{domain}/aliases` | mail read, own | | list of Alias |
+| `POST` | `/api/mail/domains/{domain}/aliases` | mail write, own | `{"local_part", "targets": ["a@example.com", …]}` | `201` Alias. 1 to 50 targets; `409` if the address is a mailbox or an alias already |
+| `GET` | `/api/mail/aliases` | mail read | | list of every Alias you may see |
+| `GET` | `/api/mail/aliases/{id}` | mail read, own | | Alias |
+| `PUT` | `/api/mail/aliases/{id}` | mail write, own | same as `POST` | Alias (stays in its domain) |
+| `DELETE` | `/api/mail/aliases/{id}` | mail write, own | | `204` |
+
+A change that is saved but could not be sent to the mail service answers `502` with "saved, but the mail server could not be updated yet"; the panel keeps retrying. Without a mail service (`-mail-admin` not set) everything is stored, and `GET /api/mail/status` says the service is not set up.
+
+The panel settings (`GET`/`PUT /api/settings`, admin) also carry `mail_host`, `mail_host_locked` and `postmaster_address`; see [[Configuration|Configuration]]. The spam checks are `mail_blocklists` (list of DNS blocklist zones, at most 10; `[]` turns them off; zones with a Spamhaus key, `<key>.….dq.spamhaus.net`, are answered as `••••.….dq.spamhaus.net`, and sending the masked name back keeps the stored zone), `mail_blocklists_default` (`true` uses the default list and ignores `mail_blocklists`), `mail_junk_score` (1–50, default 5) and `mail_greylisting` (default `false`). Omitted fields stay unchanged.
 
 For record routes, `{name}` is `@` for the zone itself, and `{type}` is for example `A` or `TXT`. See [[DNS|DNS]] for what is allowed.
 

@@ -93,7 +93,7 @@ for arch in "${arches[@]}"; do
   fi
   tar -xzf "$caddy_tgz" -C "$stage" caddy
 
-  cp deploy/ownpaneld.service deploy/ownpanel-caddy.service deploy/caddy-bootstrap.json \
+  cp deploy/ownpaneld.service deploy/ownpanel-caddy.service deploy/ownpanel-mail.service deploy/caddy-bootstrap.json \
     deploy/ownpanel-update deploy/ownpanel-update.service deploy/ownpanel-update.path deploy/ownpanel-update.timer \
     "$stage/deploy/"
   cp install.sh update.sh LICENSE README.md "$stage/"

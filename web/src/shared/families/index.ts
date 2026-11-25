@@ -12,6 +12,7 @@ export {
   type FamilySite,
   type FamilyStatus,
   type PointStates,
+  type SourceMailDomain,
   type SourceRedirect,
   type SourceSite,
   type SourceZone,

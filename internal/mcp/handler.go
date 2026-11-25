@@ -29,8 +29,9 @@ const instructions = "ownpanel is a hosting panel for static web sites: each sit
 	"(HTML, CSS, JavaScript, images) that ownpanel serves on one or more domains with automatic HTTPS. " +
 	"Every publish creates a new version of the site and makes it live; older versions are kept and " +
 	"can be made live again with make_version_live. Use publish_files for small sites you write " +
-	"yourself and create_upload_link for large archives. Destructive tools such as delete_site " +
-	"require an explicit confirmation."
+	"yourself and create_upload_link for large archives. It also hosts e-mail: mail domains, " +
+	"mailboxes and aliases (mailbox passwords are only set in the web interface, never through " +
+	"these tools). Destructive tools such as delete_site require an explicit confirmation."
 
 type config struct {
 	panelDomain func() string
@@ -82,6 +83,7 @@ func Handler(p *panel.Service, version string, opts ...Option) http.Handler {
 	}
 	srv := newServer(p, version)
 	addRedirectTools(srv, p)
+	addMailTools(srv, p)
 	// Stateless: every request carries its own token, so there is no session
 	// to remember or to hijack.
 	sdkHandler := sdk.NewStreamableHTTPHandler(
