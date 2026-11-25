@@ -35,7 +35,7 @@ All planned work is tracked as [issues](https://github.com/danielgtmn/ownpanel/i
 
 ## Open items
 
-- **The installer and the updater have only been tested in containers,** not on a real server ([#6](https://github.com/danielgtmn/ownpanel/issues/6)). Try it on a throwaway machine first.
+- **The installer and the updater have been tested on one real server** (Ubuntu 24.04, amd64; [#6](https://github.com/danielgtmn/ownpanel/issues/6)) and in containers. Try it on a throwaway machine first.
 - **The panel stays reachable by IP address** after setup when no panel domain is set ([#33](https://github.com/danielgtmn/ownpanel/issues/33)).
 - **No per-site system users or quotas:** all site files belong to one user.
 - **Sign-in throttling** trusts `X-Forwarded-For` from local connections.
