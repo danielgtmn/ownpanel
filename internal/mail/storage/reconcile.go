@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 )
@@ -146,7 +147,8 @@ func (s *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 		// and contacts count towards the quota too.
 		if _, err := tx.Exec(`UPDATE mailboxes SET
 			used_bytes = (SELECT coalesce(sum(size), 0) FROM messages WHERE messages.storage_id = mailboxes.storage_id) +
-				(SELECT coalesce(sum(size), 0) FROM dav_objects WHERE dav_objects.storage_id = mailboxes.storage_id),
+				(SELECT coalesce(sum(size), 0) + `+strconv.Itoa(DAVObjectOverhead)+` * count(*) FROM dav_objects WHERE dav_objects.storage_id = mailboxes.storage_id) +
+				(SELECT `+strconv.Itoa(DAVDeletionOverhead)+` * count(*) FROM dav_deletions d JOIN dav_collections c ON c.id = d.collection_id WHERE c.storage_id = mailboxes.storage_id),
 			messages = (SELECT count(*) FROM messages WHERE messages.storage_id = mailboxes.storage_id)`); err != nil {
 			return err
 		}

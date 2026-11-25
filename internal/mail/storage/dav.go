@@ -35,8 +35,10 @@ import (
 // Collection ids are AUTOINCREMENT, never reused: a calendar deleted and
 // created again never accepts the old one's ETags or sync tokens.
 //
-// DAV data counts towards the mailbox's quota: its bytes are part of
-// mailboxes.used_bytes (not of messages).
+// DAV data counts towards the mailbox's quota: its bytes, plus
+// DAVObjectOverhead per object and DAVDeletionOverhead per kept deletion
+// record, are part of mailboxes.used_bytes (not of messages). At most
+// maxDAVDeletions deletion records are kept per collection.
 
 const davSchema = `
 CREATE TABLE IF NOT EXISTS dav_collections (
@@ -93,7 +95,22 @@ const (
 	DAVDeletionRetention = 90 * 24 * time.Hour
 	// MaxDAVName bounds the name of a collection or object (a URL segment).
 	MaxDAVName = 255
+	// DAVObjectOverhead and DAVDeletionOverhead are counted towards the
+	// quota for every object and every kept deletion record, for their
+	// index rows.
+	DAVObjectOverhead   = 512
+	DAVDeletionOverhead = 128
 )
+
+// maxDAVDeletions bounds the deletion records kept per collection; the
+// oldest go first and sync tokens from before them are refused (a
+// variable for tests).
+var maxDAVDeletions = 10_000
+
+// davUsageSQL is the quota use of a mailbox's calendars and contacts (one
+// parameter: the storage id).
+var davUsageSQL = `(SELECT coalesce(sum(size), 0) + ` + strconv.Itoa(DAVObjectOverhead) + ` * count(*) FROM dav_objects WHERE storage_id = ?) +
+	(SELECT ` + strconv.Itoa(DAVDeletionOverhead) + ` * count(*) FROM dav_deletions d JOIN dav_collections c ON c.id = d.collection_id WHERE c.storage_id = ?)`
 
 // Errors of DAV storage.
 var (
@@ -431,7 +448,10 @@ func (s *Store) DeleteDAVCollection(ctx context.Context, id string, coll int64) 
 	}
 	return s.write(ctx, func(tx *sql.Tx, ch *changes) error {
 		var bytes int64
-		if err := tx.QueryRow(`SELECT coalesce(sum(size), 0) FROM dav_objects WHERE collection_id = ? AND storage_id = ?`, coll, id).Scan(&bytes); err != nil {
+		if err := tx.QueryRow(`SELECT
+			(SELECT coalesce(sum(size), 0) + ? * count(*) FROM dav_objects WHERE collection_id = ? AND storage_id = ?) +
+			(SELECT ? * count(*) FROM dav_deletions WHERE collection_id = ?)`,
+			DAVObjectOverhead, coll, id, DAVDeletionOverhead, coll).Scan(&bytes); err != nil {
 			return err
 		}
 		res, err := tx.Exec(`DELETE FROM dav_collections WHERE id = ? AND storage_id = ?`, coll, id)
@@ -626,7 +646,15 @@ func (s *Store) PutDAVObject(ctx context.Context, c DAVCollection, name string, 
 				return ErrTooManyObjects
 			}
 		}
-		if grow := size - old.Size; quota > 0 && grow > 0 {
+		var deleted int
+		if err := tx.QueryRow(`SELECT count(*) FROM dav_deletions WHERE collection_id = ? AND name = ?`, c.ID, name).Scan(&deleted); err != nil {
+			return err
+		}
+		grow := size - old.Size - int64(deleted)*DAVDeletionOverhead
+		if !exists {
+			grow += DAVObjectOverhead
+		}
+		if quota > 0 && grow > 0 {
 			var used int64
 			if err := tx.QueryRow(`SELECT used_bytes FROM mailboxes WHERE storage_id = ?`, id).Scan(&used); err != nil {
 				return err
@@ -662,7 +690,7 @@ func (s *Store) PutDAVObject(ctx context.Context, c DAVCollection, name string, 
 		if _, err := tx.Exec(`UPDATE dav_collections SET seq = ? WHERE id = ?`, seq, c.ID); err != nil {
 			return err
 		}
-		if err := addUsage(tx, id, size-old.Size, 0); err != nil {
+		if err := addUsage(tx, id, grow, 0); err != nil {
 			return err
 		}
 		obj = DAVObject{CollectionID: c.ID, StorageID: id, Name: name, UID: info.UID, Component: info.Component, Size: size,
@@ -710,11 +738,40 @@ func (s *Store) DeleteDAVObject(ctx context.Context, c DAVCollection, name strin
 		if _, err := tx.Exec(`UPDATE dav_collections SET seq = ? WHERE id = ?`, seq, c.ID); err != nil {
 			return err
 		}
-		if err := addUsage(tx, id, -o.Size, 0); err != nil {
+		trimmed, err := trimDeletions(tx, c.ID)
+		if err != nil {
+			return err
+		}
+		if err := addUsage(tx, id, -o.Size-DAVObjectOverhead+int64(1-trimmed)*DAVDeletionOverhead, 0); err != nil {
 			return err
 		}
 		return s.trashFile(ch, filepath.Join(s.collectionDir(id, c.ID), o.file), id)
 	})
+}
+
+// trimDeletions keeps at most maxDAVDeletions deletion records of a
+// collection: the oldest go, and pruned_seq rises so that sync tokens from
+// before them are refused. It returns how many went.
+func trimDeletions(tx *sql.Tx, coll int64) (int, error) {
+	var n int
+	if err := tx.QueryRow(`SELECT count(*) FROM dav_deletions WHERE collection_id = ?`, coll).Scan(&n); err != nil {
+		return 0, err
+	}
+	extra := n - maxDAVDeletions
+	if extra <= 0 {
+		return 0, nil
+	}
+	var upTo int64
+	if err := tx.QueryRow(`SELECT max(seq) FROM (SELECT seq FROM dav_deletions WHERE collection_id = ? ORDER BY seq LIMIT ?)`, coll, extra).Scan(&upTo); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(`DELETE FROM dav_deletions WHERE collection_id = ? AND seq <= ?`, coll, upTo); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(`UPDATE dav_collections SET pruned_seq = max(pruned_seq, ?) WHERE id = ?`, upTo, coll); err != nil {
+		return 0, err
+	}
+	return extra, nil
 }
 
 // DAVChanges returns what changed in a collection since a sync token:
@@ -759,15 +816,42 @@ func (s *Store) PruneDAVDeletions(ctx context.Context) error {
 			WHERE id IN (SELECT collection_id FROM dav_deletions WHERE at < ?)`, cutoff, cutoff); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`DELETE FROM dav_deletions WHERE at < ?`, cutoff)
-		return err
+		rows, err := tx.Query(`SELECT c.storage_id, count(*) FROM dav_deletions d JOIN dav_collections c ON c.id = d.collection_id
+			WHERE d.at < ? GROUP BY c.storage_id`, cutoff)
+		if err != nil {
+			return err
+		}
+		freed := map[string]int64{}
+		for rows.Next() {
+			var sid string
+			var n int64
+			if err := rows.Scan(&sid, &n); err != nil {
+				rows.Close()
+				return err
+			}
+			freed[sid] = n
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM dav_deletions WHERE at < ?`, cutoff); err != nil {
+			return err
+		}
+		for sid, n := range freed {
+			if err := addUsage(tx, sid, -n*DAVDeletionOverhead, 0); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
-// DAVUsage is the size of a mailbox's calendars and address books.
+// DAVUsage is what a mailbox's calendars and address books count towards
+// its quota: their size and the overhead of objects and deletion records.
 func (s *Store) DAVUsage(ctx context.Context, id string) (int64, error) {
 	var n int64
-	err := s.rdb.QueryRowContext(ctx, `SELECT coalesce(sum(size), 0) FROM dav_objects WHERE storage_id = ?`, id).Scan(&n)
+	err := s.rdb.QueryRowContext(ctx, `SELECT `+davUsageSQL, id, id).Scan(&n)
 	return n, err
 }
 

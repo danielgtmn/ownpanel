@@ -531,9 +531,12 @@ Synchronizer add-on.
   Deletions older than 90 days are pruned hourly (`dav.Handler.Run`); a
   token older than the kept deletions, of another collection or epoch, or
   not ours answers `403 valid-sync-token`.
-- **Quota:** DAV bytes are added to `mailboxes.used_bytes` (not to the
-  message count), so IMAP appends, delivery and the self-service page see
-  them; a PUT that would pass the quota answers `507` with
+- **Quota:** DAV bytes, plus 512 bytes per object and 128 per kept
+  deletion record for their index rows, are added to
+  `mailboxes.used_bytes` (not to the message count). At most 10 000
+  deletion records are kept per collection; trimming the oldest raises
+  `pruned_seq`, so older tokens get `403 valid-sync-token`. IMAP
+  appends, delivery and the self-service page see the total; a PUT that would pass the quota answers `507` with
   `quota-not-exceeded`. `quota-used-bytes`/`quota-available-bytes` on homes
   and collections.
 - **Default collections** ("Calendar" `calendar`, "Contacts" `contacts`)

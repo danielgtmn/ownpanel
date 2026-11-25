@@ -745,16 +745,16 @@ func TestQuota(t *testing.T) {
 	big := event("b", "DESCRIPTION:"+strings.Repeat("x", 2000)+"\r\n")
 	expect(t, e.as("PUT", calPath+"b.ics", nil, big), http.StatusInsufficientStorage, "quota-not-exceeded")
 	u, err := e.srv.Store().Usage(context.Background(), mailtest.ID('a'))
-	if err != nil || u.Bytes != int64(len(event("a", ""))) {
+	if err != nil || u.Bytes != int64(len(event("a", "")))+storage.DAVObjectOverhead {
 		t.Fatalf("usage %+v %v", u, err)
 	}
 	ms := parseMS(t, e.as("PROPFIND", calPath, map[string]string{"Depth": "0"}, propfindCollections))
 	if v := mustProp(t, ms.get(calPath), "quota-used-bytes"); v != fmt.Sprint(u.Bytes) {
 		t.Fatalf("quota-used-bytes %s", v)
 	}
-	// Deleting gives the room back.
+	// Deleting gives the room back, but for the record of the deletion.
 	expect(t, e.as("DELETE", calPath+"a.ics", nil, ""), http.StatusNoContent)
-	if u, _ := e.srv.Store().Usage(context.Background(), mailtest.ID('a')); u.Bytes != 0 {
+	if u, _ := e.srv.Store().Usage(context.Background(), mailtest.ID('a')); u.Bytes != storage.DAVDeletionOverhead {
 		t.Fatalf("usage after delete %+v", u)
 	}
 }

@@ -117,7 +117,7 @@ func TestDAVReconcileAndDelete(t *testing.T) {
 		t.Fatalf("%+v %v", objs, err)
 	}
 	u, _ := s.Usage(ctx, idA)
-	if u.Bytes != int64(len(davEvent("b"))+len(davEvent("lost"))) {
+	if u.Bytes != int64(len(davEvent("b"))+len(davEvent("lost"))+2*DAVObjectOverhead) {
 		t.Fatalf("usage %+v", u)
 	}
 	if _, err := os.Stat(filepath.Join(collDir, "2.0123456789abcdef")); !os.IsNotExist(err) {
