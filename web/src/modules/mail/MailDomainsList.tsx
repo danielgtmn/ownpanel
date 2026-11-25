@@ -55,6 +55,7 @@ export function MailDomainsList() {
         ) : null}
         {domains.status === 'ready' && list.length === 0 ? (
           <EmptyState
+            inSection
             title="No e-mail yet"
             description="Turn on e-mail for one of your domains to create mailboxes like info@ or you@ on it."
             action={addButton}
