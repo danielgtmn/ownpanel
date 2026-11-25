@@ -23,7 +23,9 @@ function Overview() {
         description="Manage the DNS records of your domains, so visitors reach your sites and your email keeps working."
       />
       <ConnectionsSection connections={connections} onChanged={changed} />
-      <ZonesSection zones={zones} hasConnections={connections.status === 'ready' && connections.data.length > 0} />
+      {connections.status === 'ready' && connections.data.length === 0 ? null : (
+        <ZonesSection zones={zones} hasConnections={connections.status === 'ready' && connections.data.length > 0} />
+      )}
     </>
   )
 }

@@ -145,7 +145,7 @@ function Loaded({ connectionId, zoneInfo, records, reload }: LoadedProps) {
       ) : null}
       <Section title="Records" description="These records tell the internet where your domain's sites and email live.">
         {sorted.length === 0 ? (
-          <EmptyState title="No records yet" description="Add a record to get started." />
+          <EmptyState inSection title="No records yet" description="Add a record to get started." />
         ) : (
           <ul className="record-list" aria-label={`Records of ${zone}`}>
             {sorted.map((set) => (
