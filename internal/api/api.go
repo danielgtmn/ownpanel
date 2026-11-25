@@ -37,9 +37,17 @@ const (
 // headers without a CORS preflight, which this API never allows.
 const CSRFHeader = "X-Ownpanel-Request"
 
+// BuildHeader carries Server.Build on every API answer, signed in or not:
+// the web app reloads itself when it changes (after an update), so nobody
+// keeps working with an outdated page.
+const BuildHeader = "X-Ownpanel-Build"
+
 // Server exposes the panel service over HTTP.
 type Server struct {
 	Panel *panel.Service
+	// Build names the embedded web app (webui.Build); "" sends no
+	// BuildHeader.
+	Build string
 }
 
 // routeGroups registers every group of routes. A new group is a new file
@@ -69,7 +77,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such API endpoint")
 	})
-	return apiHeaders(s.authenticate(mux))
+	return apiHeaders(s.Build, s.authenticate(mux))
 }
 
 // apiContentSecurityPolicy is sent with every API answer. They are data,
@@ -77,10 +85,13 @@ func (s *Server) Handler() http.Handler {
 // them. A route with a better reason (the site icon) sets its own.
 const apiContentSecurityPolicy = "default-src 'none'; frame-ancestors 'none'"
 
-func apiHeaders(next http.Handler) http.Handler {
+func apiHeaders(build string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", apiContentSecurityPolicy)
+		if build != "" {
+			h.Set(BuildHeader, build)
+		}
 		h.Set("X-Content-Type-Options", "nosniff")
 		next.ServeHTTP(w, r)
 	})
