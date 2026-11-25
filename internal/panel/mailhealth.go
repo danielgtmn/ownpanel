@@ -161,7 +161,7 @@ func (s *Service) MailHealth(ctx context.Context, a Actor) (MailHealth, error) {
 	run(6, func() MailHealthCheck { return s.healthListeners(st) })
 	run(7, func() MailHealthCheck { return s.healthPostmaster(ctx) })
 	run(8, func() MailHealthCheck { return s.healthBlocklists(s.store.Settings(ctx)) })
-	run(9, func() MailHealthCheck { return s.healthSelfService(host) })
+	run(9, func() MailHealthCheck { return s.healthSelfService(host, st) })
 	wg.Wait()
 	return out, nil
 }
@@ -170,8 +170,9 @@ const noService = "The mail service is not set up on this server."
 
 // healthSelfService: mailbox users get their own sign-in page (and later
 // calendars and contacts) on the mail host, which needs a name of its own
-// (wiki/Groupware-Architecture.md, decision 7).
-func (s *Service) healthSelfService(host string) MailHealthCheck {
+// (wiki/Groupware-Architecture.md, decision 7). The mail service runs on
+// without its web socket when it cannot set it up; st says so.
+func (s *Service) healthSelfService(host string, st *config.Status) MailHealthCheck {
 	if s.mail == nil {
 		return check("", HealthUnknown, noService)
 	}
@@ -182,6 +183,13 @@ func (s *Service) healthSelfService(host string) MailHealthCheck {
 		return check("", HealthWarning, "Choose a mail server name different from the panel's address to give mailbox users their own sign-in page.")
 	case selfServiceNoSocket:
 		return check("", HealthWarning, "Mailbox users have no sign-in page of their own on this server yet. Updating ownpanel adds it.")
+	}
+	if st != nil && st.Web != nil && !st.Web.Listening {
+		c := check("", HealthError, "Mailbox users cannot sign in at "+host+": the mail service could not set up its part of the sign-in page. Mail itself works; restarting the mail service tries again.")
+		if st.Web.Error != "" {
+			c.Found = []string{st.Web.Error}
+		}
+		return c
 	}
 	if s.opts.TLSMode != caddy.TLSOff && len(s.mailCertificates()) == 0 {
 		return check("", HealthWarning, "Mailbox users get their own sign-in page at "+host+" once the mail server has a certificate.")

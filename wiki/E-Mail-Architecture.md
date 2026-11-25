@@ -80,7 +80,7 @@ mode 0750, socket 0660; the user `ownpanel` is a member of the group
 | Endpoint | Purpose |
 |---|---|
 | `POST /load` | Replace the configuration. Refused if invalid, or if a `storage_id` is already bound to another address. |
-| `GET /status` | Config hash, listeners, certificate expiry, queue size, per-mailbox usage and block state. |
+| `GET /status` | Config hash, listeners, the web socket (`web`, when set up), certificate expiry, queue size, per-mailbox usage and block state. |
 | `GET /events?after=<id>` | Events since a cursor: mailbox blocked, sign-in failures from many addresses, delivery problems. |
 | `POST /mailboxes/{storage_id}/unblock` | Lift a sending block. |
 | `DELETE /mailboxes/{storage_id}` | Delete a mailbox's data. |

@@ -55,6 +55,7 @@ type fakeMail struct {
 	unblocked []string
 	events    []config.Event
 	usage     []config.MailboxStatus
+	web       *config.Listener
 }
 
 func (f *fakeMail) Load(_ context.Context, cfg *config.Config) error {
@@ -77,7 +78,7 @@ func (f *fakeMail) Status(context.Context) (config.Status, error) {
 	if f.statusErr != nil {
 		return config.Status{}, f.statusErr
 	}
-	return config.Status{ConfigHash: f.hash, Mailboxes: f.usage, Listeners: []config.Listener{{Name: "smtp", Address: ":25", Listening: true}}}, nil
+	return config.Status{ConfigHash: f.hash, Mailboxes: f.usage, Listeners: []config.Listener{{Name: "smtp", Address: ":25", Listening: true}}, Web: f.web}, nil
 }
 
 func (f *fakeMail) Events(_ context.Context, after int64) ([]config.Event, error) {

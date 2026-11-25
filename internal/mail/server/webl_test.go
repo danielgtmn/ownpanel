@@ -77,20 +77,23 @@ func TestWebSocket(t *testing.T) {
 	}
 }
 
+// A web socket that cannot be set up never takes mail down: the service
+// runs without it and its status says why.
 func TestWebSocketRefusesOtherFiles(t *testing.T) {
 	sock := socketDir(t)
 	path := filepath.Join(sock, "web.sock")
 	os.WriteFile(path, []byte("x"), 0o600)
-	srv, err := New(Options{DataDir: t.TempDir(), AdminSocket: filepath.Join(sock, "a.sock"), WebSocket: path})
+	in := run(t, t.TempDir(), sock, func(o *Options) { o.WebSocket = path })
+	defer in.stop(t)
+	st, err := in.client.Status(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "not a socket") {
-		t.Fatalf("run: %v", err)
+	if st.Web == nil || st.Web.Listening || !strings.Contains(st.Web.Error, "not a socket") || st.Web.Address != path {
+		t.Fatalf("web socket status %+v", st.Web)
 	}
-	// The admin socket was cleaned up again.
-	if _, err := os.Lstat(filepath.Join(sock, "a.sock")); !os.IsNotExist(err) {
-		t.Fatalf("admin socket left behind: %v", err)
+	if b, _ := os.ReadFile(path); string(b) != "x" {
+		t.Fatal("the other file was replaced")
 	}
 }
 
@@ -107,12 +110,19 @@ func TestWebSocketGroup(t *testing.T) {
 	})
 	in.stop(t)
 
-	srv, err := New(Options{DataDir: t.TempDir(), AdminSocket: filepath.Join(sock, "b.sock"),
-		WebSocket: filepath.Join(webDir, "web.sock"), WebGroup: "no-such-group-ownpanel"})
+	// An unknown group: mail runs on, without the web socket.
+	in = run(t, t.TempDir(), sock, func(o *Options) {
+		o.WebSocket, o.WebGroup = filepath.Join(webDir, "web.sock"), "no-such-group-ownpanel"
+	})
+	defer in.stop(t)
+	st, err := in.client.Status(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "no-such-group-ownpanel") {
-		t.Fatalf("unknown group: %v", err)
+	if st.Web == nil || st.Web.Listening || !strings.Contains(st.Web.Error, "no-such-group-ownpanel") {
+		t.Fatalf("unknown group: %+v", st.Web)
+	}
+	if _, err := os.Lstat(filepath.Join(webDir, "web.sock")); !os.IsNotExist(err) {
+		t.Fatalf("web socket made anyway: %v", err)
 	}
 }

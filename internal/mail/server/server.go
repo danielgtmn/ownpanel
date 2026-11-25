@@ -130,8 +130,9 @@ type Server struct {
 
 	admin   *http.Server
 	adminLn net.Listener
-	web     *http.Server // nil without Options.WebSocket
+	web     *http.Server // nil without Options.WebSocket or when it failed
 	webLn   net.Listener
+	webErr  string // why the web socket does not work; guarded by lisMu
 }
 
 // runtime is an immutable snapshot of the loaded configuration.
@@ -544,7 +545,7 @@ func (s *Server) event(e config.Event) {
 // Status reports the service's state.
 func (s *Server) Status(ctx context.Context) (config.Status, error) {
 	rt := s.state.Load()
-	st := config.Status{ConfigHash: rt.hash, Listeners: s.listeners(), Mailboxes: []config.MailboxStatus{}, Orphans: []string{}}
+	st := config.Status{ConfigHash: rt.hash, Listeners: s.listeners(), Web: s.webStatus(), Mailboxes: []config.MailboxStatus{}, Orphans: []string{}}
 	if len(rt.certs.certs) > 0 {
 		st.CertificateExpires = rt.certs.certs[0].Leaf.NotAfter.UTC()
 	}
@@ -598,6 +599,25 @@ func (s *Server) listeners() []config.Listener {
 	return out
 }
 
+// webStatus is the state of the web socket, nil without one.
+func (s *Server) webStatus() *config.Listener {
+	if s.opts.WebSocket == "" {
+		return nil
+	}
+	s.lisMu.Lock()
+	defer s.lisMu.Unlock()
+	return &config.Listener{Name: "web", Address: s.opts.WebSocket, Listening: s.webErr == "" && s.web != nil, Error: s.webErr}
+}
+
+// webFailed records that the web socket does not work. Mail goes on.
+func (s *Server) webFailed(err error) {
+	s.lisMu.Lock()
+	s.webErr = err.Error()
+	s.lisMu.Unlock()
+	s.log.Error("mail: running without the web socket", "err", err)
+	s.event(config.Event{Kind: config.EventListenerFailed, Detail: "sign-in page for mailbox users: " + err.Error()})
+}
+
 // Run serves the admin socket and the listeners until ctx ends, then shuts
 // down gracefully.
 func (s *Server) Run(ctx context.Context) error {
@@ -605,11 +625,10 @@ func (s *Server) Run(ctx context.Context) error {
 		s.store.Close()
 		return err
 	}
+	// The web socket is optional for mail: if it cannot be set up the
+	// service runs without it, and its status says why.
 	if err := s.listenWeb(); err != nil {
-		s.admin.Close()
-		os.Remove(s.opts.AdminSocket)
-		s.store.Close()
-		return err
+		s.webFailed(err)
 	}
 	adminDone := make(chan error, 1)
 	go func() { adminDone <- s.admin.Serve(s.adminLn) }()
@@ -641,8 +660,7 @@ func (s *Server) Run(ctx context.Context) error {
 			}
 		case err := <-webDone:
 			if !errors.Is(err, http.ErrServerClosed) {
-				s.shutdown()
-				return fmt.Errorf("web socket: %w", err)
+				s.webFailed(fmt.Errorf("web socket: %w", err))
 			}
 		case <-retry.C:
 			// A port that was busy (another mail server) may be free now.

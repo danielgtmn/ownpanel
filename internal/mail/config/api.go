@@ -312,6 +312,10 @@ type Status struct {
 	// Listeners tells per listener ("smtp", "submission", "submissions",
 	// "imaps") whether it is listening, and the error if it could not.
 	Listeners []Listener `json:"listeners"`
+	// Web is the state of the web socket (the self-service area on the
+	// mail host); nil when the service runs without one. The service runs
+	// on when it cannot be set up; Error says why.
+	Web *Listener `json:"web,omitempty"`
 	// CertificateExpires is when the first certificate expires (zero if none).
 	CertificateExpires time.Time `json:"certificate_expires"`
 	// QueueLength is the number of messages waiting to be delivered.

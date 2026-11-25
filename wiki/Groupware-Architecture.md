@@ -140,6 +140,11 @@ spike** decides library vs. own code (see [Libraries](#libraries)).
   service itself hands `/run/ownpanel-mail-web` and `web.sock` to the group
   `ownpanel-mail-web` (`-web-group`); it is a member through
   `SupplementaryGroups=`, and `caddy` is the only other member.
+- If the web socket cannot be set up (the group is missing, handing it
+  over fails, another file is in the way) or stops, the mail service logs
+  it, records a `listener.failed` event and runs on without it: SMTP and
+  IMAP never depend on it. `/status` reports it as `web` (`listening`,
+  `error`), and the Mail health check `self_service` turns into an error.
 - The panel learns the socket from `-mail-web` and adds the Caddy site only
   when `mail_host` differs from the panel domain and the certificate is
   there. Request limits in Caddy: 16 MB to the mail service, 64 KB to the

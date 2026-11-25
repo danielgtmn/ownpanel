@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/danielgtmn/ownpanel/internal/caddy"
+	"github.com/danielgtmn/ownpanel/internal/mail/config"
 )
 
 func TestMailHostHandler(t *testing.T) {
@@ -84,6 +85,21 @@ func TestMailWebSite(t *testing.T) {
 	}
 	if c := selfService(); c.State != HealthOK || !strings.Contains(c.Detail, testMailHost) {
 		t.Fatalf("ready: %+v", c)
+	}
+	// The mail service could not set up its web socket: mail runs on, the
+	// check says the sign-in page does not work and why.
+	w.mail.set(func(f *fakeMail) {
+		f.web = &config.Listener{Name: "web", Address: "/run/ownpanel-mail-web/web.sock", Error: "web socket: group ownpanel-mail-web: unknown group"}
+	})
+	if c := selfService(); c.State != HealthError || !strings.Contains(c.Detail, testMailHost) ||
+		len(c.Found) != 1 || !strings.Contains(c.Found[0], "unknown group") {
+		t.Fatalf("web socket failed: %+v", c)
+	}
+	w.mail.set(func(f *fakeMail) {
+		f.web = &config.Listener{Name: "web", Address: "/run/ownpanel-mail-web/web.sock", Listening: true}
+	})
+	if c := selfService(); c.State != HealthOK {
+		t.Fatalf("web socket back: %+v", c)
 	}
 	// The web server gets the site on the next sync.
 	if err := svc.sync(ctx); err != nil {
