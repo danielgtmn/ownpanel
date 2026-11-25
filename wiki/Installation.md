@@ -2,7 +2,7 @@
 
 This page installs ownpanel on a Linux server with systemd: one command downloads a release, checks it, installs `ownpaneld` and Caddy as services and prints how to open the panel.
 
-> The installer has been tested in systemd containers (Ubuntu 24.04, arm64), not yet on a real server. Try it on a throwaway machine first.
+> The installer, the setup steps, publishing, updates and backup/restore have been tested on a real server (Ubuntu 24.04, amd64) and in systemd containers (arm64). ownpanel is still early: try it on a throwaway machine first.
 
 ## What you need
 
@@ -115,7 +115,7 @@ Caddy's admin API is a Unix socket, never a TCP port, because on TCP every local
 
 The mail service's admin socket works the same way: `/run/ownpanel-mail/admin.sock` in a directory of the group `ownpanel-mail` (0750), socket mode 0660, and `ownpanel` is a member of that group.
 
-The units also set `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=full` and `ProtectHome=true`; Caddy gets `CAP_NET_BIND_SERVICE` to bind ports 80 and 443. Caddy is started with `--resume`, so after a restart it serves the last config until ownpaneld pushes the current one.
+Both units set `PrivateTmp`, `ProtectSystem=full` and `ProtectHome=true`; `ownpaneld.service` also sets `NoNewPrivileges`. Caddy gets `CAP_NET_BIND_SERVICE` to bind ports 80 and 443. Caddy is started with `--resume`, so after a restart it serves the last config until ownpaneld pushes the current one. `ownpanel-mail.service` is hardened further (see the unit file).
 
 ## Flags
 
@@ -174,7 +174,7 @@ There are three ways, all ending in the same steps: look up the release, downloa
 
 **Settings → Updates** shows the installed version and channel, the newest version of each channel with a link to its release notes, and a button **Update to vX.Y.Z**. After you confirm, the page shows the progress; the panel restarts in the middle, the page waits for it and reloads itself with the new version. Switching to the other channel works the same way; if that would install an older version (e.g. from a nightly build back to the last stable release), the panel says so and asks again.
 
-The panel looks for new versions on GitHub at most every 30 minutes. If GitHub cannot be reached it says so, and nothing else is affected.
+The panel looks for new versions on GitHub at most every 30 minutes. If GitHub cannot be reached it says so, and nothing else is affected. **Check for updates** looks right away (at most once a minute) and the page shows when it last looked.
 
 Updating from the panel only works for installations made with `install.sh`. In development (no `/etc/ownpanel/release`) the page explains that.
 

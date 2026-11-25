@@ -1,0 +1,20 @@
+name: Feature request
+description: An idea for ownpanel
+labels: ["type: feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to do?
+      description: The task or problem, in your own words. What do you do today instead?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could ownpanel help?
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Web / sites, E-mail, DNS, Apps, Installer and updates, Security, MCP / API, Docs, Other]

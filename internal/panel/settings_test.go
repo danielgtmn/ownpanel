@@ -127,9 +127,9 @@ func TestSettingsUpdateAppliesLiveAndPersists(t *testing.T) {
 
 	cfg := e.web.last()
 	for _, want := range []string{
-		`{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8600"}]}],"match":[{"host":["panel.example.com"]}],"terminal":true}`,
+		`{"handle":[{"handler":"reverse_proxy","transport":{"dial_timeout":"5s","protocol":"http","response_header_timeout":"10m"},"upstreams":[{"dial":"127.0.0.1:8600"}]}],"match":[{"host":["panel.example.com"]}],"terminal":true}`,
 		// Configured, detected public and loopback addresses serve the panel.
-		`{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8600"}]}],"match":[{"host":["8.8.4.4","8.8.8.8","127.0.0.1","::1","2a01:4f8::1","2a01:4f8::20"]}],"terminal":true}`,
+		`{"handle":[{"handler":"reverse_proxy","transport":{"dial_timeout":"5s","protocol":"http","response_header_timeout":"10m"},"upstreams":[{"dial":"127.0.0.1:8600"}]}],"match":[{"host":["8.8.4.4","8.8.8.8","127.0.0.1","::1","2a01:4f8::1","2a01:4f8::20"]}],"terminal":true}`,
 		`{"email":"ops@example.com","module":"acme"}`,
 		`"subjects":["8.8.4.4","8.8.8.8","127.0.0.1","::1","2a01:4f8::1","2a01:4f8::20"]`,
 	} {
@@ -193,7 +193,7 @@ func TestCompleteSetupRedirectsAddresses(t *testing.T) {
 	if done, _ := e.svc.SetupComplete(ctx); !done {
 		t.Fatal("setup must be complete")
 	}
-	if !strings.Contains(e.web.last(), `{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8600"}]}],"match":[{"host":["8.8.4.4","127.0.0.1","::1","2a01:4f8::20"]}]`) {
+	if !strings.Contains(e.web.last(), `{"handle":[{"handler":"reverse_proxy","transport":{"dial_timeout":"5s","protocol":"http","response_header_timeout":"10m"},"upstreams":[{"dial":"127.0.0.1:8600"}]}],"match":[{"host":["8.8.4.4","127.0.0.1","::1","2a01:4f8::20"]}]`) {
 		t.Fatalf("without a domain the addresses serve the panel: %s", e.web.last())
 	}
 

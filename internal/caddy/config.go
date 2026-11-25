@@ -159,7 +159,7 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 		}
 	}
 
-	server := obj{"routes": routes}
+	server := withTimeouts(obj{"routes": routes})
 	servers := obj{"sites": server}
 	if opts.TLSMode == TLSOff {
 		server["listen"] = []string{fmt.Sprintf(":%d", opts.HTTPPort)}
@@ -187,7 +187,7 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 					"terminal": true,
 				})
 			}
-			servers["ip_http"] = obj{"listen": []string{fmt.Sprintf(":%d", opts.HTTPPort)}, "routes": redirects}
+			servers["ip_http"] = withTimeouts(obj{"listen": []string{fmt.Sprintf(":%d", opts.HTTPPort)}, "routes": redirects})
 		}
 		// One server on the HTTP port: the mail host's challenges go first
 		// into the existing one, or into one of their own. Caddy adds its
@@ -196,7 +196,7 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 			if httpServer, ok := servers["ip_http"].(obj); ok {
 				httpServer["routes"] = append([]obj{mailRoute}, httpServer["routes"].([]obj)...)
 			} else {
-				servers["mail_http"] = obj{"listen": []string{fmt.Sprintf(":%d", opts.HTTPPort)}, "routes": []obj{mailRoute}}
+				servers["mail_http"] = withTimeouts(obj{"listen": []string{fmt.Sprintf(":%d", opts.HTTPPort)}, "routes": []obj{mailRoute}})
 			}
 		}
 	}
@@ -237,8 +237,49 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 	}, nil
 }
 
+// Timeouts of the HTTP servers. Sites and the panel share a server, so the
+// values must suit both: downloads of large files and uploads of archives
+// (up to 512 MB) on slow links. The idle timeouts are reset on every read
+// or write that makes progress, so only a stalled connection is cut; the
+// overall read limit bounds a client that trickles just enough to never
+// stall. There is deliberately no overall write limit: it would cut off
+// slow downloads of large files.
+const (
+	ServerReadHeaderTimeout = "10s" // all request headers
+	ServerReadIdleTimeout   = "1m"  // a request body that stops arriving
+	ServerReadTimeout       = "1h"  // a whole request (512 MB at ~1.2 Mbit/s)
+	ServerWriteIdleTimeout  = "1m"  // a client that stops reading the response
+	ServerIdleTimeout       = "2m"  // a kept-alive connection between requests
+)
+
+// Timeouts between Caddy and the panel.
+const (
+	ProxyDialTimeout = "5s"
+	// ProxyResponseHeaderTimeout counts from the moment the request,
+	// including its body, has been passed on: the panel needs it to unpack
+	// and publish an archive.
+	ProxyResponseHeaderTimeout = "10m"
+)
+
+func withTimeouts(server obj) obj {
+	server["read_header_timeout"] = ServerReadHeaderTimeout
+	server["read_idle_timeout"] = ServerReadIdleTimeout
+	server["read_timeout"] = ServerReadTimeout
+	server["write_idle_timeout"] = ServerWriteIdleTimeout
+	server["idle_timeout"] = ServerIdleTimeout
+	return server
+}
+
 func proxyTo(upstream string) obj {
-	return obj{"handler": "reverse_proxy", "upstreams": []obj{{"dial": upstream}}}
+	return obj{
+		"handler":   "reverse_proxy",
+		"upstreams": []obj{{"dial": upstream}},
+		"transport": obj{
+			"protocol":                "http",
+			"dial_timeout":            ProxyDialTimeout,
+			"response_header_timeout": ProxyResponseHeaderTimeout,
+		},
+	}
 }
 
 func redirectTo(location string) obj {

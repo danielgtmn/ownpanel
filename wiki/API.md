@@ -7,7 +7,7 @@ The panel's web interface uses the same HTTP API that scripts can use. It is ser
 | Client | How |
 |---|---|
 | Programs (scripts, CI) | `Authorization: Bearer op_…` with an access token |
-| Browsers | the session cookie `ownpanel_session`, set by `POST /api/login` or `POST /api/setup` |
+| Browsers | the session cookie `__Host-ownpanel_session` (over plain HTTP: `ownpanel_session`), set by `POST /api/login` or `POST /api/setup` |
 
 - Access tokens are described in [[Users and Access|Users-and-Access]].
 - If an `Authorization` header is present it must be `Bearer <token>`; a wrong token is refused right away with `401`. Otherwise the cookie is used. A stale cookie just means nobody is signed in.
@@ -35,7 +35,7 @@ Errors are JSON with a readable sentence:
 | `403` | known, but not allowed (read-only or site-limited token, not an admin, missing header) |
 | `404` | missing, or not visible to you (the two look the same); unknown endpoint |
 | `409` | cannot be done in the current state: name taken, nothing to go back to, last admin, user still owns sites, setup already done |
-| `429` | too many failed sign-in attempts, or Hetzner's request limit was reached |
+| `429` | too many failed sign-in attempts, too many sign-ins at the same moment, or Hetzner's request limit was reached |
 | `502` | the change is saved but the web server could not be updated yet (the loop retries), or an outside service such as Hetzner is unavailable |
 | `500` | something went wrong on the server; the details are only in the log |
 
@@ -47,7 +47,7 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 
 **User:** `{"id", "name", "role", "created_at"}`, role `"admin"` or `"member"`.
 
-**Token:** `{"id", "name", "access", "sites", "created_at", "last_used_at"}`. `sites` is `null` for all sites. Creating a token also returns `"token"` (the secret, shown once).
+**Token:** `{"id", "name", "access", "sites", "created_at", "last_used_at", "expires_at", "expired"}`. `sites` is `null` for all sites; `expires_at` is `null` for a token that never expires. Creating a token also returns `"token"` (the secret, shown once).
 
 **Activity:** `{"id", "at", "actor", "action", "target", "detail"}`.
 
@@ -86,13 +86,14 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 | `POST` | `/api/login` | open | `{"name", "password"}` | User; sets the cookie. `401` wrong credentials, `429` throttled |
 | `POST` | `/api/logout` | open | | `204`; clears the cookie |
 | `PUT` | `/api/account/password` | password sign-in | `{"current", "new"}` | `204`; ends your other sessions |
+| `POST` | `/api/account/logout-everywhere` | password sign-in | | `204`; ends all your sessions, this one included, and clears the cookie. Tokens keep working |
 
 ### Access tokens
 
 | Method | Path | Who | Request | Response |
 |---|---|---|---|---|
 | `GET` | `/api/tokens` | password sign-in | | list of Token (your own) |
-| `POST` | `/api/tokens` | password sign-in | `{"name", "access": "read" or "write", "sites": null or ["name", …]}` | `201` Token with `token` |
+| `POST` | `/api/tokens` | password sign-in | `{"name", "access": "read" or "write", "sites": null or ["name", …], "expires_in_days": null or 1 to 3650}` | `201` Token with `token`. `expires_in_days` missing or `null`: never expires |
 | `DELETE` | `/api/tokens/{id}` | password sign-in | | `204` |
 
 ### Sites
@@ -200,3 +201,5 @@ curl --fail-with-body -X POST \
 ```
 
 Use a `write` token limited to the one site, so a leaked token can publish to that site but cannot create or delete sites.
+
+The request is synchronous: the `201` answer comes after the new version is live, and its `current_release` is the new version's id. On GitHub Actions, the [[GitHub Action|GitHub-Action]] does this for you.

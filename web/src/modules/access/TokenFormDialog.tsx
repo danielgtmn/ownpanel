@@ -4,11 +4,20 @@ import { DialogClose } from '@ui-sdk/react/dialog'
 import { Field, FieldDescription, FieldError, FieldLabel } from '@ui-sdk/react/field'
 import { Input } from '@ui-sdk/react/input'
 import { Radio, RadioGroup, RadioIndicator } from '@ui-sdk/react/radio'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@ui-sdk/react/select'
 import { useState, type FormEvent } from 'react'
 import { errorMessage, listSiteNames } from '../../shared/api/index.ts'
 import { useResource } from '../../shared/hooks/index.ts'
 import { FormDialog } from '../../shared/ui/index.ts'
-import { toNewToken, validateTokenDraft, type SiteScope, type TokenDraftErrors } from './rules.ts'
+import {
+  DEFAULT_EXPIRY,
+  EXPIRY_OPTIONS,
+  toNewToken,
+  validateTokenDraft,
+  type SiteScope,
+  type TokenDraftErrors,
+  type TokenExpiry,
+} from './rules.ts'
 import type { NewToken, TokenAccess } from './types.ts'
 
 type FormErrors = TokenDraftErrors & { form?: string }
@@ -19,13 +28,14 @@ function TokenForm({ onSubmit }: { onSubmit: (token: NewToken) => Promise<void> 
   const [access, setAccess] = useState<TokenAccess>('read')
   const [scope, setScope] = useState<SiteScope>('all')
   const [picked, setPicked] = useState<string[]>([])
+  const [expiry, setExpiry] = useState<TokenExpiry>(DEFAULT_EXPIRY)
   const [errors, setErrors] = useState<FormErrors>({})
   const [busy, setBusy] = useState(false)
   const siteNames = sites.status === 'ready' ? sites.data : []
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const draft = { name, access, scope, picked }
+    const draft = { name, access, scope, picked, expiry }
     const found = validateTokenDraft(draft)
     if (found.name || found.sites) {
       setErrors(found)
@@ -147,6 +157,27 @@ function TokenForm({ onSubmit }: { onSubmit: (token: NewToken) => Promise<void> 
           {errors.sites ? <FieldError match>{errors.sites}</FieldError> : null}
         </Field>
       ) : null}
+
+      <Field name="expiry">
+        <FieldLabel>Stops working after</FieldLabel>
+        <Select value={expiry} onValueChange={(value) => value && setExpiry(value as TokenExpiry)}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {EXPIRY_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <FieldDescription>
+          {expiry === 'never'
+            ? 'Works until you delete it. A token that expires limits the damage if it leaks.'
+            : 'After that, programs using it are turned away. Create a new token then.'}
+        </FieldDescription>
+      </Field>
 
       {errors.form ? (
         <p className="form-error" role="alert">

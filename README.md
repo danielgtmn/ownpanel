@@ -71,9 +71,13 @@ locked in the panel).
   scripts and CI (`Authorization: Bearer op_…`). A token is shown once. It has
   `read` or `write` access and either covers all of the user's sites or a
   chosen list (a limited token can publish to those sites but not create or
-  delete sites). It never has more rights than its user has at that moment.
-- Sign-ins last 30 days. After 5 failed sign-ins for a name from one address
-  within 15 minutes, further attempts are refused until the window passes.
+  delete sites). It never has more rights than its user has at that moment,
+  and can expire after 30, 90 or 365 days, or never.
+- A sign-in ends after 3 days without use and at the latest after 30 days;
+  "sign out everywhere" ends all of a person's sign-ins. After 5 failed
+  sign-ins for a name from one address (or 20 for any names) within 15
+  minutes, further attempts are refused until the window passes, also across
+  restarts.
 - Every change is recorded in the activity log, with the token's name when a
   token was used.
 
@@ -113,7 +117,8 @@ made with the cookie must send `X-Ownpanel-Request: 1`.
 | `GET` `PUT` | `/api/settings` | admins: panel domain, server addresses, certificate e-mail (with `*_locked` when set by flag), detected addresses, `setup_complete`, `ip_access`; change with any of `{"panel_domain", "server_ips", "acme_email"}` |
 | `GET` | `/api/settings/checks` | admins: does the panel domain point here (`dns`), is a trusted certificate served (`certificate`)? |
 | `POST` | `/api/settings/complete` | admins: finish the setup steps |
-| `GET` | `/api/updates` | admins (signed in or unrestricted write token): installed version and channel, newest `stable`/`nightly` release, `update_available`, automatic updates, progress of a running update (`status.state`: idle, requested, running, succeeded, failed, rolled_back), `supported` |
+| `GET` | `/api/updates` | admins (signed in or unrestricted write token): installed version and channel, newest `stable`/`nightly` release, `update_available`, automatic updates, progress of a running update (`status.state`: idle, requested, running, succeeded, failed, rolled_back), `supported`, `checked_at` |
+| `POST` | `/api/updates/check` | admins: look for new releases now instead of using the 30-minute cache, at most once a minute (within it, the last result); same answer as `GET /api/updates`, whose `checked_at` tells when the last lookup was and `check_error` why it failed |
 | `POST` | `/api/updates` | admins: update with `{"channel": "stable"}` or `{"version": "v1.2.3"}` (202); an older version needs `"allow_downgrade": true` |
 | `PUT` | `/api/updates/auto` | admins: automatic updates `{"mode": "off"\|"stable"\|"nightly", "window": "03:00-05:00"}` (installed channel only) |
 | `GET` `POST` | `/api/dns/connections` | DNS connections (yours; admins see all); add with `{"provider": "hetzner", "name", "token"}` |
@@ -131,6 +136,24 @@ The daemon listens on `127.0.0.1:8600`. To reach the panel over HTTPS, set
 the panel domain in the setup steps (or start it with `-panel-domain
 panel.example.com`) and point that domain at the server: Caddy then serves
 the panel on it with an automatic certificate, like any site.
+
+## Publish from GitHub Actions
+
+A workflow that builds the site can publish it with the action in this
+repository, using a write token limited to the one site (stored as a secret):
+
+```yaml
+- uses: danielgtmn/ownpanel/actions/publish@main
+  with:
+    panel: https://panel.example.com
+    token: ${{ secrets.OWNPANEL_TOKEN }}
+    site: blog
+    path: dist
+```
+
+It packs `path`, uploads it, and sets the outputs `version` and `url`. See
+the wiki page [GitHub Action](https://github.com/danielgtmn/ownpanel/wiki/GitHub-Action)
+for examples (Vite, Astro, Hugo, Jekyll, plain HTML) and error messages.
 
 ## MCP
 

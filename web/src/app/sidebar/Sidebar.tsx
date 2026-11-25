@@ -191,7 +191,7 @@ function Rail({ tile, families, railEntries, allHref, onChangePassword, inDrawer
   const [tips] = useState(() => createTooltipController<Tip>())
   const [tileMenu] = useState(() => createMenuController<Family>())
   const [missing, setMissing] = useState<ReadonlySet<string>>(() => new Set())
-  const { user, signOut } = useSession()
+  const { user, signOut, signOutEverywhere } = useSession()
   const prefs = useRailPrefs()
   const railId = useId()
   const expanded = inDrawer || prefs.expanded
@@ -348,6 +348,7 @@ function Rail({ tile, families, railEntries, allHref, onChangePassword, inDrawer
         <MenuContent side="right" align="end">
           <MenuItem onSelect={onChangePassword}>Change password</MenuItem>
           <MenuItem onSelect={signOut}>Sign out</MenuItem>
+          <MenuItem onSelect={signOutEverywhere}>Sign out everywhere</MenuItem>
         </MenuContent>
       </Menu>
 

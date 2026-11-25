@@ -15,7 +15,7 @@ What it does today:
 
 ## Status
 
-ownpanel is **early and not production-hardened**. The core idea works for static sites, but expect rough edges. The installer has only been tested in containers, not yet on a real server (see [[Roadmap|Roadmap]]). Read [[Security|Security]] for the known gaps before you expose it to the Internet.
+ownpanel is **early and not production-hardened**. The core idea works for static sites, but expect rough edges. The installer has been tested on one real server and in containers (see [[Roadmap|Roadmap]]). Read [[Security|Security]] for the known gaps before you expose it to the Internet.
 
 **E-mail is new.** It works end to end in tests between servers, but has not run on a public server yet; see [[E-Mail|E-Mail]] for what your hosting provider must allow. **Apps are planned, not built.**
 

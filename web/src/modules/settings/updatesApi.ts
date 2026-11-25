@@ -25,6 +25,10 @@ export type UpdateInfo = {
   installed: { version: string; channel: Channel | '' }
   available: { stable: AvailableRelease | null; nightly: AvailableRelease | null }
   check_failed: boolean
+  // Why the last lookup failed; `available` then still holds the last result that worked.
+  check_error: string
+  // When the panel last looked for new versions (RFC 3339), '' if never.
+  checked_at: string
   update_available: boolean
   auto: { mode: AutoMode; window: string }
   status: UpdateStatus
@@ -35,6 +39,11 @@ export type UpdateTarget = { channel: Channel; allow_downgrade?: boolean }
 
 export function getUpdates(signal?: AbortSignal): Promise<UpdateInfo> {
   return request<UpdateInfo>('/updates', { signal })
+}
+
+// Looks for new versions now instead of using the last result. The panel looks at most once a minute.
+export function checkForUpdates(): Promise<UpdateInfo> {
+  return request<UpdateInfo>('/updates/check', { method: 'POST' })
 }
 
 export function requestUpdate(target: UpdateTarget): Promise<UpdateInfo> {

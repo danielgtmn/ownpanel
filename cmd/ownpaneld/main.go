@@ -31,6 +31,7 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/panel"
 	"github.com/danielgtmn/ownpanel/internal/secrets"
 	"github.com/danielgtmn/ownpanel/internal/store"
+	"github.com/danielgtmn/ownpanel/internal/timeouts"
 	"github.com/danielgtmn/ownpanel/internal/webui"
 )
 
@@ -218,11 +219,7 @@ func serve(args []string) error {
 	// Initial sync, then heal drift (e.g. Caddy restarted).
 	go svc.Run(ctx, *interval)
 
-	srv := &http.Server{
-		Addr:              *listen,
-		Handler:           svc.MailChallengeHandler(compose((&api.Server{Panel: svc}).Handler(), webui.Handler(webui.FS()), mcp.Handler(svc, version, mcp.WithPanelDomainFunc(svc.PanelDomain)))),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	srv := timeouts.Server(*listen, svc.MailChallengeHandler(compose((&api.Server{Panel: svc}).Handler(), webui.Handler(webui.FS()), mcp.Handler(svc, version, mcp.WithPanelDomainFunc(svc.PanelDomain)))))
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)

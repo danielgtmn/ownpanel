@@ -3,6 +3,7 @@ package panel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"regexp"
@@ -207,8 +208,10 @@ func TestLoginThrottling(t *testing.T) {
 }
 
 func TestLimiter(t *testing.T) {
-	now := time.Unix(0, 0)
-	l := newLimiter(2, time.Minute)
+	svc, _, _ := newEmptyService(t)
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0)
+	l := newLimiter(svc.store, 2, time.Minute)
 	l.now = func() time.Time { return now }
 	for _, tc := range []struct {
 		advance time.Duration
@@ -219,14 +222,193 @@ func TestLimiter(t *testing.T) {
 		{59 * time.Second, "a", true}, {time.Second, "a", false},
 	} {
 		now = now.Add(tc.advance)
-		if got := l.attempt(tc.key) > 0; got != tc.blocked {
-			t.Fatalf("%+v: blocked=%v", tc, got)
+		_, wait, err := l.attempt(ctx, tc.key)
+		if err != nil || (wait > 0) != tc.blocked {
+			t.Fatalf("%+v: wait=%v err=%v", tc, wait, err)
 		}
 	}
+
+	// The count survives a restart: a new limiter on the same database.
+	l.attempt(ctx, "a") // the second attempt in the window
+	l2 := newLimiter(svc.store, 2, time.Minute)
+	l2.now = l.now
+	if _, wait, _ := l2.attempt(ctx, "a"); wait == 0 {
+		t.Fatal("attempts must survive a restart")
+	}
+	if err := l2.succeed(ctx, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, wait, _ := l2.attempt(ctx, "a"); wait > 0 {
+		t.Fatal("success must reset the key")
+	}
+	id, _, _ := l2.attempt(ctx, "c")
+	if err := l2.forget(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stale rows are removed; keys are stored hashed.
 	now = now.Add(time.Hour)
-	l.attempt("c")
-	if _, ok := l.fails["b"]; ok {
-		t.Fatal("stale keys must be swept")
+	l.attempt(ctx, "d")
+	n, err := svc.store.CountAttempts(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("%d attempts left, %v", n, err)
+	}
+}
+
+func TestLoginThrottlingSurvivesRestart(t *testing.T) {
+	svc, _, _ := newService(t)
+	withClock(svc)
+	ctx := context.Background()
+	svc.CreateUser(ctx, admin, "alice", "alice-password-1", "member")
+	for i := 0; i < loginMaxPerName; i++ {
+		svc.Login(ctx, Credentials{Name: "alice", Password: "wrong-password", ClientIP: "1.2.3.4"})
+	}
+	// A restart starts with fresh limiters in memory.
+	svc.limiter = newLimiter(svc.store, loginMaxPerName, loginWindow)
+	svc.limiter.now = svc.now
+	_, _, err := svc.Login(ctx, Credentials{Name: "alice", Password: "alice-password-1", ClientIP: "1.2.3.4"})
+	wantKind(t, err, Throttled)
+}
+
+func TestLoginThrottlingPerAddress(t *testing.T) {
+	svc, _, _ := newService(t)
+	withClock(svc)
+	ctx := context.Background()
+	svc.CreateUser(ctx, admin, "alice", "alice-password-1", "member")
+	// Successful sign-ins do not count against the address.
+	for i := 0; i < loginMaxPerClient+1; i++ {
+		if _, _, err := svc.Login(ctx, Credentials{Name: "alice", Password: "alice-password-1", ClientIP: "1.2.3.4"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Many names from one address: blocked after loginMaxPerClient failures.
+	for i := 0; i < loginMaxPerClient; i++ {
+		_, _, err := svc.Login(ctx, Credentials{Name: fmt.Sprintf("user%d", i), Password: "whatever-pass", ClientIP: "1.2.3.4"})
+		wantKind(t, err, Unauthenticated)
+	}
+	_, _, err := svc.Login(ctx, Credentials{Name: "alice", Password: "alice-password-1", ClientIP: "1.2.3.4"})
+	wantKind(t, err, Throttled)
+	if _, _, err := svc.Login(ctx, Credentials{Name: "alice", Password: "alice-password-1", ClientIP: "5.6.7.8"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPasswordChecksAreBounded(t *testing.T) {
+	svc, _, _ := newService(t)
+	ctx := context.Background()
+	svc.CreateUser(ctx, admin, "alice", "alice-password-1", "member")
+	for i := 0; i < maxPasswordChecks; i++ {
+		svc.passwordChecks <- struct{}{}
+	}
+	_, _, err := svc.Login(ctx, Credentials{Name: "alice", Password: "alice-password-1", ClientIP: "1.2.3.4"})
+	wantKind(t, err, Throttled)
+	a := Actor{UserID: 2, Name: "alice", Via: ViaSession}
+	wantKind(t, svc.ChangePassword(ctx, a, "alice-password-1", "alice-password-2", "1.2.3.4"), Throttled)
+	<-svc.passwordChecks
+	if _, _, err := svc.Login(ctx, Credentials{Name: "alice", Password: "alice-password-1", ClientIP: "1.2.3.4"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(svc.passwordChecks) != maxPasswordChecks-1 {
+		t.Fatal("a slot was not given back")
+	}
+}
+
+func TestSessionIdleAndLifetime(t *testing.T) {
+	svc, _, _ := newService(t)
+	clk := withClock(svc)
+	ctx := context.Background()
+	svc.CreateUser(ctx, admin, "alice", "alice-password-1", "member")
+	creds := Credentials{Name: "alice", Password: "alice-password-1"}
+
+	// Unused, a session ends after the idle timeout.
+	_, idle, _ := svc.Login(ctx, creds)
+	clk.advance(SessionIdleTimeout + time.Second)
+	_, err := svc.SessionActor(ctx, idle)
+	wantKind(t, err, Unauthenticated)
+
+	// Used every day, it lasts until its full lifetime and no longer.
+	_, used, _ := svc.Login(ctx, creds)
+	start := clk.t
+	for clk.t.Sub(start) < SessionLifetime-24*time.Hour {
+		clk.advance(24 * time.Hour)
+		if _, err := svc.SessionActor(ctx, used); err != nil {
+			t.Fatalf("after %v: %v", clk.t.Sub(start), err)
+		}
+	}
+	clk.t = start.Add(SessionLifetime + time.Second)
+	_, err = svc.SessionActor(ctx, used)
+	wantKind(t, err, Unauthenticated)
+}
+
+func TestSignOutEverywhere(t *testing.T) {
+	svc, _, _ := newService(t)
+	ctx := context.Background()
+	svc.CreateUser(ctx, admin, "alice", "alice-password-1", "member")
+	creds := Credentials{Name: "alice", Password: "alice-password-1"}
+	_, one, _ := svc.Login(ctx, creds)
+	_, two, _ := svc.Login(ctx, creds)
+	a, _ := svc.SessionActor(ctx, one)
+	nt, _ := svc.CreateToken(ctx, a, "ci", "read", nil, 0)
+	tok, _ := svc.TokenActor(ctx, nt.Secret)
+	svc.store.CreateSession(ctx, "root-session", admin.UserID, time.Now().Add(time.Hour))
+
+	wantKind(t, svc.SignOutEverywhere(ctx, tok), Forbidden)
+	wantKind(t, svc.SignOutEverywhere(ctx, Actor{}), Unauthenticated)
+
+	if err := svc.SignOutEverywhere(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{one, two} {
+		_, err := svc.SessionActor(ctx, secret)
+		wantKind(t, err, Unauthenticated)
+	}
+	if _, err := svc.TokenActor(ctx, nt.Secret); err != nil {
+		t.Fatal("access tokens keep working")
+	}
+	if _, err := svc.store.SessionUser(ctx, "root-session", time.Now()); err != nil {
+		t.Fatal("other users keep their sessions")
+	}
+}
+
+func TestTokenExpiry(t *testing.T) {
+	svc, _, _ := newService(t)
+	clk := withClock(svc)
+	ctx := context.Background()
+	for _, days := range []int{-1, MaxTokenDays + 1} {
+		_, err := svc.CreateToken(ctx, admin, "t", "read", nil, days)
+		wantKind(t, err, Invalid)
+	}
+	never, _ := svc.CreateToken(ctx, admin, "never", "read", nil, 0)
+	soon, err := svc.CreateToken(ctx, admin, "soon", "write", nil, 30)
+	if err != nil || soon.ExpiresAt == nil || !soon.ExpiresAt.Equal(clk.t.Add(30*24*time.Hour)) || never.ExpiresAt != nil {
+		t.Fatalf("%+v %+v %v", soon, never, err)
+	}
+	a, err := svc.TokenActor(ctx, soon.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clk.advance(30 * 24 * time.Hour)
+	_, err = svc.TokenActor(ctx, soon.Secret)
+	wantKind(t, err, Unauthenticated)
+	if err.Error() != "the access token is not valid" {
+		t.Fatalf("an expired token must look like an unknown one: %v", err)
+	}
+	if _, err := svc.refreshActor(ctx, a); err == nil {
+		t.Fatal("a saved actor of an expired token must not refresh")
+	}
+	if _, err := svc.TokenActor(ctx, never.Secret); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := svc.Tokens(ctx, admin)
+	for _, tk := range list {
+		if tk.Expired != (tk.Name == "soon") {
+			t.Fatalf("%+v", tk)
+		}
+	}
+	// Expired tokens can still be deleted.
+	if err := svc.DeleteToken(ctx, admin, soon.ID); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -297,7 +479,7 @@ func TestTokenLifecycle(t *testing.T) {
 	if _, err := svc.SaveSite(ctx, admin, "blog", nil); err != nil {
 		t.Fatal(err)
 	}
-	nt, err := svc.CreateToken(ctx, admin, "deploy", "read", []string{"blog"})
+	nt, err := svc.CreateToken(ctx, admin, "deploy", "read", []string{"blog"}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +502,7 @@ func TestTokenLifecycle(t *testing.T) {
 	// A token follows its user's current role.
 	second, _ := svc.CreateUser(ctx, admin, "second", "second-password", "admin")
 	secondSession := Actor{UserID: second.ID, Name: "second", Admin: true, Via: ViaSession}
-	st, _ := svc.CreateToken(ctx, secondSession, "ci", "write", nil)
+	st, _ := svc.CreateToken(ctx, secondSession, "ci", "write", nil, 0)
 	member := "member"
 	svc.UpdateUser(ctx, admin, second.ID, &member, nil)
 	if a, _ := svc.TokenActor(ctx, st.Secret); a.Admin {
@@ -338,7 +520,7 @@ func TestTokenLifecycle(t *testing.T) {
 func TestActivityLog(t *testing.T) {
 	svc, _, _ := newService(t)
 	ctx := context.Background()
-	nt, _ := svc.CreateToken(ctx, admin, "ci", "write", nil)
+	nt, _ := svc.CreateToken(ctx, admin, "ci", "write", nil, 0)
 	tok, _ := svc.TokenActor(ctx, nt.Secret)
 	svc.SaveSite(ctx, tok, "blog", []string{"blog.example.com"})
 	svc.CreateUser(ctx, admin, "alice", "alice-secret-pw", "member")

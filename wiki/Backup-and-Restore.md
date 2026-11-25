@@ -58,3 +58,5 @@ Notes:
 - On a fresh server, run the installer first so users, units and directories exist, then restore, then restore your `ownpaneld.env` flags (`-server-ip` in particular if the address changed).
 - Without `secret.key`, restored DNS connections cannot be used; add them again.
 - Check that the sites and the panel answer, and sign in with an existing account.
+- A backup made with an older version can be restored into a newer one: the database is brought up to date when ownpaneld starts. The other direction is not supported.
+- Every update saves a backup first, in `/var/lib/ownpanel/backups/`. Restore one of those the same way.

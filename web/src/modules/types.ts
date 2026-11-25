@@ -10,7 +10,10 @@ export type PanelModule = {
   id: string
   label: string
   basePath: string
-  component: ComponentType<ModuleProps>
+  // Loads the page on demand, so its code stays out of the first download:
+  // `() => import('./SitesPage.tsx').then((page) => page.SitesPage)`.
+  // Everything else here is read by the sidebar and stays synchronous.
+  page: () => Promise<ComponentType<ModuleProps>>
   visible?: (user: User) => boolean
   // An icon tile in the rail's bottom group.
   railEntry?: { label?: string; icon: ComponentType }

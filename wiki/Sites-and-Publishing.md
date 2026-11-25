@@ -23,7 +23,7 @@ Changing domains replaces the whole list: domains not listed stop being served.
 | Site has a live version | the files, compressed with zstd or gzip |
 | Site has no version yet | `503` with "This site has no content yet." |
 | Site has no domains | not served |
-| Host that no site claims | `404` with "Unknown site." |
+| Host that no site claims | `404` with "Unknown site." over plain HTTP. Over HTTPS there is no certificate for such a name, so the connection fails before any answer. |
 
 For HTTPS the domain must point at the server so a certificate can be issued. With `-tls acme` certificates are requested automatically; HTTP requests are redirected to HTTPS. See [[DNS|DNS]] for checking and fixing where a domain points.
 
@@ -44,6 +44,7 @@ A version is created from an archive:
 | Unpacked size | 1 GiB |
 | Entries (files and folders) | 100,000 |
 | Versions kept per site | 5 |
+| Upload time | 1 h; cut off earlier only if no data arrives for 1 min (see [[Security|Security]]) |
 
 The limits are enforced on the bytes actually read, not on sizes the archive declares.
 
@@ -52,6 +53,7 @@ The limits are enforced on the bytes actually read, not on sizes the archive dec
 | Way | How |
 |---|---|
 | Web interface | open the site and upload an archive |
+| GitHub Actions | the action `danielgtmn/ownpanel/actions/publish`; see [[GitHub Action|GitHub-Action]] |
 | API | `POST /api/sites/{name}/deployments` with the raw archive as the request body |
 | One-time upload link | `POST /api/uploads/{id}`, link created by an MCP client; see [[MCP|MCP]] |
 | MCP | `publish_files` (small sites, files given directly, up to 2000 files and 10 MB) or `create_upload_link` (archives) |

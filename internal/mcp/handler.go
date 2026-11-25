@@ -15,6 +15,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/danielgtmn/ownpanel/internal/panel"
+	"github.com/danielgtmn/ownpanel/internal/timeouts"
 )
 
 // Path is where the MCP endpoint is mounted.
@@ -94,7 +95,8 @@ func Handler(p *panel.Service, version string, opts ...Option) http.Handler {
 	// requests (clients that are not browsers send no Origin).
 	h := http.NewCrossOriginProtection().Handler(authenticate(p, cfg, panelHost(cfg, sdkHandler)))
 	mux := http.NewServeMux()
-	mux.Handle(Path, h)
+	// publish_files carries up to 64 MB in one request.
+	mux.Handle(Path, timeouts.Long(h))
 	return mux
 }
 

@@ -5,9 +5,9 @@ import { useState } from 'react'
 import { errorMessage } from '../../shared/api/index.ts'
 import { formatDateTime, isoTimestamp } from '../../shared/format/index.ts'
 import { usePageTitle, useResource } from '../../shared/hooks/index.ts'
-import { EmptyState, ErrorState, LoadingState, PageHeader } from '../../shared/ui/index.ts'
+import { EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge } from '../../shared/ui/index.ts'
 import { createToken, deleteToken, listTokens } from './api.ts'
-import { accessLabel, lastUsedLabel, scopeLabel } from './rules.ts'
+import { accessLabel, expiryLabel, lastUsedLabel, scopeLabel } from './rules.ts'
 import { SecretDialog } from './SecretDialog.tsx'
 import { TokenFormDialog } from './TokenFormDialog.tsx'
 import type { NewToken, Token } from './types.ts'
@@ -18,12 +18,18 @@ function TokenRow({ token, onDelete }: { token: Token; onDelete: (token: Token) 
       <div className="record-main">
         <h2 className="record-title">{token.name}</h2>
         <ul className="record-facts">
+          {token.expired ? (
+            <li>
+              <StatusBadge tone="warning">No longer works</StatusBadge>
+            </li>
+          ) : null}
           <li>{accessLabel(token.access)}</li>
           <li>{scopeLabel(token.sites)}</li>
           <li>
             Created <time dateTime={isoTimestamp(token.created_at)}>{formatDateTime(token.created_at)}</time>
           </li>
           <li>{lastUsedLabel(token)}</li>
+          <li>{expiryLabel(token)}</li>
         </ul>
       </div>
       <div className="record-actions">

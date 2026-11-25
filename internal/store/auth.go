@@ -27,6 +27,23 @@ func (s *Store) DeleteSession(ctx context.Context, id string) error {
 	return err
 }
 
+// ExtendSession moves the expiry of a session to until, but never past
+// created_at + lifetime. To keep reads cheap it only writes when the expiry
+// moves by more than a minute.
+func (s *Store) ExtendSession(ctx context.Context, id string, until time.Time, lifetime time.Duration) error {
+	limit := int64(lifetime / time.Second)
+	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET expires_at = min(?, created_at + ?)
+		WHERE id = ? AND expires_at < min(?, created_at + ?) - 60`,
+		until.Unix(), limit, id, until.Unix(), limit)
+	return err
+}
+
+// DeleteUserSessions ends every session of a user.
+func (s *Store) DeleteUserSessions(ctx context.Context, userID int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID)
+	return err
+}
+
 // DeleteExpiredSessions removes sessions that expired before now.
 func (s *Store) DeleteExpiredSessions(ctx context.Context, now time.Time) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at <= ?`, now.Unix())
@@ -45,16 +62,18 @@ type Token struct {
 	Sites      []string
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
+	// ExpiresAt is when the token stops working; nil means never.
+	ExpiresAt *time.Time
 }
 
-const tokenCols = `id, user_id, name, hash, access, sites, created_at, last_used_at`
+const tokenCols = `id, user_id, name, hash, access, sites, created_at, last_used_at, expires_at`
 
 func scanToken(row interface{ Scan(...any) error }) (Token, error) {
 	var t Token
 	var sites sql.NullString
 	var created int64
-	var used sql.NullInt64
-	if err := row.Scan(&t.ID, &t.UserID, &t.Name, &t.Hash, &t.Access, &sites, &created, &used); err != nil {
+	var used, expires sql.NullInt64
+	if err := row.Scan(&t.ID, &t.UserID, &t.Name, &t.Hash, &t.Access, &sites, &created, &used, &expires); err != nil {
 		if noRows(err) {
 			return Token{}, notFoundf("access token not found")
 		}
@@ -70,6 +89,10 @@ func scanToken(row interface{ Scan(...any) error }) (Token, error) {
 	if used.Valid {
 		at := unix(used.Int64)
 		t.LastUsedAt = &at
+	}
+	if expires.Valid {
+		at := unix(expires.Int64)
+		t.ExpiresAt = &at
 	}
 	return t, nil
 }
@@ -89,8 +112,14 @@ func (s *Store) CreateToken(ctx context.Context, t Token) (Token, error) {
 		return Token{}, err
 	}
 	created := s.now()
-	res, err := s.db.ExecContext(ctx, `INSERT INTO tokens (user_id, name, hash, access, sites, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		t.UserID, t.Name, t.Hash, t.Access, sites, created)
+	var expires sql.NullInt64
+	if t.ExpiresAt != nil {
+		expires = sql.NullInt64{Int64: t.ExpiresAt.Unix(), Valid: true}
+		at := unix(expires.Int64)
+		t.ExpiresAt = &at
+	}
+	res, err := s.db.ExecContext(ctx, `INSERT INTO tokens (user_id, name, hash, access, sites, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		t.UserID, t.Name, t.Hash, t.Access, sites, created, expires)
 	if err != nil {
 		return Token{}, err
 	}

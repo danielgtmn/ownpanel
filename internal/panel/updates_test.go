@@ -205,3 +205,102 @@ func TestReleaseLookupTimesOut(t *testing.T) {
 		t.Fatal("no timeout")
 	}
 }
+
+// A check looks up the releases now, past the 30-minute cache, but at most
+// once a minute; a failed one keeps the last result.
+func TestCheckForUpdates(t *testing.T) {
+	var calls atomic.Int32
+	var fail atomic.Bool
+	var body atomic.Value
+	body.Store(releaseList)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if fail.Load() {
+			http.Error(w, "rate limited", http.StatusForbidden)
+			return
+		}
+		w.Write([]byte(body.Load().(string)))
+	}))
+	defer srv.Close()
+	t0 := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	now := t0
+	s := &Service{
+		now:     func() time.Time { return now },
+		updates: newUpdater(UpdatesConfig{Version: "v1.1.9", Repo: "o/r", Arch: "amd64", APIURL: srv.URL}),
+	}
+	ctx := context.Background()
+	stable := func(info UpdateInfo) string {
+		if info.Available.Stable == nil {
+			return ""
+		}
+		return info.Available.Stable.Version
+	}
+
+	info := s.updateInfo(ctx)
+	if calls.Load() != 1 || stable(info) != "v1.2.0" || info.CheckedAt != "2026-11-25T12:00:00Z" || info.CheckFailed {
+		t.Fatalf("first look: %d %+v", calls.Load(), info)
+	}
+
+	// v1.3.0 comes out; the page still shows the cached list.
+	body.Store(`[{"tag_name":"v1.3.0","name":"v1.3.0","published_at":"2026-11-25T12:01:00Z","html_url":"https://x",
+	  "assets":[{"name":"checksums.txt"},{"name":"ownpanel_v1.3.0_linux_amd64.tar.gz"}]}]`)
+	now = t0.Add(5 * time.Minute)
+	if info := s.updateInfo(ctx); calls.Load() != 1 || stable(info) != "v1.2.0" {
+		t.Fatalf("cache: %d %+v", calls.Load(), info.Available)
+	}
+	info, err := s.CheckUpdates(ctx, admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 || stable(info) != "v1.3.0" || info.CheckedAt != "2026-11-25T12:05:00Z" {
+		t.Fatalf("check: %d %+v", calls.Load(), info)
+	}
+
+	// Within a minute of the last lookup a check answers from the cache.
+	now = t0.Add(5*time.Minute + 59*time.Second)
+	info, _ = s.CheckUpdates(ctx, admin)
+	if calls.Load() != 2 || info.CheckedAt != "2026-11-25T12:05:00Z" || stable(info) != "v1.3.0" {
+		t.Fatalf("throttle: %d %+v", calls.Load(), info)
+	}
+
+	// A failed check keeps the last result and says why.
+	fail.Store(true)
+	now = t0.Add(6 * time.Minute)
+	info, _ = s.CheckUpdates(ctx, admin)
+	if calls.Load() != 3 || !info.CheckFailed || !strings.Contains(info.CheckError, "403") ||
+		stable(info) != "v1.3.0" || info.CheckedAt != "2026-11-25T12:06:00Z" {
+		t.Fatalf("failure: %d %+v", calls.Load(), info)
+	}
+	// The page keeps showing it until the retry is due.
+	now = t0.Add(7 * time.Minute)
+	if info := s.updateInfo(ctx); calls.Load() != 3 || !info.CheckFailed || stable(info) != "v1.3.0" {
+		t.Fatalf("after failure: %d %+v", calls.Load(), info)
+	}
+
+	// Only admins may make the panel ask.
+	for _, a := range []Actor{{}, bob, bobRead, rootRead} {
+		if _, err := s.CheckUpdates(ctx, a); err == nil {
+			t.Errorf("%+v may check", a)
+		}
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("refused callers looked up: %d", calls.Load())
+	}
+}
+
+// Before any lookup worked, a failed one shows no releases.
+func TestCheckFailsWithoutEarlierResult(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "down", http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	s := &Service{now: func() time.Time { return now }, updates: newUpdater(UpdatesConfig{Repo: "o/r", APIURL: srv.URL})}
+	info, err := s.CheckUpdates(context.Background(), admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.CheckFailed || info.CheckError == "" || info.Available.Stable != nil || info.Available.Nightly != nil || info.CheckedAt == "" {
+		t.Fatalf("%+v", info)
+	}
+}

@@ -9,11 +9,23 @@ import (
 func (s *Server) updateRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/updates", s.getUpdates)
 	mux.HandleFunc("POST /api/updates", s.requestUpdate)
+	mux.HandleFunc("POST /api/updates/check", s.checkUpdates)
 	mux.HandleFunc("PUT /api/updates/auto", s.putAutoUpdate)
 }
 
 func (s *Server) getUpdates(w http.ResponseWriter, r *http.Request) {
 	v, err := s.Panel.Updates(r.Context(), actorOf(r))
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+// checkUpdates looks for new releases now (at most once a minute) and
+// answers like GET /api/updates.
+func (s *Server) checkUpdates(w http.ResponseWriter, r *http.Request) {
+	v, err := s.Panel.CheckUpdates(r.Context(), actorOf(r))
 	if err != nil {
 		writeFailure(w, err)
 		return

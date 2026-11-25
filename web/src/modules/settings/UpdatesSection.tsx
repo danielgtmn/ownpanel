@@ -14,7 +14,9 @@ import {
   CHANNELS,
   channelHint,
   channelName,
+  checkResult,
   isBusy,
+  lastCheckedText,
   needsReload,
   POLL_INTERVAL,
   progressText,
@@ -24,7 +26,7 @@ import {
   updateQuestion,
   windowProblem,
 } from './updates.ts'
-import { getUpdates, requestUpdate, setAutoUpdate, type Channel, type UpdateInfo } from './updatesApi.ts'
+import { checkForUpdates, getUpdates, requestUpdate, setAutoUpdate, type Channel, type UpdateInfo } from './updatesApi.ts'
 
 const TITLE = 'Updates'
 const DESCRIPTION = 'New versions of the panel and the web server that serves your sites.'
@@ -192,10 +194,46 @@ function AutoUpdatesForm({ info, onSaved }: { info: UpdateInfo; onSaved: (info: 
   )
 }
 
-function Loaded({ initial, onRetryCheck }: { initial: UpdateInfo; onRetryCheck: () => void }) {
+// Re-renders every half minute so "Last checked …" stays right.
+function useNow(): Date {
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
+  return now
+}
+
+type InstalledProps = {
+  info: UpdateInfo
+  busy: boolean
+  now: Date
+  onCheck: () => Promise<void>
+}
+
+export function InstalledVersion({ info, busy, now, onCheck }: InstalledProps) {
+  const lastChecked = lastCheckedText(info.checked_at, now)
+  return (
+    <div className="update-installed-row">
+      <div className="choice-text">
+        <p className="update-installed">
+          Installed: <strong>{info.installed.version}</strong>
+          {info.installed.channel ? <span className="muted"> · {channelName(info.installed.channel)}</span> : null}
+        </p>
+        {lastChecked ? <span className="muted">{lastChecked}</span> : null}
+      </div>
+      <Button disabled={busy} pendingAnnouncement="Checking for updates" onClick={onCheck}>
+        Check for updates
+      </Button>
+    </div>
+  )
+}
+
+function Loaded({ initial }: { initial: UpdateInfo }) {
   const [info, setInfo] = useState(initial)
   const [watching, setWatching] = useState(() => isBusy(initial.status))
   const [unreachable, setUnreachable] = useState(false)
+  const now = useNow()
 
   useEffect(() => {
     if (loadedVersion === null) loadedVersion = initial.installed.version
@@ -234,15 +272,26 @@ function Loaded({ initial, onRetryCheck }: { initial: UpdateInfo; onRetryCheck: 
     }
   }
 
+  async function check() {
+    try {
+      const next = await checkForUpdates()
+      setInfo(next)
+      const result = checkResult(next)
+      if (result.kind === 'failed') toast.error("Couldn't check for new versions right now. Try again in a few minutes.")
+      else if (result.kind === 'current') toast.success('ownpanel is up to date')
+      else if (!next.update_available) toast.info(`${result.version} is available`)
+      // Otherwise the "Update to …" button shows up.
+    } catch (caught) {
+      toast.error(errorMessage(caught))
+    }
+  }
+
   const busy = watching || isBusy(info.status)
 
   return (
     <Section title={TITLE} description={DESCRIPTION}>
       <div className="settings-stack">
-        <p className="update-installed">
-          Installed: <strong>{info.installed.version}</strong>
-          {info.installed.channel ? <span className="muted"> · {channelName(info.installed.channel)}</span> : null}
-        </p>
+        <InstalledVersion info={info} busy={busy} now={now} onCheck={check} />
         {!info.supported ? (
           <p className="notice">
             This panel wasn't set up with the installer, so it can't update itself. Update it the same way you installed
@@ -253,7 +302,9 @@ function Loaded({ initial, onRetryCheck }: { initial: UpdateInfo; onRetryCheck: 
         {info.check_failed ? (
           <div className="notice update-check-failed">
             <span>Couldn't check for new versions right now. Try again in a few minutes.</span>
-            <Button onClick={onRetryCheck}>Check again</Button>
+            <Button disabled={busy} pendingAnnouncement="Checking for updates" onClick={check}>
+              Check again
+            </Button>
           </div>
         ) : null}
         <ul className="update-channels" aria-label="Release channels">
@@ -286,5 +337,5 @@ export function UpdatesSection() {
       </Section>
     )
   }
-  return <Loaded initial={updates.data} onRetryCheck={updates.retry} />
+  return <Loaded initial={updates.data} />
 }

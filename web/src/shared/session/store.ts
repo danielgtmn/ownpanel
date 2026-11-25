@@ -79,6 +79,11 @@ export async function signOutNow(): Promise<void> {
   update({ status: 'signedOut', notice: null })
 }
 
+export async function signOutEverywhereNow(): Promise<void> {
+  await request<void>('/account/logout-everywhere', { method: 'POST', silentUnauthorized: true })
+  update({ status: 'signedOut', notice: null })
+}
+
 export function endSession() {
   if (state.status === 'signedIn') update({ status: 'signedOut', notice: SIGNED_OUT_NOTICE })
 }

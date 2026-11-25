@@ -90,8 +90,47 @@ func TestSecurityHeaders(t *testing.T) {
 		if h.Get("X-Content-Type-Options") != "nosniff" || h.Get("X-Frame-Options") != "DENY" || h.Get("Referrer-Policy") != "no-referrer" {
 			t.Fatalf("%s: %v", p, h)
 		}
-		if h.Get("Content-Security-Policy") != "" {
-			t.Fatalf("%s: unexpected CSP", p)
+		if got := h.Get("Content-Security-Policy"); got != ContentSecurityPolicy {
+			t.Fatalf("%s: Content-Security-Policy %q", p, got)
+		}
+	}
+	if got := get(Handler(nil), "GET", "/").Header().Get("Content-Security-Policy"); got != ContentSecurityPolicy {
+		t.Fatalf("without app: Content-Security-Policy %q", got)
+	}
+}
+
+func TestContentSecurityPolicyIsStrict(t *testing.T) {
+	directives := map[string]string{}
+	for _, d := range strings.Split(ContentSecurityPolicy, ";") {
+		name, value, _ := strings.Cut(strings.TrimSpace(d), " ")
+		if _, dup := directives[name]; dup {
+			t.Fatalf("directive %q twice", name)
+		}
+		directives[name] = value
+	}
+	want := map[string]string{
+		"default-src":     "'self'",
+		"script-src":      "'self'",
+		"style-src":       "'self'",
+		"img-src":         "'self' data:",
+		"connect-src":     "'self'",
+		"object-src":      "'none'",
+		"base-uri":        "'none'",
+		"form-action":     "'self'",
+		"frame-ancestors": "'none'",
+	}
+	for name, value := range want {
+		if directives[name] != value {
+			t.Errorf("%s: got %q, want %q", name, directives[name], value)
+		}
+	}
+	for _, bad := range []string{"'unsafe-inline'", "'unsafe-eval'", "*", "http:", "https:"} {
+		for name, value := range directives {
+			for _, v := range strings.Fields(value) {
+				if v == bad {
+					t.Errorf("%s allows %s", name, bad)
+				}
+			}
 		}
 	}
 }

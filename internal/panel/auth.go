@@ -18,8 +18,24 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/store"
 )
 
-// SessionLifetime is how long a sign-in lasts.
-const SessionLifetime = 30 * 24 * time.Hour
+// A sign-in ends after SessionIdleTimeout without use, and in any case
+// SessionLifetime after it started.
+const (
+	SessionIdleTimeout = 3 * 24 * time.Hour
+	SessionLifetime    = 30 * 24 * time.Hour
+)
+
+// Sign-in throttling: failed attempts per address and name, and per address
+// across all names (so trying many names from one place is slowed too).
+const (
+	loginWindow       = 15 * time.Minute
+	loginMaxPerName   = 5
+	loginMaxPerClient = 20
+	// maxPasswordChecks bounds the sign-ins and password changes in flight;
+	// beyond it requests are turned away instead of queueing for the
+	// (memory-hungry) password hashing.
+	maxPasswordChecks = 16
+)
 
 // TokenPrefix starts every access token, so they are recognisable (and
 // findable by secret scanners).
@@ -77,7 +93,7 @@ func (s *Service) newSession(ctx context.Context, u store.User) (string, error) 
 		slog.Warn("could not remove expired sessions", "err", err)
 	}
 	secret := randomString(32)
-	if err := s.store.CreateSession(ctx, sha256Hex(secret), u.ID, s.now().Add(SessionLifetime)); err != nil {
+	if err := s.store.CreateSession(ctx, sha256Hex(secret), u.ID, s.now().Add(SessionIdleTimeout)); err != nil {
 		return "", newError(Internal, err)
 	}
 	return secret, nil
@@ -92,6 +108,10 @@ func (s *Service) SessionActor(ctx context.Context, secret string) (Actor, error
 	}
 	if err != nil {
 		return Actor{}, newError(Internal, err)
+	}
+	// Using a session keeps it alive, up to its full lifetime.
+	if err := s.store.ExtendSession(ctx, id, s.now().Add(SessionIdleTimeout), SessionLifetime); err != nil {
+		slog.Warn("could not extend a session", "err", err)
 	}
 	return Actor{UserID: u.ID, Name: u.Name, Admin: u.Role == store.RoleAdmin, Via: ViaSession, sessionID: id}, nil
 }
@@ -109,6 +129,9 @@ func (s *Service) TokenActor(ctx context.Context, token string) (Actor, error) {
 	}
 	if err != nil {
 		return Actor{}, newError(Internal, err)
+	}
+	if tokenExpired(t, s.now()) {
+		return Actor{}, invalid
 	}
 	if err := s.store.TouchToken(ctx, t.ID, s.now()); err != nil {
 		slog.Warn("could not record token use", "err", err)
@@ -145,6 +168,9 @@ func (s *Service) refreshActor(ctx context.Context, a Actor) (Actor, error) {
 	if err != nil {
 		return Actor{}, err
 	}
+	if a.Via == ViaToken && tokenExpired(t, s.now()) {
+		return Actor{}, store.ErrNotFound
+	}
 	fresh := Actor{UserID: u.ID, Name: u.Name, Admin: u.Role == store.RoleAdmin, Via: a.Via, sessionID: a.sessionID}
 	if a.Via == ViaToken {
 		fresh.ReadOnly, fresh.Sites, fresh.tokenName, fresh.tokenHash = t.Access != "write", t.Sites, t.Name, a.tokenHash
@@ -167,9 +193,22 @@ func (s *Service) Me(ctx context.Context, a Actor) (User, error) {
 // Login checks a name and password and starts a session. It returns the
 // user and the secret for the session cookie.
 func (s *Service) Login(ctx context.Context, c Credentials) (User, string, error) {
+	release, err := s.passwordCheck()
+	if err != nil {
+		return User{}, "", err
+	}
+	defer release()
 	name := normalizeUserName(c.Name)
 	key := c.ClientIP + "\n" + name
-	if wait := s.limiter.attempt(key); wait > 0 {
+	if _, wait, err := s.limiter.attempt(ctx, key); err != nil {
+		return User{}, "", err
+	} else if wait > 0 {
+		return User{}, "", throttled(wait)
+	}
+	clientAttempt, wait, err := s.clientLimiter.attempt(ctx, c.ClientIP+"\nany name")
+	if err != nil {
+		return User{}, "", err
+	} else if wait > 0 {
 		return User{}, "", throttled(wait)
 	}
 	u, err := s.store.UserByName(ctx, name)
@@ -183,13 +222,44 @@ func (s *Service) Login(ctx context.Context, c Credentials) (User, string, error
 	if !verifyPassword(u.PasswordHash, c.Password) {
 		return User{}, "", errorf(Unauthenticated, "Wrong name or password.")
 	}
-	s.limiter.succeed(key)
+	// A successful sign-in clears the failures for this name and does not
+	// count against the address.
+	if err := s.limiter.succeed(ctx, key); err != nil {
+		return User{}, "", err
+	}
+	if err := s.clientLimiter.forget(ctx, clientAttempt); err != nil {
+		return User{}, "", err
+	}
 	secret, err := s.newSession(ctx, u)
 	if err != nil {
 		return User{}, "", err
 	}
 	s.record(ctx, Actor{Name: u.Name}, "account.login", u.Name, "")
 	return userView(u), secret, nil
+}
+
+// passwordCheck takes one of the slots for checking a password, or answers
+// Throttled when all are taken. Call release when done.
+func (s *Service) passwordCheck() (release func(), err error) {
+	select {
+	case s.passwordChecks <- struct{}{}:
+		return func() { <-s.passwordChecks }, nil
+	default:
+		return nil, errBusy()
+	}
+}
+
+// SignOutEverywhere ends every session of the actor's user, including the
+// current one. Access tokens keep working.
+func (s *Service) SignOutEverywhere(ctx context.Context, a Actor) error {
+	if err := needSession(a, "signing out everywhere"); err != nil {
+		return err
+	}
+	if err := s.store.DeleteUserSessions(ctx, a.UserID); err != nil {
+		return newError(Internal, err)
+	}
+	s.record(ctx, a, "account.logout_everywhere", a.Name, "")
+	return nil
 }
 
 // Logout ends the session with the given cookie value. Unknown sessions are
@@ -214,14 +284,23 @@ func (s *Service) ChangePassword(ctx context.Context, a Actor, current, next, cl
 	if err != nil {
 		return storeError(err)
 	}
+	release, err := s.passwordCheck()
+	if err != nil {
+		return err
+	}
+	defer release()
 	key := clientIP + "\n" + u.Name
-	if wait := s.limiter.attempt(key); wait > 0 {
+	if _, wait, err := s.limiter.attempt(ctx, key); err != nil {
+		return err
+	} else if wait > 0 {
 		return throttled(wait)
 	}
 	if !verifyPassword(u.PasswordHash, current) {
 		return errorf(Invalid, "the current password is wrong")
 	}
-	s.limiter.succeed(key)
+	if err := s.limiter.succeed(ctx, key); err != nil {
+		return err
+	}
 	if err := validatePassword(next); err != nil {
 		return err
 	}
@@ -297,7 +376,9 @@ func (s *Service) Setup(ctx context.Context, code string, c Credentials) (User, 
 		return User{}, "", alreadySetUp
 	}
 	key := c.ClientIP + "\nsetup code"
-	if wait := s.limiter.attempt(key); wait > 0 {
+	if _, wait, err := s.limiter.attempt(ctx, key); err != nil {
+		return User{}, "", err
+	} else if wait > 0 {
 		return User{}, "", throttled(wait)
 	}
 	want, err := os.ReadFile(s.setupCodeFile)
@@ -309,7 +390,9 @@ func (s *Service) Setup(ctx context.Context, code string, c Credentials) (User, 
 	if wantCode == "" || subtle.ConstantTimeCompare([]byte(gotCode), []byte(wantCode)) != 1 {
 		return User{}, "", errorf(Invalid, "the setup code is wrong")
 	}
-	s.limiter.succeed(key)
+	if err := s.limiter.succeed(ctx, key); err != nil {
+		return User{}, "", err
+	}
 
 	name := normalizeUserName(c.Name)
 	if err := validateUserName(name); err != nil {

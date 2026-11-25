@@ -34,7 +34,10 @@ cd web && npm run lint         # oxlint
 cd web && npm run build        # type check, then bundle
 INSECURE=1 scripts/smoke.sh    # end-to-end against a running scripts/dev.sh
 scripts/commit-type_test.sh    # the commit message check
+actions/publish/publish_test.sh  # the GitHub Action against a real ownpaneld
 ```
+
+`actions/publish/publish_test.sh` builds `ownpaneld` (or uses `OWNPANELD=<path>`), starts it with a stand-in for Caddy's admin API (needs `python3`), creates sites and tokens, and runs the action's script for success and every error it explains (wrong token, unknown site, read-only token, missing or empty folder, too large, unreachable panel). CI runs it in the `action` job when `actions/` or the API changes.
 
 `scripts/smoke.sh` signs in (or does the first-run setup), creates a site, deploys, redeploys, rolls back, checks that a malicious archive and a cookie request without the header are refused, then deletes the site. Its options (`API`, `DOMAIN`, `WEB`, `HTTP_PORT`, `HTTPS_PORT`, `SITE`, `CERT_WAIT`, `SETUP_CODE_FILE`, `ADMIN_NAME`, `ADMIN_PASSWORD`, `OWNPANEL_TOKEN`, `KEEP`, `INSECURE`) are documented at the top of the script.
 
