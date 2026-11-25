@@ -3,7 +3,7 @@ import { toast } from '@ui-sdk/react/toast'
 import { useState } from 'react'
 import { errorMessage, isSavedButNotApplied } from '../../shared/api/index.ts'
 import { usePageTitle, useResource } from '../../shared/hooks/index.ts'
-import { hrefFor, navigate } from '../../shared/routing/index.ts'
+import { clearQuery, hrefFor, navigate, prefilledDomain, useQuery } from '../../shared/routing/index.ts'
 import { useSession } from '../../shared/session/index.ts'
 import { EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge } from '../../shared/ui/index.ts'
 import { listSites, saveSite } from './api.ts'
@@ -46,6 +46,9 @@ export function SitesList() {
   const sites = useResource(listSites, 'sites')
   const { isAdmin } = useSession()
   const [creating, setCreating] = useState(false)
+  const query = useQuery()
+  const wantsNew = query.has('new')
+  const domain = prefilledDomain(query)
   usePageTitle('Sites')
 
   const newSiteButton = (
@@ -91,9 +94,13 @@ export function SitesList() {
         </ul>
       ) : null}
       <SiteFormDialog
-        open={creating}
-        onOpenChange={setCreating}
+        open={creating || wantsNew}
+        onOpenChange={(open) => {
+          setCreating(open)
+          if (!open) clearQuery()
+        }}
         mode="create"
+        initialDomains={wantsNew && domain ? [domain] : undefined}
         takenNames={sites.status === 'ready' ? sites.data.map((site) => site.name) : []}
         onSubmit={create}
       />

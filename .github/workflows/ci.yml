@@ -3,14 +3,16 @@
 # means updating the rules as well.
 #
 # On pull requests, jobs run only when files they check changed (a skipped
-# job counts as passed for the branch rules). Pushes to main, the merge
-# queue and manual runs always run everything.
+# job counts as passed for the branch rules). Pushes to main and release,
+# the merge queue and manual runs always run everything. Pull requests into
+# release are checked like any other. The pull request title check
+# ("commits") is in commits.yml.
 name: CI
 
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, release]
   merge_group:
   workflow_dispatch:
 
@@ -41,14 +43,19 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
         run: |
           all() { for k in go web lint build; do echo "$k=true" >> "$GITHUB_OUTPUT"; done; }
-          if [ "$EVENT" != "pull_request" ]; then
-            echo "Not a pull request: running every check."
+          if [ "$EVENT" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$BEFORE" "$AFTER")"
+          elif [ "$EVENT" != "pull_request" ]; then
+            echo "No pull request and no previous commit to compare with: running every check."
             all
             exit 0
+          else
+            files="$(git diff --name-only "$BASE...$HEAD")"
           fi
-          files="$(git diff --name-only "$BASE...$HEAD")"
           echo "Changed files:"
           echo "$files"
           # A change to this workflow must prove itself on every job.
@@ -145,6 +152,13 @@ jobs:
           fi
           shellcheck --version
           shellcheck "${scripts[@]}"
+      - name: Script tests
+        run: |
+          for t in scripts/*_test.sh; do
+            echo "::group::$t"
+            "$t"
+            echo "::endgroup::"
+          done
       - name: actionlint
         # The preinstalled shellcheck is picked up for the run: blocks.
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color

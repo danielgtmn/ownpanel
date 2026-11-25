@@ -13,8 +13,10 @@ import {
   type RedirectInput,
 } from '../../shared/api/index.ts'
 import { DomainCheck } from '../../shared/domains/index.ts'
+import { registrableDomain } from '../../shared/families/index.ts'
 import { usePageTitle, useResource } from '../../shared/hooks/index.ts'
 import { domainRedirects, RedirectDialog, RedirectSummary, sortRedirects } from '../../shared/redirects/index.ts'
+import { clearQuery, hrefFor, prefilledDomain, useQuery } from '../../shared/routing/index.ts'
 import { useSession } from '../../shared/session/index.ts'
 import { EmptyState, ErrorState, LoadingState, PageHeader, Section } from '../../shared/ui/index.ts'
 
@@ -49,7 +51,11 @@ export function RedirectsPage() {
   const redirects = useResource(listRedirects, 'redirects')
   const { isAdmin } = useSession()
   const [dialog, setDialog] = useState<{ open: boolean; existing: Redirect | null }>({ open: false, existing: null })
-  usePageTitle('Redirects')
+  const query = useQuery()
+  const family = query.get('family')
+  const wantsNew = query.has('new')
+  const prefilled = wantsNew ? prefilledDomain(query) : undefined
+  usePageTitle(family ? `Redirects of ${family}` : 'Redirects')
 
   async function save(input: RedirectInput) {
     const existing = dialog.existing
@@ -62,6 +68,7 @@ export function RedirectsPage() {
       toast.warning(errorMessage(error))
     }
     setDialog((current) => ({ ...current, open: false }))
+    clearQuery()
     await redirects.reload()
   }
 
@@ -88,15 +95,21 @@ export function RedirectsPage() {
       Add redirect
     </Button>
   )
-  const list = redirects.status === 'ready' ? sortRedirects(domainRedirects(redirects.data)) : []
+  const all = redirects.status === 'ready' ? sortRedirects(domainRedirects(redirects.data)) : []
+  const list = family ? all.filter((redirect) => registrableDomain(redirect.source_domain) === family) : all
 
   return (
     <>
       <PageHeader
         title="Redirects"
         description="Send everyone who opens a domain to another address."
-        actions={list.length > 0 ? addButton : null}
+        actions={all.length > 0 ? addButton : null}
       />
+      {family ? (
+        <p className="notice" role="status">
+          Showing the redirects of {family} and its subdomains. <a href={hrefFor('redirects')}>Show all redirects</a>
+        </p>
+      ) : null}
       <Section
         title="Domain redirects"
         description="The domain has to point to this server. Redirects for single paths of a site are on the site's page."
@@ -105,7 +118,10 @@ export function RedirectsPage() {
         {redirects.status === 'error' ? (
           <ErrorState title="Couldn't load the redirects" message={errorMessage(redirects.error)} onRetry={redirects.retry} />
         ) : null}
-        {redirects.status === 'ready' && list.length === 0 ? (
+        {redirects.status === 'ready' && family && all.length > 0 && list.length === 0 ? (
+          <EmptyState title={`No redirects on ${family}`} description="None of its domains redirects yet." action={addButton} />
+        ) : null}
+        {redirects.status === 'ready' && all.length === 0 ? (
           <EmptyState
             title="No redirects yet"
             description="Have an old domain or a short one? Send its visitors to where your content lives now."
@@ -127,10 +143,14 @@ export function RedirectsPage() {
         ) : null}
       </Section>
       <RedirectDialog
-        open={dialog.open}
-        onOpenChange={(open) => setDialog((current) => ({ ...current, open }))}
+        open={dialog.open || wantsNew}
+        onOpenChange={(open) => {
+          setDialog((current) => ({ ...current, open }))
+          if (!open) clearQuery()
+        }}
         kind="domain"
         existing={dialog.existing}
+        initialDomain={dialog.existing ? undefined : prefilled}
         domains={[]}
         onSubmit={save}
       />

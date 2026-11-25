@@ -3,11 +3,14 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"strconv"
 )
 
 func (s *Server) siteRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sites", s.listSites)
 	mux.HandleFunc("GET /api/sites/{name}", s.getSite)
+	mux.HandleFunc("GET /api/sites/{name}/icon", s.siteIcon)
 	mux.HandleFunc("PUT /api/sites/{name}", s.putSite)
 	mux.HandleFunc("DELETE /api/sites/{name}", s.deleteSite)
 	mux.HandleFunc("POST /api/sites/{name}/deployments", s.deploy)
@@ -76,4 +79,28 @@ func (s *Server) rollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, site)
+}
+
+// siteIcon serves the icon found in the site's live release. The page shows
+// it in an <img>, but an SVG opened directly must not run scripts either.
+func (s *Server) siteIcon(w http.ResponseWriter, r *http.Request) {
+	icon, err := s.Panel.SiteIcon(r.Context(), actorOf(r), r.PathValue("name"))
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	etag := `"` + url.PathEscape(icon.Release) + "/" + url.PathEscape(icon.Path) + `"`
+	h := w.Header()
+	h.Set("Content-Type", icon.ContentType)
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Cache-Control", "private, max-age=300")
+	h.Set("ETag", etag)
+	if match := r.Header.Get("If-None-Match"); match == etag || match == "W/"+etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	h.Set("Content-Length", strconv.Itoa(len(icon.Data)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(icon.Data)
 }

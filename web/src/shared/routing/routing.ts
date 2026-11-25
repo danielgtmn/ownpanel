@@ -1,4 +1,6 @@
-import { useSyncExternalStore } from 'react'
+import { useMemo, useSyncExternalStore } from 'react'
+
+export type Route = { segments: string[]; query: URLSearchParams }
 
 export function parseHash(hash: string): string[] {
   const path = hash.replace(/^#/, '').split('?')[0]
@@ -14,12 +16,35 @@ export function parseHash(hash: string): string[] {
     })
 }
 
+export function parseQuery(hash: string): URLSearchParams {
+  const index = hash.indexOf('?')
+  return new URLSearchParams(index === -1 ? '' : hash.slice(index + 1))
+}
+
+export function parseRoute(hash: string): Route {
+  return { segments: parseHash(hash), query: parseQuery(hash) }
+}
+
 export function hrefFor(...segments: string[]): string {
   return '#/' + segments.map(encodeURIComponent).join('/')
 }
 
+export function hrefWithQuery(segments: string[], query: Record<string, string>): string {
+  const search = new URLSearchParams(query).toString()
+  return hrefFor(...segments) + (search ? '?' + search : '')
+}
+
 export function navigate(...segments: string[]) {
   window.location.hash = hrefFor(...segments)
+}
+
+// Drops the query (like ?new) once a page has acted on it, without a new history entry.
+export function clearQuery() {
+  const hash = window.location.hash
+  const index = hash.indexOf('?')
+  if (index === -1) return
+  window.history.replaceState(window.history.state, '', hash.slice(0, index) || '#/')
+  window.dispatchEvent(new HashChangeEvent('hashchange'))
 }
 
 function subscribe(listener: () => void) {
@@ -38,4 +63,13 @@ export function useHash(): string {
 export function usePathSegments(): string[] {
   const hash = useHash()
   return parseHash(hash)
+}
+
+export function useRoute(): Route {
+  const hash = useHash()
+  return useMemo(() => parseRoute(hash), [hash])
+}
+
+export function useQuery(): URLSearchParams {
+  return useRoute().query
 }

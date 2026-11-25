@@ -56,6 +56,16 @@ export function describeDetail({ action, detail }: Pick<Activity, 'action' | 'de
     }
     case 'setup':
       return ''
+    case 'update.request': {
+      const match = /^(\S+) to (\S+) \((stable|nightly)\)(, an older version)?$/.exec(detail)
+      if (!match) return detail
+      const channel = match[3] === 'nightly' ? 'Nightly builds' : 'Stable releases'
+      return `From ${match[1]} to ${match[2]} · ${channel}${match[4] ? ' · Older version' : ''}`
+    }
+    case 'update.auto':
+      return detail === 'off' ? 'Off' : `On: ${detail}`
+    case 'update.result':
+      return detail.charAt(0).toUpperCase() + detail.slice(1)
     default:
       return detail
   }
@@ -90,6 +100,12 @@ export function describeActivity({ actor, action, target }: Entry): string {
       return `${who} signed in`
     case 'setup':
       return `${who} set up the panel`
+    case 'update.request':
+      return `${who} started an update of the panel`
+    case 'update.auto':
+      return `${who} changed the automatic updates`
+    case 'update.result':
+      return 'An update of the panel finished'
     default:
       return about(target, (t) => `${who} made a change to ${t}`, `${who} made a change`)
   }

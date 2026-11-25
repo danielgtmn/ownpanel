@@ -52,10 +52,10 @@ The installer never asks questions, except to confirm `--uninstall --purge`.
 
 | Channel | What it is |
 |---|---|
-| `stable` | Tagged releases (`v1.2.3`). The default. |
-| `nightly` | An automatic build of `main`, made every night when `main` has changed. For testing, not for production. |
+| `stable` | Versioned releases (`v1.2.3`), made when `main` is merged into the `release` branch. The default. |
+| `nightly` | An automatic build of `main`, made after every merged pull request that changes the program. For testing, not for production. |
 
-Both are built by the release workflow (`.github/workflows/release.yml`) with `scripts/package.sh` and published as GitHub releases: stable releases under their tag, the nightly as the prerelease `nightly`, which is replaced by every new build. Each release has an archive per architecture, `ownpanel_<version>_linux_<arch>.tar.gz`, and `checksums.txt`. The installer refuses an archive whose SHA-256 does not match `checksums.txt`.
+Both are built by the Publish workflow (`.github/workflows/release.yml`) with `scripts/package.sh` and published as GitHub releases: stable releases under their tag, the newest one marked "latest", the nightly as the prerelease `nightly`, which is replaced by every new build. Each release has an archive per architecture, `ownpanel_<version>_linux_<arch>.tar.gz`, and `checksums.txt`. The installer refuses an archive whose SHA-256 does not match `checksums.txt`. How releases are made: [[Development|Development#releases]].
 
 Switch channels by running the installer with the other `--channel`; it is stored in `/etc/ownpanel/release`.
 
@@ -94,6 +94,10 @@ Values given as installer options (`--panel-domain`, `--server-ip`, `--acme-emai
 | `/etc/ownpanel/caddy-bootstrap.json` | Caddy's start configuration (only the admin socket) |
 | `/etc/ownpanel/ownpaneld.env` | the daemon's flags, see below |
 | `/etc/ownpanel/release` | installed version and channel |
+| `/usr/local/lib/ownpanel/` | `update.sh`, a copy of `install.sh` (update.sh uses its functions) and `ownpanel-update`, the root-side worker for updates from the panel |
+| `/etc/systemd/system/ownpanel-update.{path,service,timer}` | updates from the panel and automatic updates, see [Updating](#updating) |
+| `/var/lib/ownpanel/update` | `root:ownpanel`, mode 1770: update requests from the panel and the update status |
+| `/var/lib/ownpanel/backups` | root only: the backups made before each update (the last three) |
 
 Both services are enabled and started. The installer waits until the panel answers on `127.0.0.1:8600`; if it does not within 60 seconds, it shows the daemon's log and fails.
 
@@ -152,9 +156,64 @@ ssh -L 8600:127.0.0.1:8600 root@<server address>
 
 Keep it open and browse to `http://127.0.0.1:8600`.
 
-## Upgrading
+## Updating
 
-Run the same command again:
+There are three ways, all ending in the same steps: look up the release, download and verify it, back up, install, restart, check, and roll back if the new version does not come up.
+
+### In the panel
+
+**Settings → Updates** shows the installed version and channel, the newest version of each channel with a link to its release notes, and a button **Update to vX.Y.Z**. After you confirm, the page shows the progress; the panel restarts in the middle, the page waits for it and reloads itself with the new version. Switching to the other channel works the same way; if that would install an older version (e.g. from a nightly build back to the last stable release), the panel says so and asks again.
+
+The panel looks for new versions on GitHub at most every 30 minutes. If GitHub cannot be reached it says so, and nothing else is affected.
+
+Updating from the panel only works for installations made with `install.sh`. In development (no `/etc/ownpanel/release`) the page explains that.
+
+### Automatic updates
+
+In the same place, turn on **Install new versions automatically** and choose a time window (server time, may cross midnight, e.g. `23:00`–`02:00`). Once a day inside the window, a newer version of the installed channel is installed, with the same backup and rollback. Automatic updates always follow the installed channel; switching channels in the panel moves them along. Each result shows up in the activity log (`update.result`, marked "automatic").
+
+### On the server: update.sh
+
+```sh
+sudo /usr/local/lib/ownpanel/update.sh            # newest version of the installed channel
+sudo /usr/local/lib/ownpanel/update.sh --check    # only show installed and available
+curl -fsSL https://raw.githubusercontent.com/danielgtmn/ownpanel/main/update.sh | sudo bash -s -- --yes
+```
+
+Installations made before the updater existed have no local `update.sh` and no update button yet: run the `curl` line once; it updates and sets up the updater, and from then on the panel can update itself.
+
+| Option | Meaning |
+|---|---|
+| `--channel stable\|nightly` | Channel to update from; default the installed one. |
+| `--version vX.Y.Z` | Exactly this release (wins over `--channel`). |
+| `--check` | Print the installed and the available version. Exit code 0: up to date, 10: an update is available, anything else: error. |
+| `-y`, `--yes` | Do not ask. When the script is piped in (`curl … \| sudo bash`) it never asks and updates right away. |
+| `--force` | Reinstall even if that version is installed. |
+| `--from-dir DIR` | Update from an unpacked release directory (offline, tests). |
+| `--status-file FILE` | Write the progress as it goes (the panel uses this). |
+| `--no-rollback` | Leave a failed update in place (tests only). |
+
+It refuses to run where ownpanel is not installed and never asks setup questions. The steps:
+
+1. Look up the release through GitHub's API (`/releases/latest` for stable, `/releases/tags/nightly` or `/releases/tags/vX.Y.Z`) and print the version it holds. Nothing to do if that is the installed version.
+2. Download `checksums.txt` and the archive for this machine **by asset id** from that same answer, and check the archive against `checksums.txt` and its `VERSION` against what GitHub reported. A release that is still being published (the nightly is replaced in place) is refused with "try again in a few minutes" instead of mixing two builds.
+3. `ownpaneld backup` into `/var/lib/ownpanel/backups/` (root only; the last three are kept).
+4. Keep the current binaries, unit files, `caddy-bootstrap.json`, `ownpaneld.env` and `release` as `*.previous`.
+5. Run the **new release's** `install.sh --from-dir <unpacked> --yes`, so the file layout is only ever defined by `install.sh`.
+6. Check that `ownpaneld version` prints the new version and the panel answers on its address within 60 seconds.
+7. If not: put the `*.previous` files back, restart, and report "rolled back" (exit code 3; 4 if even that failed, then restore the backup).
+
+The database is not restored on a rollback: a new version may have migrated it. If the previous version does not work with it, restore the backup ([[Backup and Restore|Backup-and-Restore]]).
+
+### How updates from the panel work
+
+The panel runs as the unprivileged user `ownpanel` and never gets root. It only writes a small request into `/var/lib/ownpanel/update/request.json`. `ownpanel-update.path` notices it and starts `ownpanel-update.service` (root), which runs `/usr/local/lib/ownpanel/ownpanel-update`: it moves the request out of the panel's reach, accepts exactly `{"id": <32 hex digits>, "channel": "stable"|"nightly"}` or `{"id", "version": "vX.Y.Z"}` and nothing else, and runs `update.sh --yes --status-file /var/lib/ownpanel/update/status.json` with those values. `ownpanel-update.timer` starts the same service every 15 minutes for automatic updates, which reads `auto.json` (written by the panel) through the same strict checks. See [[Security|Security#updates]].
+
+On the server, `journalctl -u ownpanel-update` shows what the updater did.
+
+### Running the installer again
+
+Running the installer again upgrades as well, without the backup and rollback of `update.sh`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/danielgtmn/ownpanel/main/install.sh | sudo bash
@@ -172,9 +231,9 @@ Back up before upgrading ([[Backup and Restore|Backup-and-Restore]]).
 curl -fsSL https://raw.githubusercontent.com/danielgtmn/ownpanel/main/install.sh | sudo bash -s -- --uninstall
 ```
 
-This stops and removes both services and `/usr/local/bin/ownpaneld` and `/usr/local/bin/caddy`. It keeps `/var/lib/ownpanel` (sites, database, certificates, secret key), `/etc/ownpanel` and the users, so installing again brings everything back.
+This stops and removes both services, the updater (`ownpanel-update.*` units and `/usr/local/lib/ownpanel`) and `/usr/local/bin/ownpaneld` and `/usr/local/bin/caddy`. It keeps `/var/lib/ownpanel` (sites, database, certificates, secret key), `/etc/ownpanel` and the users, so installing again brings everything back.
 
-To delete everything, add `--purge`. It asks for confirmation; without a terminal it needs `--yes`:
+To delete everything, add `--purge`. Run from a terminal it asks for confirmation; piped in (`curl … | sudo bash`) it needs `--yes`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/danielgtmn/ownpanel/main/install.sh | sudo bash -s -- --uninstall --purge --yes

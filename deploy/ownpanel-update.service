@@ -1,0 +1,44 @@
+[Unit]
+Description=Update ownpanel (requested in the panel, or automatic)
+Documentation=https://github.com/danielgtmn/ownpanel/wiki/Installation#updating
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/ownpanel/release
+
+# Started by ownpanel-update.path (a request from the panel) and by
+# ownpanel-update.timer (automatic updates). It runs as root because an update
+# replaces binaries and unit files and restarts services; the panel itself
+# never gets root. The worker only accepts the few values a request may hold
+# and passes nothing else on to update.sh.
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/ownpanel/ownpanel-update
+# Download, backup, install, health check and a possible rollback.
+TimeoutStartSec=30min
+UMask=0077
+# Private, root-only state: the day of the last automatic attempt, and where
+# requests are moved to be read.
+StateDirectory=ownpanel-update
+StateDirectoryMode=0700
+
+# Hardening. The updater must write /usr/local, /etc/ownpanel,
+# /etc/systemd/system and /var/lib/ownpanel, may create users and may open the
+# firewall (install.sh does all of that), so ProtectSystem, a capability bound
+# and ProtectKernelTunables are not used. NoNewPrivileges is safe: services are
+# restarted by systemd itself, not by a child of this one, and root needs no
+# set-user-ID program.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK

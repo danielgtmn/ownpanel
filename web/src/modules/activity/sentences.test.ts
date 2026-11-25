@@ -59,6 +59,11 @@ describe('describeDetail', () => {
     ['token.create', 'write access, sites blog, shop', /^Read and change · Only blog, shop$/],
     ['token.create', 'read access, all sites', /^Read only · All sites$/],
     ['setup', 'first admin created', /^$/],
+    ['update.request', 'v1.1.0 to v1.2.0 (stable)', /^From v1\.1\.0 to v1\.2\.0 · Stable releases$/],
+    ['update.request', 'nightly-20261124-878136d to v1.2.0 (stable), an older version', / · Older version$/],
+    ['update.auto', 'off', /^Off$/],
+    ['update.auto', 'stable releases between 03:00 and 05:00', /^On: stable releases between 03:00 and 05:00$/],
+    ['update.result', 'updated from v1.1.0 to v1.2.0', /^Updated from v1\.1\.0 to v1\.2\.0$/],
     ['unknown.action', 'raw', /^raw$/],
   ])('%s %s', (action, detail, want) => {
     expect(describeDetail({ action, detail })).toMatch(want)

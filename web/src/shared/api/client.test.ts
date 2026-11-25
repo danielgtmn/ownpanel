@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, errorMessage, isSavedButNotApplied, request, setUnauthorizedHandler } from './client.ts'
+import { ApiError, errorMessage, isSavedButNotApplied, onDataChange, request, setUnauthorizedHandler } from './client.ts'
 
 function mockFetch(response: Response | Error) {
   const fn = vi.fn(async (_url: string, _init?: RequestInit) => {
@@ -132,6 +132,27 @@ describe('request', () => {
     expect(((await request('/users').catch((c: unknown) => c)) as ApiError).message).toMatch(/not allowed/i)
     mockFetch(new Response('', { status: 429 }))
     expect(((await request('/login').catch((c: unknown) => c)) as ApiError).message).toMatch(/too many attempts/i)
+  })
+})
+
+describe('onDataChange', () => {
+  it('tells listeners about changes that went through, not about reads or refusals', async () => {
+    const listener = vi.fn()
+    const stop = onDataChange(listener)
+    mockFetch(json([]))
+    await request('/sites')
+    mockFetch(json({ error: 'no' }, 400))
+    await request('/sites/a', { method: 'PUT' }).catch(() => undefined)
+    expect(listener).not.toHaveBeenCalled()
+    mockFetch(json({}))
+    await request('/sites/a', { method: 'PUT' })
+    mockFetch(json({ error: 'saved, web server not updated' }, 502))
+    await request('/redirects', { method: 'POST' }).catch(() => undefined)
+    expect(listener).toHaveBeenCalledTimes(2)
+    stop()
+    mockFetch(json({}))
+    await request('/sites/a', { method: 'DELETE' })
+    expect(listener).toHaveBeenCalledTimes(2)
   })
 })
 

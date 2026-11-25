@@ -19,4 +19,5 @@ export {
   panelUrl,
   sameAddresses,
 } from './rules.ts'
+export { startPolling, type PollerOptions } from './poller.ts'
 export { announceSaved, finishWizard, saveSettings, warnIfNotApplied, type SaveResult } from './save.ts'

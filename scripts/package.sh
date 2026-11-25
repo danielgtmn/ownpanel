@@ -6,11 +6,14 @@
 #
 # Writes to dist/:
 #   ownpanel_<version>_linux_<arch>.tar.gz   one directory ownpanel_<version>_linux_<arch>/ with
-#                                            ownpaneld, caddy, install.sh, deploy/ (units,
-#                                            Caddy bootstrap), LICENSE, README.md, VERSION
+#                                            ownpaneld, caddy, install.sh, update.sh, deploy/
+#                                            (units, Caddy bootstrap, the updater's worker),
+#                                            LICENSE, README.md, VERSION
 #   checksums.txt                            SHA-256 of the archives (sha256sum format)
 #
 # SKIP_WEB=1 reuses an existing build of the web app in internal/webui/dist.
+# OWNPANEL_REPO (default danielgtmn/ownpanel) is the GitHub repository the
+# panel looks for new releases in.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -33,6 +36,8 @@ die() { echo "package.sh: $*" >&2; exit 1; }
 [ $# -ge 1 ] || die "usage: scripts/package.sh <version> [amd64|arm64 ...]"
 version=$1
 shift
+repo=${OWNPANEL_REPO:-danielgtmn/ownpanel}
+[[ $repo =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "OWNPANEL_REPO '$repo' is not owner/name"
 [[ $version =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "version '$version' may only contain letters, digits, '.', '_' and '-'"
 arches=("$@")
 [ ${#arches[@]} -gt 0 ] || arches=(amd64 arm64)
@@ -73,7 +78,7 @@ for arch in "${arches[@]}"; do
   mkdir -p "$stage/deploy"
 
   CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -tags webui -trimpath \
-    -ldflags "-s -w -X main.version=$version" -o "$stage/ownpaneld" ./cmd/ownpaneld
+    -ldflags "-s -w -X main.version=$version -X main.repo=$repo" -o "$stage/ownpaneld" ./cmd/ownpaneld
 
   caddy_tgz="$dist/.caddy/caddy_${CADDY_VERSION}_linux_${arch}.tar.gz"
   if [ ! -f "$caddy_tgz" ]; then
@@ -88,11 +93,14 @@ for arch in "${arches[@]}"; do
   fi
   tar -xzf "$caddy_tgz" -C "$stage" caddy
 
-  cp deploy/ownpaneld.service deploy/ownpanel-caddy.service deploy/caddy-bootstrap.json "$stage/deploy/"
-  cp install.sh LICENSE README.md "$stage/"
+  cp deploy/ownpaneld.service deploy/ownpanel-caddy.service deploy/caddy-bootstrap.json \
+    deploy/ownpanel-update deploy/ownpanel-update.service deploy/ownpanel-update.path deploy/ownpanel-update.timer \
+    "$stage/deploy/"
+  cp install.sh update.sh LICENSE README.md "$stage/"
   echo "$version" > "$stage/VERSION"
-  chmod 0755 "$stage/ownpaneld" "$stage/caddy" "$stage/install.sh" "$stage/deploy"
   chmod 0644 "$stage"/deploy/* "$stage/LICENSE" "$stage/README.md" "$stage/VERSION"
+  chmod 0755 "$stage/ownpaneld" "$stage/caddy" "$stage/install.sh" "$stage/update.sh" "$stage/deploy" \
+    "$stage/deploy/ownpanel-update"
 
   COPYFILE_DISABLE=1 tar "${tar_owner[@]}" -czf "$dist/$name.tar.gz" -C "$dist" "$name"
   rm -rf "$stage"

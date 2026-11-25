@@ -1,0 +1,13 @@
+[Unit]
+Description=Check for automatic ownpanel updates
+
+[Timer]
+# Automatic updates are set in the panel (off, or a channel and a time
+# window). The worker does nothing outside the window and tries at most once a
+# day, so a quarter-hour tick is cheap.
+OnCalendar=*:0/15
+RandomizedDelaySec=120
+Unit=ownpanel-update.service
+
+[Install]
+WantedBy=timers.target

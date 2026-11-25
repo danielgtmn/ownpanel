@@ -1,25 +1,67 @@
-import { useEffect, useMemo, useRef } from 'react'
-import { EmptyState } from '../shared/ui/index.ts'
-import { hrefFor, navigate, usePathSegments } from '../shared/routing/index.ts'
-import { useSession } from '../shared/session/index.ts'
+import { Drawer, DrawerBackdrop, DrawerContent, DrawerTitle, DrawerTrigger } from '@ui-sdk/react/drawer'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { modules } from '../modules/registry.ts'
-import { AccountMenu } from './AccountMenu.tsx'
+import {
+  familyStatus,
+  familySummary,
+  findFamily,
+  overviewSummary,
+  type Family,
+} from '../shared/families/index.ts'
+import { useMediaQuery } from '../shared/hooks/index.ts'
+import { hrefFor, navigate, useRoute } from '../shared/routing/index.ts'
+import { useSession } from '../shared/session/index.ts'
+import { EmptyState, MenuIcon } from '../shared/ui/index.ts'
+import { ChangePasswordDialog } from './ChangePasswordDialog.tsx'
 import { defaultModule, moduleFor, visibleModules } from './modules.ts'
+import { FamilyPage } from './sidebar/FamilyPage.tsx'
+import {
+  ALL,
+  currentRow,
+  familyFromRoute,
+  familyRows,
+  overviewRows,
+  railEntries,
+  selectTile,
+} from './sidebar/selection.ts'
+import { Sidebar, type SidebarProps } from './sidebar/Sidebar.tsx'
+import './sidebar/sidebar.css'
+import { useDomainData } from './sidebar/useDomainData.ts'
 
 export function Shell() {
-  const segments = usePathSegments()
+  const route = useRoute()
+  const { segments } = route
   const { user } = useSession()
   const available = useMemo(() => visibleModules(modules, user), [user])
-  const match = moduleFor(available, segments)
+  const data = useDomainData()
+  const phone = useMediaQuery('(max-width: 760px)')
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [changingPassword, setChangingPassword] = useState(false)
+  const [lastTile, setLastTile] = useState(ALL)
   const mainRef = useRef<HTMLElement>(null)
   const firstRender = useRef(true)
-  const pathKey = segments.join('/')
+  const familyDomain = familyFromRoute(route)
+  const match = familyDomain ? null : moduleFor(available, segments)
+  const routeKey = segments.join('/') + '?' + route.query.toString()
+  const first = defaultModule(available)
+  const allHref = first ? hrefFor(first.basePath.replace(/^\//, '')) : hrefFor()
+
+  const families = useMemo(() => (data.status === 'ready' ? data.families : []), [data])
+  const sources = data.status === 'ready' ? data.sources : null
+  const rowsOf = (family: Family) => familyRows(available, family)
+  const overview = overviewRows(available, (module) => (sources ? (module.overviewRow?.count(sources) ?? null) : null))
+  const tile = selectTile(route, families, rowsOf, overview, lastTile)
+  const selected = tile === ALL ? undefined : findFamily(families, tile)
+  if (tile !== lastTile) setLastTile(tile)
+  // Following a link in the drawer closes it.
+  const [shownRoute, setShownRoute] = useState(routeKey)
+  if (shownRoute !== routeKey) {
+    setShownRoute(routeKey)
+    setMenuOpen(false)
+  }
 
   useEffect(() => {
-    if (!match && segments.length === 0) {
-      const first = defaultModule(available)
-      if (first) navigate(first.basePath.replace(/^\//, ''))
-    }
+    if (!match && !familyDomain && segments.length === 0 && first) navigate(first.basePath.replace(/^\//, ''))
   })
 
   useEffect(() => {
@@ -28,43 +70,76 @@ export function Shell() {
       return
     }
     mainRef.current?.focus()
-  }, [pathKey])
+  }, [routeKey])
+
+  const rows = tile === ALL ? overview : selected ? rowsOf(selected) : []
+  const rowKey = currentRow(rows, route)
+  const states = data.status === 'ready' ? data.states : {}
+
+  const sidebar: SidebarProps = {
+    tile,
+    allHref,
+    families: families.map((family) => ({ family, status: familyStatus(family, states) })),
+    railEntries: railEntries(available, match?.module.id ?? null, rowKey),
+    column: {
+      title: tile === ALL ? 'All domains' : tile,
+      summary:
+        tile === ALL
+          ? sources
+            ? overviewSummary(sources, families)
+            : 'Loading…'
+          : selected
+            ? familySummary(selected)
+            : data.status === 'loading'
+              ? 'Loading…'
+              : 'Not used here',
+      rows,
+      currentRow: rowKey,
+      placeholders: tile !== ALL && selected !== undefined,
+    },
+    onChangePassword: () => setChangingPassword(true),
+  }
+
+  const content = familyDomain ? (
+    <FamilyPage key={familyDomain} domain={familyDomain} data={data} allHref={allHref} />
+  ) : match ? (
+    <match.module.component key={match.module.id} segments={match.rest} />
+  ) : segments.length > 0 ? (
+    <EmptyState
+      title="Page not found"
+      description="This page doesn't exist."
+      action={<a href={allHref}>Go to the start page</a>}
+    />
+  ) : null
 
   return (
-    <div className="shell">
-      <header className="shell-header">
-        <div className="shell-bar">
-          <a className="brand" href={hrefFor()}>
+    <div className="shell" data-layout={phone ? 'phone' : 'wide'}>
+      {phone ? (
+        <header className="topbar">
+          <Drawer side="left" open={menuOpen} onOpenChange={setMenuOpen}>
+            <DrawerTrigger className="topbar-menu" aria-label="Open navigation">
+              <MenuIcon />
+            </DrawerTrigger>
+            <DrawerBackdrop className="nav-drawer-backdrop" />
+            <DrawerContent className="nav-drawer">
+              <DrawerTitle className="visually-hidden">Navigation</DrawerTitle>
+              <Sidebar {...sidebar} inDrawer />
+            </DrawerContent>
+          </Drawer>
+          <a className="brand" href={allHref}>
             ownpanel
           </a>
-          <nav className="shell-nav" aria-label="Main">
-            {available.map((module) => {
-              const current = match?.module.id === module.id
-              return (
-                <a
-                  key={module.id}
-                  href={'#' + module.basePath}
-                  aria-current={current ? 'page' : undefined}
-                >
-                  {module.label}
-                </a>
-              )
-            })}
-          </nav>
-          <AccountMenu />
+          <span className="topbar-context">{sidebar.column.title}</span>
+        </header>
+      ) : (
+        <div className="shell-side">
+          <Sidebar {...sidebar} />
         </div>
-      </header>
+      )}
       <main className="shell-main" ref={mainRef} tabIndex={-1}>
-        {match ? (
-          <match.module.component key={match.module.id} segments={match.rest} />
-        ) : segments.length > 0 ? (
-          <EmptyState
-            title="Page not found"
-            description="This page doesn't exist."
-            action={<a href={'#' + (defaultModule(available)?.basePath ?? '/')}>Go to the start page</a>}
-          />
-        ) : null}
+        <div className="shell-content">{content}</div>
       </main>
+      <ChangePasswordDialog open={changingPassword} onOpenChange={setChangingPassword} />
     </div>
   )
 }

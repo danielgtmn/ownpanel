@@ -11,9 +11,18 @@ export class ApiError extends Error {
 }
 
 let unauthorizedHandler: (() => void) | null = null
+const changeListeners = new Set<() => void>()
 
 export function setUnauthorizedHandler(handler: (() => void) | null) {
   unauthorizedHandler = handler
+}
+
+// Runs after every request that changed something, so overviews like the sidebar can refresh.
+export function onDataChange(listener: () => void): () => void {
+  changeListeners.add(listener)
+  return () => {
+    changeListeners.delete(listener)
+  }
 }
 
 export type RequestOptions = {
@@ -77,6 +86,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     throw new ApiError(0, OFFLINE_MESSAGE)
   }
 
+  if (method !== 'GET' && (response.ok || response.status === 502)) changeListeners.forEach((listener) => listener())
   if (!response.ok) {
     const error = await readError(response)
     if (error.status === 401 && !options.silentUnauthorized) unauthorizedHandler?.()
