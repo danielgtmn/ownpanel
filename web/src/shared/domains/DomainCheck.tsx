@@ -1,11 +1,36 @@
 import { Button } from '@ui-sdk/react/button'
-import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '@ui-sdk/react/collapsible'
+import { DialogClose } from '@ui-sdk/react/dialog'
 import { toast } from '@ui-sdk/react/toast'
 import { errorMessage, getDomainStatus, pointAnyDomain } from '../api/index.ts'
+import { useState } from 'react'
 import { useResource } from '../hooks/index.ts'
-import { StatusBadge } from '../ui/index.ts'
+import { FormDialog, StatusBadge } from '../ui/index.ts'
 import { ServerAddresses } from './ServerAddresses.tsx'
 import { pointedMessage, statusAction, statusText, statusTone } from './status.ts'
+
+function ManualHelp({ domain }: { domain: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <Button onClick={() => setOpen(true)}>
+        How to point it here<span className="visually-hidden"> for {domain}</span>
+      </Button>
+      <FormDialog
+        open={open}
+        onOpenChange={setOpen}
+        title={`Point ${domain} here`}
+        description={`${domain} isn't managed from here. Connect the company that manages it under DNS, or set an A or AAAA record for it to these addresses yourself.`}
+      >
+        <div className="form">
+          <ServerAddresses />
+          <div className="form-actions">
+            <DialogClose>Close</DialogClose>
+          </div>
+        </div>
+      </FormDialog>
+    </>
+  )
+}
 
 export function DomainCheck({ domain }: { domain: string }) {
   const status = useResource(() => getDomainStatus(domain), `domain-check:${domain}`)
@@ -44,19 +69,8 @@ export function DomainCheck({ domain }: { domain: string }) {
             Point to this server<span className="visually-hidden"> for {domain}</span>
           </Button>
         ) : null}
+        {action === 'manual' ? <ManualHelp domain={domain} /> : null}
       </div>
-      {action === 'manual' ? (
-        <Collapsible className="domain-check-manual">
-          <CollapsibleTrigger>How to point {domain} here</CollapsibleTrigger>
-          <CollapsiblePanel>
-            <p>
-              {domain} isn't managed from here. Connect the company that manages it under DNS, or set an A or AAAA
-              record for it to these addresses yourself:
-            </p>
-            <ServerAddresses />
-          </CollapsiblePanel>
-        </Collapsible>
-      ) : null}
     </div>
   )
 }
