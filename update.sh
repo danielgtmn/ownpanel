@@ -144,6 +144,7 @@ die() {
 # Files an update replaces and a rollback puts back.
 previous_files() {
   printf '%s\n' "$BIN/ownpaneld" "$BIN/caddy" "$UNITS/ownpaneld.service" "$UNITS/ownpanel-caddy.service" \
+    "$UNITS/ownpanel-mail.service" \
     "$ETC/caddy-bootstrap.json" "$RELEASE_FILE" "$ENV_FILE"
 }
 
@@ -185,15 +186,21 @@ healthy() {
 rollback() {
   step "Rolling back to ownpanel $old_version"
   report running rolling_back "The new version did not start; going back to $old_version."
-  systemctl stop ownpaneld ownpanel-caddy 2>/dev/null || true
+  systemctl stop ownpaneld ownpanel-mail ownpanel-caddy 2>/dev/null || true
   local f
   while IFS= read -r f; do
     if [ -f "$f.previous" ]; then
       cp -p "$f.previous" "$f.rollback" && mv -f "$f.rollback" "$f"
     fi
   done < <(previous_files)
+  # A version from before the mail service has no mail unit to go back to.
+  if [ ! -f "$UNITS/ownpanel-mail.service.previous" ] && [ -f "$UNITS/ownpanel-mail.service" ]; then
+    systemctl disable ownpanel-mail 2>/dev/null || true
+    rm -f "$UNITS/ownpanel-mail.service"
+  fi
   systemctl daemon-reload
   systemctl start ownpanel-caddy ownpaneld || true
+  [ -f "$UNITS/ownpanel-mail.service" ] && { systemctl start ownpanel-mail || true; }
   if healthy "$old_version"; then
     say "ownpanel $old_version is running again."
     report rolled_back "" "The update to $target failed, so $old_version was put back. $1"

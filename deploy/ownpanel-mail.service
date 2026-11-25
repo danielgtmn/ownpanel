@@ -1,0 +1,49 @@
+[Unit]
+Description=ownpanel mail service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ownpanel-mail
+Group=ownpanel-mail
+# The mail service parses mail from the whole Internet, so it runs as its own
+# user with its own data: it cannot read the panel's database or secret.key,
+# and the panel cannot read stored mail.
+# Admin socket: systemd creates /run/ownpanel-mail as ownpanel-mail with mode
+# 0750, the service creates admin.sock in it with mode 0660. The user ownpanel
+# is a member of the group ownpanel-mail (install.sh), so ownpaneld can push
+# the configuration; other local users cannot reach the socket.
+RuntimeDirectory=ownpanel-mail
+RuntimeDirectoryMode=0750
+StateDirectory=ownpanel-mail
+StateDirectoryMode=0700
+UMask=0077
+# The last configuration the panel pushed is in /var/lib/ownpanel-mail, so
+# mail keeps working while the panel is stopped or updated.
+ExecStart=/usr/local/bin/ownpaneld mail -data /var/lib/ownpanel-mail -admin /run/ownpanel-mail/admin.sock
+Restart=on-failure
+# Running SMTP transactions get time to finish on stop.
+TimeoutStopSec=45
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+LimitNOFILE=65536
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

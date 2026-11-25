@@ -1,0 +1,47 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/danielgtmn/ownpanel/internal/mail/server"
+)
+
+// runMail runs the mail service (ownpanel-mail.service) until SIGTERM or
+// SIGINT. It logs no message contents, password hashes, keys or
+// configurations.
+func runMail(args []string) error {
+	fs := flag.NewFlagSet("mail", flag.ExitOnError)
+	dataDir := fs.String("data", "/var/lib/ownpanel-mail", "data directory: configuration, mail index and messages")
+	admin := fs.String("admin", "/run/ownpanel-mail/admin.sock", "Unix socket the panel configures the service through")
+	smtpAddr := fs.String("smtp", ":25", "address for incoming mail from other servers")
+	submission := fs.String("submission", ":587", "address for mail clients sending with STARTTLS (not served yet)")
+	submissions := fs.String("submissions", ":465", "address for mail clients sending with TLS (not served yet)")
+	imaps := fs.String("imaps", ":993", "address for mail clients reading mail with IMAP over TLS (\"\" to disable)")
+	fs.Parse(args)
+
+	srv, err := server.New(server.Options{
+		DataDir:         *dataDir,
+		AdminSocket:     *admin,
+		SMTPAddr:        *smtpAddr,
+		SubmissionAddr:  *submission,
+		SubmissionsAddr: *submissions,
+		IMAPSAddr:       *imaps,
+		Logger:          slog.Default(),
+	})
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	slog.Info("mail service starting", "version", version, "data", *dataDir, "admin", *admin)
+	if err := srv.Run(ctx); err != nil {
+		return err
+	}
+	slog.Info("mail service stopped")
+	return nil
+}

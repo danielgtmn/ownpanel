@@ -1,6 +1,6 @@
 [Unit]
 Description=ownpanel daemon
-After=network-online.target ownpanel-caddy.service
+After=network-online.target ownpanel-caddy.service ownpanel-mail.service
 Wants=network-online.target ownpanel-caddy.service
 
 [Service]

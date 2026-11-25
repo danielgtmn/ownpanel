@@ -152,7 +152,7 @@ func ValidDomain(d string) bool {
 // most 64 characters. "*" is not a valid local part (it means catch-all only
 // in aliases).
 func ValidLocalPart(l string) bool {
-	return len(l) <= 64 && localPartRe.MatchString(l)
+	return l != "*" && len(l) <= 64 && localPartRe.MatchString(l)
 }
 
 // SplitAddress splits local@domain. It does not validate.
