@@ -143,6 +143,7 @@ describe('loadSources', () => {
       sites: [{ name: 'blog', domains: ['blog.example.com'], live: true, release: '20260101-000000' }],
       zones: [{ connectionId: 1, connectionName: 'H', name: 'example.com' }],
       redirects: [{ id: 1, source: 'go.example.com', target: 'https://x.org' }],
+      pathRedirectHosts: ['blog.example.com'],
     })
     expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain('/api/settings')
   })
@@ -169,6 +170,6 @@ describe('loadSources', () => {
           : new Response(url === '/api/sites' ? '[]' : 'null', { status: 200 }),
       ),
     )
-    await expect(loadSources()).resolves.toEqual({ sites: [], zones: [], redirects: [] })
+    await expect(loadSources()).resolves.toEqual({ sites: [], zones: [], redirects: [], pathRedirectHosts: [] })
   })
 })

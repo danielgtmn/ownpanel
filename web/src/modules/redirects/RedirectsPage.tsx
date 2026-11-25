@@ -16,7 +16,7 @@ import { DomainCheck } from '../../shared/domains/index.ts'
 import { registrableDomain } from '../../shared/families/index.ts'
 import { usePageTitle, useResource } from '../../shared/hooks/index.ts'
 import { domainRedirects, RedirectDialog, RedirectSummary, sortRedirects } from '../../shared/redirects/index.ts'
-import { clearQuery, hrefFor, useQuery } from '../../shared/routing/index.ts'
+import { clearQuery, hrefFor, prefilledDomain, useQuery } from '../../shared/routing/index.ts'
 import { useSession } from '../../shared/session/index.ts'
 import { EmptyState, ErrorState, LoadingState, PageHeader, Section } from '../../shared/ui/index.ts'
 
@@ -54,6 +54,7 @@ export function RedirectsPage() {
   const query = useQuery()
   const family = query.get('family')
   const wantsNew = query.has('new')
+  const prefilled = wantsNew ? prefilledDomain(query) : undefined
   usePageTitle(family ? `Redirects of ${family}` : 'Redirects')
 
   async function save(input: RedirectInput) {
@@ -149,6 +150,7 @@ export function RedirectsPage() {
         }}
         kind="domain"
         existing={dialog.existing}
+        initialDomain={dialog.existing ? undefined : prefilled}
         domains={[]}
         onSubmit={save}
       />
