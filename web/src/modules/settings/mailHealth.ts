@@ -26,7 +26,14 @@ export async function getMailHealth(): Promise<MailHealth> {
   }
 }
 
-export type HealthLine = { tone: 'positive' | 'warning' | 'neutral'; badge: string; title: string; hint?: string }
+// ownDetail: the hint already says what the server's detail says, in plainer words.
+export type HealthLine = {
+  tone: 'positive' | 'warning' | 'neutral'
+  badge: string
+  title: string
+  hint?: string
+  ownDetail?: boolean
+}
 
 const list = (values: string[]) => values.join(', ')
 
@@ -45,9 +52,10 @@ const TOPIC: Record<string, string> = {
   certificate: 'the certificate of the mail server',
   listeners: 'whether the mail server accepts connections',
   postmaster: 'where reports about mail problems go',
+  blocklists: 'the lists of known spam senders',
 }
 
-function sentence(check: HealthCheck, host: string): { title: string; hint?: string } {
+function sentence(check: HealthCheck, host: string): { title: string; hint?: string; ownDetail?: boolean } {
   const ok = check.state === 'ok'
   const name = host || 'the mail server'
   switch (check.id) {
@@ -110,6 +118,19 @@ function sentence(check: HealthCheck, host: string): { title: string; hint?: str
             title: 'No address receives reports about mail problems.',
             hint: 'Enter a postmaster address above.',
           }
+    case 'blocklists': {
+      if (ok) {
+        return check.expected.length > 0
+          ? { title: `Incoming mail is checked against ${list(check.expected)}.` }
+          : { title: "Incoming mail isn't checked against lists of known spam senders." }
+      }
+      const one = check.found.length === 1
+      return {
+        title: `${list(check.found)} ${one ? "doesn't" : "don't"} answer this server, so mail isn't checked against ${one ? 'it' : 'them'}.`,
+        hint: 'These lists turn away servers that ask them through big public lookup services. Let the server look up names itself, or get a free key for the Spamhaus Data Query Service and enter it as a list below.',
+        ownDetail: true,
+      }
+    }
     default:
       return { title: ok ? 'Fine.' : 'Something about the mail server needs a look.' }
   }

@@ -71,7 +71,7 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 
 **Mail record changes:** `{"changes": [{"kind", "type", "name", "action", "old", "new", "needs_confirm", "note"}], "applied"}`. `action` is `create`, `replace`, `add` (to other TXT values, which stay), `keep` or `skip`. Only replacing MX records that do not point to the mail host has `needs_confirm` (mail would move here). `applied` is `false` only when such a change was not confirmed; nothing was written then.
 
-**Mail health:** `{"mail_host", "checks": [{"id", "state", "found", "expected", "detail"}]}` with the checks `service`, `mail_host_dns`, `ptr`, `outbound_port`, `certificate`, `listeners`, `postmaster` in this order; `state` is `ok`, `warning`, `error` or `unknown` (a lookup or the mail service could not be asked). IPv4 addresses without a PTR naming `mail_host` are an error, IPv6 ones a warning. The outbound port check is reused for 10 minutes.
+**Mail health:** `{"mail_host", "checks": [{"id", "state", "found", "expected", "detail"}]}` with the checks `service`, `mail_host_dns`, `ptr`, `outbound_port`, `certificate`, `listeners`, `postmaster`, `blocklists` in this order; `state` is `ok`, `warning`, `error` or `unknown` (a lookup or the mail service could not be asked). IPv4 addresses without a PTR naming `mail_host` are an error, IPv6 ones a warning. The outbound port check is reused for 10 minutes.
 
 ## Routes
 
@@ -184,7 +184,7 @@ Entries of `GET /api/dns/zones` are Zone objects, with `nameservers`.
 
 A change that is saved but could not be sent to the mail service answers `502` with "saved, but the mail server could not be updated yet"; the panel keeps retrying. Without a mail service (`-mail-admin` not set) everything is stored, and `GET /api/mail/status` says the service is not set up.
 
-The panel settings (`GET`/`PUT /api/settings`, admin) also carry `mail_host`, `mail_host_locked` and `postmaster_address`; see [[Configuration|Configuration]].
+The panel settings (`GET`/`PUT /api/settings`, admin) also carry `mail_host`, `mail_host_locked` and `postmaster_address`; see [[Configuration|Configuration]]. The spam checks are `mail_blocklists` (list of DNS blocklist zones, at most 10; `[]` turns them off; zones with a Spamhaus key, `<key>.….dq.spamhaus.net`, are answered as `••••.….dq.spamhaus.net`, and sending the masked name back keeps the stored zone), `mail_blocklists_default` (`true` uses the default list and ignores `mail_blocklists`), `mail_junk_score` (1–50, default 5) and `mail_greylisting` (default `false`). Omitted fields stay unchanged.
 
 For record routes, `{name}` is `@` for the zone itself, and `{type}` is for example `A` or `TXT`. See [[DNS|DNS]] for what is allowed.
 

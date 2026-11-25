@@ -119,8 +119,38 @@ describe('describeDetail', () => {
     ['update.auto', 'off', /^Off$/],
     ['update.auto', 'stable releases between 03:00 and 05:00', /^On: stable releases between 03:00 and 05:00$/],
     ['update.result', 'updated from v1.1.0 to v1.2.0', /^Updated from v1\.1\.0 to v1\.2\.0$/],
+    [
+      'mail.delivery.not-forwarded',
+      'a message to sales@example.com was not forwarded to a@example.net, b@example.net: it was judged as junk (score 6.5)',
+      /^To a@example\.net, b@example\.net · It looked like spam$/,
+    ],
+    [
+      'mail.delivery.not-forwarded',
+      'a message to sales@example.com was not forwarded to a@example.net: the domain example.com reached its limit of 300 messages per hour',
+      /^To a@example\.net · example\.com reached its limit of 300 messages an hour$/,
+    ],
+    [
+      'mail.delivery.not-forwarded',
+      'a delivery report for x@example.com was not passed on: it was judged as junk (score 9)',
+      /^Delivery report · It looked like spam$/,
+    ],
+    ['mail.blocklist.refused', 'the blocklist zen.spamhaus.org refused to answer', /^Incoming mail is not checked/],
     ['unknown.action', 'raw', /^raw$/],
   ])('%s %s', (action, detail, want) => {
     expect(describeDetail({ action, detail })).toMatch(want)
+  })
+})
+
+describe('mail service sentences', () => {
+  it('describes lists that stop answering and mail that was not forwarded', () => {
+    expect(describeActivity({ actor: 'mail', action: 'mail.blocklist.refused', target: 'zen.spamhaus.org' })).toBe(
+      'The list of spam senders zen.spamhaus.org stopped answering this server',
+    )
+    expect(describeActivity({ actor: 'mail', action: 'mail.delivery.not-forwarded', target: '*@example.com' })).toBe(
+      'Mail to all other addresses @example.com was not forwarded',
+    )
+    expect(describeActivity({ actor: 'mail', action: 'mail.delivery.not-forwarded', target: '' })).toBe(
+      'Mail was not forwarded',
+    )
   })
 })

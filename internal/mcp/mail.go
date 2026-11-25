@@ -208,7 +208,7 @@ type mailRecordChangesOutput struct {
 }
 
 type mailHealthCheckInfo struct {
-	ID       string   `json:"id" jsonschema:"service, mail_host_dns, ptr, outbound_port, certificate, listeners or postmaster"`
+	ID       string   `json:"id" jsonschema:"service, mail_host_dns, ptr, outbound_port, certificate, listeners, postmaster or blocklists"`
 	State    string   `json:"state" jsonschema:"ok, warning, error or unknown"`
 	Found    []string `json:"found" jsonschema:"what was found"`
 	Expected []string `json:"expected" jsonschema:"what was expected"`
@@ -291,7 +291,8 @@ func addMailTools(s *sdk.Server, p *panel.Service) {
 		Title: "Check the mail server's health",
 		Description: "Check what decides whether mail from this server is accepted elsewhere (admins only): the mail service " +
 			"runs, the mail server's name points here, each server address has it as reverse name (PTR), outgoing port 25 " +
-			"works, the certificate is valid, every port listens and postmaster mail has somewhere to go.",
+			"works, the certificate is valid, every port listens, postmaster mail has somewhere to go and no blocklist refused " +
+			"this server's queries in the last 7 days.",
 		Annotations: annotations("Check the mail server's health", true, false, true),
 	}, func(ctx context.Context, c call, _ noInput) (mailHealthOutput, error) {
 		h, err := p.MailHealth(ctx, c.actor)

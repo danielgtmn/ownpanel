@@ -255,7 +255,7 @@ func TestMailRecordsAndHealthRoutes(t *testing.T) {
 	wantStatus(t, rec, 200, "")
 	wantKeys(t, rec.Body.Bytes(), "mail_host", "checks")
 	h := decode[panel.MailHealth](t, rec)
-	if len(h.Checks) != 7 || h.Checks[0].ID != "service" || h.Checks[0].State != "warning" && h.Checks[0].State != "ok" {
+	if len(h.Checks) != 8 || h.Checks[0].ID != "service" || h.Checks[0].State != "warning" && h.Checks[0].State != "ok" {
 		t.Fatalf("health %s", rec.Body)
 	}
 	var rawH struct {

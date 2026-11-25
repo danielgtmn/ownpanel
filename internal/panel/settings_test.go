@@ -99,6 +99,7 @@ func TestSettingsDefaultsAndDetectedAddresses(t *testing.T) {
 			{"8.8.4.4", true}, {"192.168.1.10", false}, {"198.51.100.20", false}, {"2a01:4f8::20", true},
 		},
 		TLSMode: "acme", IPAccess: true,
+		MailBlocklists: []string{"zen.spamhaus.org"}, MailBlocklistsDefault: true, MailJunkScore: 5,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("settings\n got %+v\nwant %+v", got, want)

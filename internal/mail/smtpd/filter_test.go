@@ -465,3 +465,99 @@ func TestForwardedBounceReturns(t *testing.T) {
 		t.Fatalf("bounce %+v", got)
 	}
 }
+
+// signAs signs msg for domain with selector s1.
+func signAs(t *testing.T, domain, keyPEM, msg string) string {
+	t.Helper()
+	sig, err := auth.NewSigner().Signature(&config.Domain{Name: domain,
+		DKIM: []config.DKIMKey{{Selector: "s1", PrivateKeyPEM: keyPEM, Active: true}}}, strings.NewReader(msg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sig + msg
+}
+
+func TestOwnDomainFromOutside(t *testing.T) {
+	e := start(t, fwdConfig(t))
+	senderDNS(t, e, "")
+	keyPEM, record := mailtest.DKIMKey(t)
+	e.res.TXT["example.org"] = []string{"v=spf1 ip4:203.0.113.0/24 -all"}
+	e.res.TXT["s1._domainkey.example.org"] = []string{record}
+	ownFrom := strings.Replace(goodMsg, "From: A <a@sender.test>", "From: Alice <alice@example.org>", 1)
+	e.from("198.51.100.7") // not in either SPF record
+	c := dial(t, e.addr, false)
+	refused := func(from, msg string) {
+		t.Helper()
+		c.Reset()
+		err := send(c, from, []string{"bob@example.org"}, msg)
+		var se *smtp.SMTPError
+		if !asSMTP(err, &se) || se.Code != 550 || se.EnhancedCode != (smtp.EnhancedCode{5, 7, 1}) {
+			t.Fatalf("from %s not refused: %v", from, err)
+		}
+	}
+	// Header From of ours, envelope elsewhere: refused.
+	refused("a@sender.test", ownFrom)
+	// Envelope sender of ours (SPF fails), header From elsewhere: refused.
+	refused("alice@example.org", goodMsg)
+	// mail_host counts as ours too.
+	refused("x@mail.example.net", goodMsg)
+
+	// An aligned DKIM pass makes it genuine: accepted, and forwarded with
+	// an SRS sender because SPF did not pass for our address.
+	c.Reset()
+	if err := send(c, "alice@example.org", []string{"out@example.org"}, signAs(t, "example.org", keyPEM, ownFrom)); err != nil {
+		t.Fatal(err)
+	}
+	e.q.Flush()
+	got := e.sink.Messages()
+	if len(got) != 1 {
+		t.Fatalf("sink %+v", got)
+	}
+	if orig, err := e.srs.Reverse(got[0].From); err != nil || orig != "alice@example.org" {
+		t.Fatalf("forwarded with sender %q (%v), want SRS", got[0].From, err)
+	}
+
+	// SPF pass for our domain: accepted, and the sender is kept.
+	e.from("203.0.113.5")
+	c = dial(t, e.addr, false)
+	if err := send(c, "alice@example.org", []string{"out@example.org"}, ownFrom); err != nil {
+		t.Fatal(err)
+	}
+	e.q.Flush()
+	if got := e.sink.Messages(); len(got) != 2 || got[1].From != "alice@example.org" {
+		t.Fatalf("sink %+v", got)
+	}
+
+	// Local programs (loopback) are trusted.
+	e.from("127.0.0.1")
+	c = dial(t, e.addr, false)
+	if err := send(c, "alice@example.org", []string{"bob@example.org"}, ownFrom); err != nil {
+		t.Fatalf("loopback: %v", err)
+	}
+}
+
+func TestBounceToSRSAddressLimited(t *testing.T) {
+	e := start(t, fwdConfig(t)) // limited.test: 1 message per hour
+	e.from("192.0.2.10")
+	srs, err := e.srs.Forward("victim@sender.test", "limited.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := dial(t, e.addr, false)
+	report := "From: MAILER-DAEMON@elsewhere.test\r\nSubject: Undelivered\r\nDate: Mon, 23 Nov 2026 10:00:00 +0000\r\nMessage-ID: <4@elsewhere.test>\r\n\r\nGone.\r\n"
+	if err := send(c, "", []string{srs}, report); err != nil {
+		t.Fatal(err)
+	}
+	if err := send(c, "", []string{srs}, report); code(err) != 451 {
+		t.Fatalf("over the limit: %v", err)
+	}
+	e.q.Flush()
+	if got := e.sink.Messages(); len(got) != 1 {
+		t.Fatalf("passed on %d reports", len(got))
+	}
+	// The window slides: an hour later one more goes through.
+	e.clock.Add(time.Hour + time.Minute)
+	if err := send(c, "", []string{srs}, report); err != nil {
+		t.Fatal(err)
+	}
+}

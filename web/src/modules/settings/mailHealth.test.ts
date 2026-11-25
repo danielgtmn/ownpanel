@@ -65,3 +65,20 @@ describe('validateMailHost', () => {
     expect(validateMailHost('mail example.com')).toBeTruthy()
   })
 })
+
+describe('blocklists check', () => {
+  it('names the lists that stopped answering and says what to do', () => {
+    const line = healthLine(
+      check('blocklists', 'warning', { found: ['zen.spamhaus.org'], expected: ['zen.spamhaus.org'] }),
+      '',
+    )
+    expect(line).toMatchObject({ badge: 'Check this', ownDetail: true })
+    expect(line.title).toBe("zen.spamhaus.org doesn't answer this server, so mail isn't checked against it.")
+    expect(line.hint).toContain('Spamhaus')
+    expect(healthLine(check('blocklists', 'ok', { expected: ['zen.spamhaus.org'] }), '').title).toBe(
+      'Incoming mail is checked against zen.spamhaus.org.',
+    )
+    expect(healthLine(check('blocklists', 'ok'), '').title).toMatch(/isn't checked/)
+    expect(healthLine(check('blocklists', 'unknown'), '').title).toBe("Couldn't check the lists of known spam senders.")
+  })
+})

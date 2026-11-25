@@ -41,6 +41,23 @@ function describeMailLimits(detail: string): string {
   return `${storage} · ${match[2]} messages an hour · ${match[3]} a day`
 }
 
+// "a message to a@x was not forwarded to b@y: <reason>" from the mail service.
+function describeNotForwarded(detail: string): string {
+  const match = /^a (message|delivery report) (?:to|for) \S+ was not (?:forwarded to (.+?)|passed on): (.+)$/.exec(detail)
+  if (!match) return detail
+  const reason = match[3]
+  let why = reason.charAt(0).toUpperCase() + reason.slice(1)
+  const limit = /^the domain (\S+) reached its limit of (\d+) messages per hour$/.exec(reason)
+  if (limit) {
+    why = `${limit[1]} reached its limit of ${limit[2]} messages an hour`
+  } else if (/spam|junk|score|dmarc/i.test(reason)) {
+    why = 'It looked like spam'
+  } else if (reason === 'forwarding is not available') {
+    why = "Forwarding isn't available on this server"
+  }
+  return `${match[2] ? `To ${match[2]}` : 'Delivery report'} · ${why}`
+}
+
 export function describeDetail({ action, detail }: Pick<Activity, 'action' | 'detail'>): string {
   if (!detail) return ''
   switch (action) {
@@ -94,6 +111,10 @@ export function describeDetail({ action, detail }: Pick<Activity, 'action' | 'de
     case 'mail.mailbox.create':
     case 'mail.mailbox.limits':
       return describeMailLimits(detail)
+    case 'mail.blocklist.refused':
+      return 'Incoming mail is not checked against it until it answers again. See how the mail server is doing in the settings.'
+    case 'mail.delivery.not-forwarded':
+      return describeNotForwarded(detail)
     case 'mail.alias.create':
     case 'mail.alias.update':
     case 'mail.alias.delete':
@@ -180,6 +201,14 @@ export function describeActivity({ actor, action, target }: Entry): string {
       return about(target, (t) => `Mail from ${t} could not be delivered`, 'Mail could not be delivered')
     case 'mail.listener.failed':
       return 'Part of the mail server stopped accepting connections'
+    case 'mail.blocklist.refused':
+      return about(
+        target,
+        (t) => `The list of spam senders ${t} stopped answering this server`,
+        'A list of spam senders stopped answering this server',
+      )
+    case 'mail.delivery.not-forwarded':
+      return about(target, (t) => `Mail to ${mailAddress(t)} was not forwarded`, 'Mail was not forwarded')
     default:
       return about(target, (t) => `${who} made a change to ${t}`, `${who} made a change`)
   }

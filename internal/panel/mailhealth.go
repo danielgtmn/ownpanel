@@ -29,6 +29,7 @@ const (
 	HealthCertificate  = "certificate"
 	HealthListeners    = "listeners"
 	HealthPostmaster   = "postmaster"
+	HealthBlocklists   = "blocklists"
 )
 
 // Health check states.
@@ -111,7 +112,7 @@ func (s *Service) MailHealth(ctx context.Context, a Actor) (MailHealth, error) {
 	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
 	defer cancel()
 	host := s.MailHost()
-	ids := []string{HealthService, HealthMailHostDNS, HealthPTR, HealthOutboundPort, HealthCertificate, HealthListeners, HealthPostmaster}
+	ids := []string{HealthService, HealthMailHostDNS, HealthPTR, HealthOutboundPort, HealthCertificate, HealthListeners, HealthPostmaster, HealthBlocklists}
 	out := MailHealth{MailHost: host, Checks: make([]MailHealthCheck, len(ids))}
 
 	// The status of the mail service feeds three checks; ask once.
@@ -150,6 +151,7 @@ func (s *Service) MailHealth(ctx context.Context, a Actor) (MailHealth, error) {
 	run(4, func() MailHealthCheck { return s.healthCertificate(st) })
 	run(5, func() MailHealthCheck { return s.healthListeners(st) })
 	run(6, func() MailHealthCheck { return s.healthPostmaster(ctx) })
+	run(7, func() MailHealthCheck { return s.healthBlocklists(s.store.Settings(ctx)) })
 	wg.Wait()
 	return out, nil
 }

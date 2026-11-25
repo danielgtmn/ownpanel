@@ -60,6 +60,11 @@ type settingsState struct {
 	// postmasterAddress receives postmaster@ and abuse@ of the mail host
 	// and of domains without mailboxes.
 	postmasterAddress string
+	// Spam checks (mailfilter.go): blocklists nil means the default list;
+	// junkScore 0 means the default.
+	blocklists  []blocklistEntry
+	junkScore   float64
+	greylisting bool
 }
 
 // DetectAddresses returns the global unicast addresses of the host's
@@ -110,6 +115,12 @@ type Settings struct {
 	MailHost          string       `json:"mail_host"`
 	MailHostLocked    bool         `json:"mail_host_locked"`
 	PostmasterAddress string       `json:"postmaster_address"`
+	// MailBlocklists are the blocklist zones in effect (the default list
+	// when MailBlocklistsDefault), access keys masked; empty means off.
+	MailBlocklists        []string `json:"mail_blocklists"`
+	MailBlocklistsDefault bool     `json:"mail_blocklists_default"`
+	MailJunkScore         float64  `json:"mail_junk_score"`
+	MailGreylisting       bool     `json:"mail_greylisting"`
 }
 
 // SettingsUpdate changes some settings; nil fields stay as they are, an
@@ -120,6 +131,13 @@ type SettingsUpdate struct {
 	ACMEEmail         *string
 	MailHost          *string
 	PostmasterAddress *string
+	// MailBlocklistsDefault true returns to the default list; false alone
+	// keeps the zones in effect as an own list. MailBlocklists sets an own
+	// list ([] turns blocklists off); a masked zone keeps the stored one.
+	MailBlocklistsDefault *bool
+	MailBlocklists        *[]string
+	MailJunkScore         *float64
+	MailGreylisting       *bool
 }
 
 // DNSCheck tells whether the panel domain points at this server.
@@ -174,6 +192,7 @@ func (s *Service) loadSettings(ctx context.Context) error {
 		mailHost:          m[keyMailHost],
 		postmasterAddress: m[keyPostmaster],
 	}
+	loadFilterSettings(&st, m)
 	if v := m[keyServerIPs]; v != "" {
 		// Stored addresses were checked when saved; the TLS mode may have
 		// changed since, which must not stop the daemon.
@@ -194,6 +213,7 @@ func (s *Service) state() settingsState {
 	defer s.settingsMu.RUnlock()
 	st := s.settings
 	st.serverIPs = slices.Clone(st.serverIPs)
+	st.blocklists = slices.Clone(st.blocklists)
 	return st
 }
 
@@ -316,7 +336,10 @@ func (s *Service) settingsView() Settings {
 		MailHost:          s.MailHost(),
 		MailHostLocked:    s.mailHostFlag != "",
 		PostmasterAddress: st.postmasterAddress,
+		MailJunkScore:     effectiveJunkScore(st.junkScore),
+		MailGreylisting:   st.greylisting,
 	}
+	v.MailBlocklists, v.MailBlocklistsDefault = blocklistView(st.blocklists)
 	for _, a := range s.detected() {
 		v.DetectedIPs = append(v.DetectedIPs, DetectedIP{IP: a.String(), Public: isPublicUnicast(a)})
 	}
@@ -511,6 +534,9 @@ func (s *Service) UpdateSettings(ctx context.Context, a Actor, u SettingsUpdate)
 			changed = append(changed, "postmaster address "+orRemoved(e))
 		}
 	}
+	if err := s.updateFilterSettings(u, cur, &next, values, &changed); err != nil {
+		return Settings{}, err
+	}
 	if len(values) == 0 {
 		return s.settingsView(), nil
 	}
@@ -528,7 +554,10 @@ func (s *Service) UpdateSettings(ctx context.Context, a Actor, u SettingsUpdate)
 	_, mailHost := values[keyMailHost]
 	_, postmaster := values[keyPostmaster]
 	_, email := values[keyACMEEmail]
-	if mailHost || postmaster || email {
+	_, blocklists := values[keyMailBlocklists]
+	_, junk := values[keyMailJunkScore]
+	_, grey := values[keyMailGreylisting]
+	if mailHost || postmaster || email || blocklists || junk || grey {
 		if mailHost || email {
 			// Certificates for the new name are looked for before the push;
 			// new ones are requested by the background loop.

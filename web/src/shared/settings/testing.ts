@@ -20,6 +20,10 @@ export function settingsFixture(overrides: Partial<PanelSettings> = {}): PanelSe
     mail_host: '',
     mail_host_locked: false,
     postmaster_address: '',
+    mail_blocklists: ['zen.spamhaus.org'],
+    mail_blocklists_default: true,
+    mail_junk_score: 5,
+    mail_greylisting: false,
     ...overrides,
   }
 }

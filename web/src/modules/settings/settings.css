@@ -114,6 +114,22 @@
   font-weight: 650;
 }
 
+.spam-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.spam-checks h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.spam-checks [data-slot='number-input'] {
+  max-width: 10rem;
+}
+
 .update-window {
   display: flex;
   flex-wrap: wrap;

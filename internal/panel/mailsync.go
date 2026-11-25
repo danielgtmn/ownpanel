@@ -37,6 +37,11 @@ func (s *Service) buildMailConfig(ctx context.Context) (*config.Config, error) {
 	if cfg.Certificates == nil {
 		cfg.Certificates = []config.Certificate{}
 	}
+	filter, err := s.mailFilter()
+	if err != nil {
+		return nil, err
+	}
+	cfg.Filter = filter
 	domains, err := s.store.MailDomains(ctx)
 	if err != nil {
 		return nil, err
@@ -197,16 +202,35 @@ func (s *Service) recordMailEvents(ctx context.Context) error {
 		return err
 	}
 	last := cursor
+	refusals := blocklistRefusals(m)
+	refused := false
 	for _, e := range events {
 		if e.ID <= last {
 			continue
 		}
 		last = e.ID
-		target := e.Address
+		target := maskSecretZones(e.Address)
 		if target == "" {
 			target = e.StorageID
 		}
-		detail := e.Detail
+		// Event details name blocklist zones, whose access keys stay out
+		// of the activity log.
+		detail := maskSecretZones(e.Detail)
+		if e.Kind == config.EventBlocklistRefused {
+			if z := refusedZoneRe.FindStringSubmatch(detail); z != nil {
+				at := e.At
+				if at.IsZero() || at.After(s.now()) {
+					at = s.now()
+				}
+				if at.After(refusals[z[1]]) {
+					refusals[z[1]] = at
+				}
+				refused = true
+				if target == "" {
+					target = z[1]
+				}
+			}
+		}
 		if utf8.RuneCountInString(detail) > 500 {
 			detail = string([]rune(detail)[:499]) + "…"
 		}
@@ -218,7 +242,11 @@ func (s *Service) recordMailEvents(ctx context.Context) error {
 	if last == cursor {
 		return nil
 	}
-	return s.store.PutSettings(ctx, map[string]string{keyMailEventsCursor: strconv.FormatInt(last, 10)})
+	values := map[string]string{keyMailEventsCursor: strconv.FormatInt(last, 10)}
+	if refused {
+		values[keyBlocklistRefused] = encodeRefusals(refusals, s.now())
+	}
+	return s.store.PutSettings(ctx, values)
 }
 
 // runMail is the mail part of Run: it activates domains whose MX record

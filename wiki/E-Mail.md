@@ -144,7 +144,30 @@ password first if it may have been stolen.
 - connections to port 25 of other mail servers get through,
 - the certificate is valid,
 - every port is listening (another mail program may hold one),
-- postmaster mail has somewhere to go.
+- postmaster mail has somewhere to go,
+- no blocklist refused to answer this server in the last 7 days.
+
+## Spam checks
+
+**Settings → E-mail → Spam checks** (administrators):
+
+- **Lists of known spam senders:** by default `zen.spamhaus.org`. Mail from
+  a server Spamhaus lists as a spam source is refused; a listing on any
+  other list adds points towards Junk. You can use other lists or none. Spamhaus
+  answers queries from large public DNS resolvers with a refusal; Mail
+  health shows it when that happens. With a free Spamhaus key, enter
+  `<key>.zen.dq.spamhaus.net`: the key is stored encrypted and only shown
+  masked.
+- **Points for Junk** (1–50, default 5): every sign of spam adds points
+  (failed sender checks, suspicious content). Mail with at least this many
+  points goes to the Junk folder and is not forwarded to outside addresses.
+- **Hold back first mail from unknown servers** (off by default): the first
+  message from a server that cannot show it may send for its domain is
+  accepted only when it tries again. Real mail servers do, so such mail
+  arrives some minutes later; much spam never comes back.
+
+Mail that claims to come from one of your own domains but was not sent by
+its servers (no passing SPF or signature) is refused.
 
 ## New server address: warm it up
 

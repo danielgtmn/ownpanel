@@ -39,6 +39,7 @@ var (
 	errGreylisted     = &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 7, 1}, Message: "Greylisted, please try again in a few minutes"}
 	errReportsOnly    = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 7, 1}, Message: "This address only accepts delivery status notifications"}
 	errForwardLimited = &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 7, 1}, Message: "Forwarding limit reached, try again later"}
+	errOwnDomain      = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 7, 1}, Message: "Sender address of a domain hosted here, but not sent by its servers"}
 )
 
 func errListed(zone string) error {
@@ -88,6 +89,7 @@ type session struct {
 	rcptDomains []string          // our domains among the recipients
 	forwards    []*forward
 	reports     []string       // original senders of bounces to SRS addresses
+	reportDoms  []string       // the domains of those SRS addresses
 	notes       []config.Event // recorded once the message is accepted
 }
 
@@ -113,6 +115,7 @@ func (ss *session) Reset() {
 	ss.rcptDomains = nil
 	ss.forwards = nil
 	ss.reports = nil
+	ss.reportDoms = nil
 	ss.notes = nil
 }
 
@@ -192,7 +195,7 @@ func (ss *session) Rcpt(to string, _ *smtp.RcptOptions) error {
 	addr := directory.Normalize(to)
 	local, dom, ok := config.SplitAddress(addr)
 	if ok && auth.IsSRS(local) && ss.ours(dom) {
-		return ss.rcptSRS(addr)
+		return ss.rcptSRS(addr, dom)
 	}
 	route, out := ss.dir.Resolve(addr)
 	switch out {
@@ -263,7 +266,7 @@ func (ss *session) Rcpt(to string, _ *smtp.RcptOptions) error {
 // rcptSRS accepts a bounce to an SRS address of ours whose signature
 // checks out and that is not too old; it goes back to the original
 // sender.
-func (ss *session) rcptSRS(addr string) error {
+func (ss *session) rcptSRS(addr, dom string) error {
 	if ss.s.opts.Queue == nil {
 		return errUnknownRcpt
 	}
@@ -279,6 +282,9 @@ func (ss *session) rcptSRS(addr string) error {
 	}
 	if !slices.Contains(ss.reports, orig) {
 		ss.reports = append(ss.reports, orig)
+	}
+	if !slices.Contains(ss.reportDoms, dom) {
+		ss.reportDoms = append(ss.reportDoms, dom)
 	}
 	return nil
 }
@@ -422,16 +428,21 @@ func (ss *session) Data(r io.Reader) error {
 		return io.MultiReader(strings.NewReader(returnPath), bytes.NewReader(prefix.Bytes()), f), nil
 	}
 
-	// Forwarding: the domain's sending limit is counted before anything is
-	// stored, so a message that cannot go anywhere gets a temporary error.
+	// Forwarding and delivery reports passed back: the domain's sending
+	// limit is counted before anything is stored, so a message that cannot
+	// go anywhere gets a temporary error.
 	var sendable []*forward
+	reportsOK := false
 	if !v.junk {
 		for _, fw := range ss.forwards {
 			if ss.reserveForward(ctx, fw) {
 				sendable = append(sendable, fw)
 			}
 		}
-		if len(ss.boxes) == 0 && len(ss.reports) == 0 && len(ss.forwards) > 0 && len(sendable) == 0 {
+		if len(ss.reports) > 0 {
+			reportsOK = ss.reserveReports(ctx)
+		}
+		if len(ss.boxes) == 0 && len(sendable) == 0 && !reportsOK {
 			return errForwardLimited
 		}
 	}
@@ -486,7 +497,7 @@ func (ss *session) Data(r io.Reader) error {
 			}
 			queued++
 		}
-		if len(ss.reports) > 0 {
+		if reportsOK {
 			msg, err := message("")
 			if err != nil {
 				return errLocal
@@ -563,6 +574,10 @@ func (ss *session) check(ctx context.Context, f *os.File, fields []field) (verdi
 	case auth.Fail:
 		v.score.Add(filter.PointsSPFFail, "spf-fail")
 	}
+	if d := ss.unauthenticatedOwn(v, fromDomains); d != "" {
+		ss.s.log.Info("smtp: refused unauthenticated mail of a local domain", "remote", ss.remote, "domain", d)
+		return v, errOwnDomain
+	}
 	dkimPass, dkimFail := false, false
 	for _, d := range v.dkim {
 		dkimPass = dkimPass || d.Result == auth.Pass
@@ -580,6 +595,60 @@ func (ss *session) check(ctx context.Context, f *os.File, fields []field) (verdi
 		v.junk, v.why = true, fmt.Sprintf("it was judged as junk (score %s)", v.score.String())
 	}
 	return v, nil
+}
+
+// spfPassFor tells whether SPF passed for the envelope sender's domain d
+// (not for the HELO name).
+func (ss *session) spfPassFor(d string) bool {
+	r := ss.spfResult()
+	return r.Result == auth.Pass && !r.Helo && strings.EqualFold(r.Domain, d)
+}
+
+// unauthenticatedOwn returns one of our domains that the envelope sender or
+// a header From claims while neither SPF nor a DKIM signature passed for it
+// (aligned as DMARC relaxed: the same organizational domain), or "". Mail
+// of our domains is sent by this server and DKIM-signed, so such mail from
+// outside is forged, whatever the domain's published DMARC policy says.
+//
+// Clients on a loopback address are exempt: they are programs on this
+// server (local tools handing mail to port 25) that already run on the
+// machine; the check exists to stop the internet. A proxy in front of
+// port 25 would make every client look local, so none is supported.
+func (ss *session) unauthenticatedOwn(v verdict, fromDomains []string) string {
+	if ss.ip.IsLoopback() {
+		return ""
+	}
+	authenticated := func(d string) bool {
+		if v.spf.Result == auth.Pass && sameOrg(v.spf.Domain, d) {
+			return true
+		}
+		for _, r := range v.dkim {
+			if r.Result == auth.Pass && sameOrg(r.Domain, d) {
+				return true
+			}
+		}
+		return false
+	}
+	var claimed []string
+	if _, d, ok := config.SplitAddress(directory.Normalize(ss.from)); ok {
+		claimed = append(claimed, d)
+	}
+	claimed = append(claimed, fromDomains...)
+	for _, d := range claimed {
+		if ss.ours(d) && !authenticated(d) {
+			return d
+		}
+	}
+	return ""
+}
+
+// sameOrg tells whether a and b share their organizational domain.
+func sameOrg(a, b string) bool {
+	a, b = strings.ToLower(strings.TrimSuffix(a, ".")), strings.ToLower(strings.TrimSuffix(b, "."))
+	if a == "" || b == "" {
+		return false
+	}
+	return a == b || auth.OrgDomain(a) == auth.OrgDomain(b)
 }
 
 // store delivers into the mailbox's INBOX, or its Junk folder.
@@ -614,38 +683,73 @@ func (ss *session) junkFolder(ctx context.Context, id string) string {
 // reserveForward counts one forwarded message against the alias domain's
 // hourly sending limit; false (and an event) when it is reached.
 func (ss *session) reserveForward(ctx context.Context, fw *forward) bool {
-	max := config.DefaultDomainSendPerHour
-	if d, ok := ss.dir.Domain(fw.domain); ok && d.SendPerHour > 0 {
-		max = d.SendPerHour
-	}
-	now := ss.s.opts.Now()
-	i, err := ss.s.opts.Store.ReserveSend(ctx, []storage.SendLimit{
-		{Key: storage.KeyDomainSends + fw.domain, Since: now.Add(-time.Hour), Max: max},
-	}, now)
-	if err != nil {
-		// Counting failed: forward anyway rather than lose the message.
-		ss.s.log.Error("smtp: count forward", "err", err)
-		return true
-	}
-	if i < 0 {
+	ok, dom, max := ss.reserveDomains(ctx, []string{fw.domain})
+	if ok {
 		return true
 	}
 	ss.notes = append(ss.notes, config.Event{Kind: config.EventNotForwarded, Address: fw.alias,
 		Detail: fmt.Sprintf("a message to %s was not forwarded to %s: the domain %s reached its limit of %d messages per hour",
-			fw.alias, strings.Join(fw.targets, ", "), fw.domain, max)})
+			fw.alias, strings.Join(fw.targets, ", "), dom, max)})
 	return false
+}
+
+// reserveReports counts the delivery reports passed back through SRS
+// addresses once per message against each SRS domain's hourly sending
+// limit, like forwards: otherwise anyone with an alias that forwards could
+// make this server send unlimited null-sender mail to an address of their
+// choice. False (and events) when a limit is reached; then none of the
+// reports is passed on.
+func (ss *session) reserveReports(ctx context.Context) bool {
+	ok, dom, max := ss.reserveDomains(ctx, ss.reportDoms)
+	if ok {
+		return true
+	}
+	for _, o := range ss.reports {
+		ss.notes = append(ss.notes, config.Event{Kind: config.EventNotForwarded, Address: o,
+			Detail: fmt.Sprintf("a delivery report for %s was not passed on: the domain %s reached its limit of %d messages per hour",
+				o, dom, max)})
+	}
+	return false
+}
+
+// reserveDomains counts one message against the hourly sending limit of
+// every domain in doms, all or nothing. When a limit is reached it returns
+// false, that domain and its limit.
+func (ss *session) reserveDomains(ctx context.Context, doms []string) (bool, string, int) {
+	now := ss.s.opts.Now()
+	limits := make([]storage.SendLimit, 0, len(doms))
+	for _, dom := range doms {
+		max := config.DefaultDomainSendPerHour
+		if d, ok := ss.dir.Domain(dom); ok && d.SendPerHour > 0 {
+			max = d.SendPerHour
+		}
+		limits = append(limits, storage.SendLimit{Key: storage.KeyDomainSends + dom, Since: now.Add(-time.Hour), Max: max})
+	}
+	i, err := ss.s.opts.Store.ReserveSend(ctx, limits, now)
+	if err != nil {
+		// Counting failed: send anyway rather than lose the message.
+		ss.s.log.Error("smtp: count forward", "err", err)
+		return true, "", 0
+	}
+	if i < 0 {
+		return true, "", 0
+	}
+	return false, doms[i], limits[i].Max
 }
 
 // forwardSender is the envelope sender of forwarded mail and the mailbox
 // that gets its bounces: the null sender stays null; a sender of our own
-// domains stays (bounces go to its mailbox, if it is one); everyone else
-// gets an SRS address in the alias domain.
+// domains stays when SPF passed for it on this connection (bounces go to
+// its mailbox, if it is one); everyone else gets an SRS address in the
+// alias domain. Without the SPF condition, mail forged with one of our
+// addresses would leave this server under that address, pass SPF at the
+// target and send its bounces into the forged mailbox.
 func (ss *session) forwardSender(aliasDomain string) (sender, storageID string) {
 	if ss.from == "" {
 		return "", ""
 	}
 	addr := directory.Normalize(ss.from)
-	if _, d, ok := config.SplitAddress(addr); ok && ss.ours(d) {
+	if _, d, ok := config.SplitAddress(addr); ok && ss.ours(d) && ss.spfPassFor(d) {
 		if m, ok := ss.dir.Mailbox(addr); ok {
 			return ss.from, m.StorageID
 		}
