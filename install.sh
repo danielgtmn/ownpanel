@@ -21,6 +21,14 @@ REPO=${OWNPANEL_REPO:-danielgtmn/ownpanel}
 # Releases are looked up and downloaded through GitHub's API (tests point
 # this at a local fake).
 API=${OWNPANEL_API_URL:-https://api.github.com}
+# Every request to GitHub gives up on a connection that does not open, or
+# that stalls (less than 1 KB/s for 30 seconds), instead of hanging until the
+# total limit. A download that cannot finish must fail long before the
+# updater's 30 minutes (ownpanel-update.service) are up.
+CURL_LIMITS=(--connect-timeout 15 --speed-limit 1024 --speed-time 30)
+# How often and how long to wait for a nightly that is being replaced.
+NIGHTLY_LOOKUPS=6
+NIGHTLY_WAIT=20
 
 BIN=/usr/local/bin
 LIB=/usr/local/lib/ownpanel
@@ -324,24 +332,37 @@ asset_id() {
 # rel_tag, rel_version (the build in it), rel_archive (the archive for this
 # machine) and the ids of the archive and checksums.txt. Downloads then go
 # by asset id, so a moving tag (nightly) can never mix two builds.
-lookup_release() {
+lookup_release() { try_lookup_release "$1" || die "$rel_error"; }
+
+# try_lookup_release <tag|latest>: lookup_release that returns 1 with the
+# reason in rel_error instead of stopping.
+try_lookup_release() {
   local what=$1 path flat name
+  rel_error=""
   if [ "$what" = latest ]; then path=releases/latest; else path=releases/tags/$what; fi
-  curl -fsSL --retry 3 --max-time 60 -H "Accept: application/vnd.github+json" \
-    -o "$tmp/release.json" "$API/repos/$REPO/$path" ||
+  if ! curl -fsSL --retry 3 --max-time 60 "${CURL_LIMITS[@]}" -H "Accept: application/vnd.github+json" \
+    -o "$tmp/release.json" "$API/repos/$REPO/$path"; then
     if [ "$what" = latest ]; then
-      die "could not look up the latest release of $REPO (none published yet? try --channel nightly)"
+      rel_error="could not look up the latest release of $REPO (none published yet? try --channel nightly)"
     else
-      die "could not look up the release $what of $REPO (does it exist?)"
+      rel_error="could not look up the release $what of $REPO (does it exist?)"
     fi
+    return 1
+  fi
   flat=$(json_flat <"$tmp/release.json")
   rel_tag=$(json_get "$flat" tag_name)
-  [[ $rel_tag =~ ^[A-Za-z0-9._-]+$ ]] || die "could not read the release $what of $REPO"
+  if ! [[ $rel_tag =~ ^[A-Za-z0-9._-]+$ ]]; then
+    rel_error="could not read the release $what of $REPO"
+    return 1
+  fi
   if [ "$rel_tag" = nightly ]; then
     # The nightly is one release whose title names the current build.
     name=$(json_get "$flat" name)
     rel_version=$(printf '%s\n' "$name" | grep -oE 'nightly-[0-9]{8}-[0-9a-f]+' | head -n 1 || true)
-    [ -n "$rel_version" ] || die "could not tell which build the nightly release holds (title: '$name')"
+    if [ -z "$rel_version" ]; then
+      rel_error="could not tell which build the nightly release holds (title: '$name')"
+      return 1
+    fi
     if [ -n "${opt_version:-}" ] && [ "$opt_version" != "$rel_version" ]; then
       die "$opt_version is no longer available; the nightly release now holds $rel_version"
     fi
@@ -352,30 +373,88 @@ lookup_release() {
   rel_archive_id=$(asset_id "$flat" "$rel_archive")
   rel_sums_id=$(asset_id "$flat" checksums.txt)
   if [ -z "$rel_archive_id" ] || [ -z "$rel_sums_id" ]; then
-    die "the release $rel_tag ($rel_version) has no $rel_archive and checksums.txt yet; it may be being published right now, try again in a few minutes"
+    rel_error="the release $rel_tag ($rel_version) has no $rel_archive and checksums.txt yet; it may be being published right now, try again in a few minutes"
+    return 1
   fi
 }
 
-# download_asset <id> <file>
+# download_asset <id> <file>: fails with curl's exit code (22 when GitHub
+# answers with an error such as 404, 28 when the download stalls). curl runs
+# in the background so that a signal to this script is handled right away
+# instead of after the download (update.sh's trap stops curl too).
 download_asset() {
-  curl -fsSL --retry 3 --max-time 600 -H "Accept: application/octet-stream" \
-    -o "$2" "$API/repos/$REPO/releases/assets/$1"
+  curl -fsSL --retry 2 --max-time 600 "${CURL_LIMITS[@]}" -H "Accept: application/octet-stream" \
+    -o "$2" "$API/repos/$REPO/releases/assets/$1" &
+  wait "$!"
 }
 
 # fetch_release: downloads and checks the release found by lookup_release
 # and unpacks it. Sets src.
+#
+# Every build of main replaces the nightly in place: the title changes, the
+# new archives and checksums.txt are uploaded and the old archives deleted.
+# A download that started just before may find its files gone. Then, unless a
+# --version was asked for, the nightly is looked up again and the build it
+# holds now is downloaded instead (update.sh hears of it through
+# release_moved, which it defines).
 fetch_release() {
-  step "Downloading ownpanel $rel_version ($channel) for linux/$arch"
-  download_asset "$rel_sums_id" "$tmp/checksums.txt" || die "could not download checksums.txt of $rel_tag"
-  grep -qE "^[0-9a-f]{64}  $rel_archive\$" "$tmp/checksums.txt" ||
-    die "checksums.txt of $rel_tag does not list $rel_archive; the release may be being published right now, try again in a few minutes"
-  download_asset "$rel_archive_id" "$tmp/$rel_archive" || die "could not download $rel_archive"
-  (cd "$tmp" && grep -E "^[0-9a-f]{64}  $rel_archive\$" checksums.txt | sha256sum -c --quiet -) ||
-    die "the checksum of $rel_archive does not match checksums.txt; nothing was installed"
-  say "Checksum verified: $rel_archive"
+  local lookups=0
+  until try_fetch_release; do
+    [ "$rel_moved" = 1 ] && [ "$rel_tag" = nightly ] || die "$rel_error"
+    # Asked for exactly this build: say that it is gone (the lookup stops
+    # with that when the nightly holds another one by now).
+    if [ -n "${opt_version:-}" ]; then
+      lookup_release nightly
+      die "$rel_error"
+    fi
+    warn "$rel_error; the nightly release is being replaced, looking it up again"
+    while :; do
+      lookups=$((lookups + 1))
+      [ "$lookups" -le "$NIGHTLY_LOOKUPS" ] ||
+        die "the nightly release is being replaced right now ($rel_error); try again in a few minutes"
+      [ "$lookups" = 1 ] || sleep "$NIGHTLY_WAIT"
+      try_lookup_release nightly && break
+      warn "$rel_error"
+    done
+    say "The nightly release now holds $rel_version."
+    if declare -F release_moved >/dev/null; then release_moved; fi
+  done
   mkdir "$tmp/release"
   tar -xzf "$tmp/$rel_archive" -C "$tmp/release" --no-same-owner
   src=$tmp/release/${rel_archive%.tar.gz}
+}
+
+# try_fetch_release: downloads and verifies the archive of the release found
+# by lookup_release. Returns 1 with the reason in rel_error; rel_moved is 1
+# when the release may have changed meanwhile (a file is gone, or the files
+# do not belong together).
+try_fetch_release() {
+  local rc=0
+  rel_moved=0
+  step "Downloading ownpanel $rel_version ($channel) for linux/$arch"
+  download_asset "$rel_sums_id" "$tmp/checksums.txt" || rc=$?
+  if [ "$rc" != 0 ]; then
+    rel_error="could not download checksums.txt of $rel_tag"
+    [ "$rc" != 22 ] || rel_moved=1
+    return 1
+  fi
+  if ! grep -qE "^[0-9a-f]{64}  $rel_archive\$" "$tmp/checksums.txt"; then
+    rel_error="checksums.txt of $rel_tag does not list $rel_archive; the release may be being published right now, try again in a few minutes"
+    rel_moved=1
+    return 1
+  fi
+  download_asset "$rel_archive_id" "$tmp/$rel_archive" || rc=$?
+  if [ "$rc" != 0 ]; then
+    rel_error="could not download $rel_archive"
+    [ "$rc" != 22 ] || rel_moved=1
+    return 1
+  fi
+  if ! (cd "$tmp" && grep -E "^[0-9a-f]{64}  $rel_archive\$" checksums.txt | sha256sum -c --quiet -); then
+    rel_error="the checksum of $rel_archive does not match checksums.txt; nothing was installed"
+    rel_moved=1
+    return 1
+  fi
+  say "Checksum verified: $rel_archive"
 }
 
 # check_release [version]: src is a complete release for this machine (and
