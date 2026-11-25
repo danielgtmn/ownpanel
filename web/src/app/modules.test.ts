@@ -3,13 +3,13 @@ import type { PanelModule } from '../modules/types.ts'
 import type { User } from '../shared/session/index.ts'
 import { defaultModule, moduleFor, visibleModules } from './modules.ts'
 
-const component = () => null
-const everyone: PanelModule = { id: 'sites', label: 'Sites', basePath: '/sites', component }
+const page = () => Promise.resolve(() => null)
+const everyone: PanelModule = { id: 'sites', label: 'Sites', basePath: '/sites', page }
 const adminsOnly: PanelModule = {
   id: 'users',
   label: 'People',
   basePath: '/people',
-  component,
+  page,
   visible: (user) => user.role === 'admin',
 }
 const all = [everyone, adminsOnly]

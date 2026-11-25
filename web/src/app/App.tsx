@@ -3,10 +3,14 @@ import { useEffect, useSyncExternalStore } from 'react'
 import { ErrorState, LoadingState } from '../shared/ui/index.ts'
 import { getSessionState, loadSession, SessionProvider, subscribeSession } from '../shared/session/index.ts'
 import { screenFor } from './screen.ts'
-import { SetupWizard } from './setup/SetupWizard.tsx'
+import { lazyPage } from './lazyPage.ts'
+import { PageFrame } from './ModulePage.tsx'
 import { SetupScreen } from './SetupScreen.tsx'
 import { Shell } from './Shell.tsx'
 import { SignInScreen } from './SignInScreen.tsx'
+
+// The first-run wizard is shown once per panel, so its code loads only then.
+const SetupWizard = lazyPage(() => import('./setup/SetupWizard.tsx').then((page) => page.SetupWizard))
 
 function Screen() {
   const state = useSyncExternalStore(subscribeSession, getSessionState)
@@ -35,7 +39,13 @@ function Screen() {
     case 'signedIn':
       return (
         <SessionProvider user={state.user}>
-          {screenFor(state) === 'wizard' ? <SetupWizard /> : <Shell />}
+          {screenFor(state) === 'wizard' ? (
+            <PageFrame frame="gate">
+              <SetupWizard />
+            </PageFrame>
+          ) : (
+            <Shell />
+          )}
         </SessionProvider>
       )
   }

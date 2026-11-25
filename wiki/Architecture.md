@@ -75,8 +75,10 @@ New API routes: add a file with a method that registers them and list it in `rou
 
 ## Adding a module to the web app
 
-1. Create `web/src/modules/<name>/` with an `index.ts` that exports a `PanelModule`: `id`, `label`, `basePath`, `component` (receives the remaining path `segments`) and optionally `visible: (user) => boolean` to hide it (and its address) from some people.
+1. Create `web/src/modules/<name>/` with an `index.ts` that exports a `PanelModule`: `id`, `label`, `basePath`, `page` (loads the page component on demand, `() => import('./MyPage.tsx').then((page) => page.MyPage)`; the component receives the remaining path `segments`) and optionally `visible: (user) => boolean` to hide it (and its address) from some people.
 2. Add one line to `web/src/modules/registry.ts`.
+
+Only a module's page is loaded when it is first opened; the rest of its `index.ts` (label, sidebar rows, counts, `visible`) is part of the first download, so keep it light and don't import page components there.
 
 Modules never import from each other; shared code goes into `shared/`. Text shown to people follows the rules in [[Development|Development]].
 

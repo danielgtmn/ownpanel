@@ -2,7 +2,6 @@ import './sites.css'
 import { startsWith, type Family, type FamilyRow } from '../../shared/families/index.ts'
 import { hrefFor } from '../../shared/routing/index.ts'
 import { GlobeIcon } from '../../shared/ui/index.ts'
-import { SitesPage } from './SitesPage.tsx'
 import type { PanelModule } from '../types.ts'
 
 export function siteRows(family: Family): FamilyRow[] {
@@ -22,7 +21,7 @@ export const sitesModule: PanelModule = {
   id: 'sites',
   label: 'Sites',
   basePath: '/sites',
-  component: SitesPage,
+  page: () => import('./SitesPage.tsx').then((page) => page.SitesPage),
   overviewRow: { icon: GlobeIcon, count: (sources) => sources.sites.length },
   familyRows: siteRows,
 }

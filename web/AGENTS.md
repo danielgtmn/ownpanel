@@ -23,6 +23,18 @@ search `node_modules/@ui-sdk/react/docs/core.md` by heading, and read
   listed in `src/modules/registry.ts`. Modules never import from each other.
   `PanelModule.visible` hides a module (and its address) from people it
   doesn't apply to, for example administrator-only areas.
+- Pages load on demand. `PanelModule.page` is a loader,
+  `() => import('./SitesPage.tsx').then((page) => page.SitesPage)`, and the
+  shell renders it through `ModulePage` (`src/app/ModulePage.tsx`), which
+  shows the loading state and, if the download fails (for example after an
+  update), an error with a reload action. Everything else in a module's
+  `index.ts` (label, `railEntry`, `overviewRow`, `familyRows`, `visible`) is
+  in the first download: keep it light and never import a page there
+  statically, or the page lands back in the main bundle. Other parts that
+  only some people see use `lazyPage()` inside `PageFrame` the same way
+  (the domain overview, the first-run wizard).
+- `vite.config.ts` puts React and the parts of ui-sdk the first screen needs
+  into their own files so they stay cached across updates.
 
 ## Navigation
 
