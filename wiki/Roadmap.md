@@ -29,7 +29,7 @@ The live plan is the **[roadmap board](https://github.com/users/danielgtmn/proje
   - build sites from a GitHub repository on the server ([#55](https://github.com/danielgtmn/ownpanel/issues/55));
   - preview versions;
   - DNS for agents.
-- **v0.4.0:** e-mail, first version, as a self-hosted service that also sends mail itself ([#21](https://github.com/danielgtmn/ownpanel/issues/21)): built (see above). Next steps: webmail ([#30](https://github.com/danielgtmn/ownpanel/issues/30)), virus scanning, reports from receivers about your mail, outgoing encryption policies (MTA-STS, DANE), changing signing keys, a daily blocklist check, mailbox users changing their own password.
+- **v0.4.0:** e-mail, first version, as a self-hosted service that also sends mail itself ([#21](https://github.com/danielgtmn/ownpanel/issues/21)): built (see above). Next steps: webmail ([#30](https://github.com/danielgtmn/ownpanel/issues/30)), virus scanning, reports from receivers about your mail, outgoing encryption policies (MTA-STS, DANE), changing signing keys, a daily blocklist check. Groupware (shared mailboxes, filters and out-of-office, calendars and contacts, mailbox users changing their own password) is planned in [[Groupware architecture|Groupware-Architecture]] ([#84](https://github.com/danielgtmn/ownpanel/issues/84)).
 - **Later:** apps in containers ([#32](https://github.com/danielgtmn/ownpanel/issues/32)). Not built: today only static sites can be hosted.
 
 All planned work is tracked as [issues](https://github.com/danielgtmn/ownpanel/issues), labelled by area (`area: web`, `area: email`, `area: dns`, …).
