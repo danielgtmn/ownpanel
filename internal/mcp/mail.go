@@ -8,13 +8,16 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	mailconfig "github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/panel"
 )
 
 // E-mail tools. There is deliberately no tool that takes a mailbox
 // password (creating a mailbox or setting its password): passwords of
 // mailboxes are entered in the web interface or sent through the HTTP API
-// and never pass through an AI agent.
+// and never pass through an AI agent. For the same reason importing mail
+// (it takes another account's password) and exporting a mailbox (it reads
+// all its mail) are not offered; agents may list and cancel imports.
 
 func rfc3339(t *time.Time) string {
 	if t == nil {
@@ -45,7 +48,7 @@ func mailDomainInfoOf(d panel.MailDomain) mailDomainInfo {
 }
 
 type mailboxInfo struct {
-	ID          int64  `json:"id" jsonschema:"mailbox id; pass it to set_mailbox_limits, unblock_mailbox or delete_mailbox"`
+	ID          int64  `json:"id" jsonschema:"mailbox id; pass it to set_mailbox_limits, unblock_mailbox, delete_mailbox or list_mail_imports"`
 	Address     string `json:"address" jsonschema:"the mailbox's e-mail address, also its user name in mail programs"`
 	Owner       string `json:"owner" jsonschema:"user the mail domain belongs to"`
 	QuotaBytes  int64  `json:"quota_bytes" jsonschema:"most mail the mailbox may store, in bytes; 0 means no limit"`
@@ -500,4 +503,79 @@ func addMailTools(s *sdk.Server, p *panel.Service) {
 		}
 		return deletedOutput{Deleted: a.Address}, nil
 	})
+
+	add(s, &sdk.Tool{
+		Name:  "list_mail_imports",
+		Title: "List a mailbox's imports",
+		Description: "List the imports of mail into a mailbox, newest first: where from (another mail account or an uploaded " +
+			"file), state (uploading, checking, ready, waiting, running, paused, interrupted, done, failed, cancelled) and how " +
+			"many messages were copied, skipped as already there or failed. Imports are started in the web interface.",
+		Annotations: annotations("List a mailbox's imports", true, false, true),
+	}, func(ctx context.Context, c call, in mailboxIDInput) (mailImportsOutput, error) {
+		js, err := p.MailImports(ctx, c.actor, in.ID)
+		if err != nil {
+			return mailImportsOutput{}, err
+		}
+		out := mailImportsOutput{Imports: []mailImportInfo{}}
+		for _, j := range js {
+			out.Imports = append(out.Imports, mailImportInfoOf(j))
+		}
+		return out, nil
+	})
+
+	add(s, &sdk.Tool{
+		Name:  "cancel_mail_import",
+		Title: "Cancel a mail import",
+		Description: "Stop an import that has not finished (mail copied so far stays in the mailbox), or remove a finished " +
+			"import from the list. Only call it when the user asked for it.",
+		Annotations: annotations("Cancel a mail import", false, true, false),
+	}, func(ctx context.Context, c call, in mailImportIDInput) (cancelledOutput, error) {
+		if err := p.CancelMailImport(ctx, c.actor, in.ID, in.ImportID); err != nil {
+			return cancelledOutput{}, err
+		}
+		return cancelledOutput{Cancelled: in.ImportID}, nil
+	})
+}
+
+type mailImportInfo struct {
+	ID       int64  `json:"id" jsonschema:"import id; pass it to cancel_mail_import as import_id"`
+	Address  string `json:"address" jsonschema:"the mailbox mail is imported into"`
+	Source   string `json:"source" jsonschema:"where the mail comes from: user and server of another account, or the file name"`
+	State    string `json:"state" jsonschema:"uploading, checking, ready (waits to be started), waiting, running, paused (the other server limits downloads; continue in the web interface), interrupted (the mail server restarted; continue in the web interface), done, failed or cancelled"`
+	Error    string `json:"error,omitempty" jsonschema:"why it failed or paused"`
+	Messages int    `json:"messages" jsonschema:"messages it looks at, once known"`
+	Copied   int    `json:"copied" jsonschema:"messages copied"`
+	Skipped  int    `json:"skipped" jsonschema:"messages skipped because they were there already"`
+	Failed   int    `json:"failed" jsonschema:"messages that could not be copied"`
+	Bytes    int64  `json:"bytes" jsonschema:"bytes copied"`
+	Created  string `json:"created" jsonschema:"when the import was created, RFC 3339 (UTC)"`
+	Finished string `json:"finished,omitempty" jsonschema:"when it ended, RFC 3339 (UTC)"`
+}
+
+func mailImportInfoOf(j panel.MailImport) mailImportInfo {
+	src := j.FileName
+	if j.Kind == mailconfig.ImportIMAP {
+		src = j.Username + " at " + j.Host
+	}
+	v := mailImportInfo{
+		ID: j.ID, Address: j.Address, Source: src, State: j.State, Error: j.Error, Messages: j.Messages,
+		Copied: j.Copied, Skipped: j.Skipped, Failed: j.Failed, Bytes: j.Bytes, Created: j.Created.UTC().Format(time.RFC3339),
+	}
+	if !j.Finished.IsZero() {
+		v.Finished = j.Finished.UTC().Format(time.RFC3339)
+	}
+	return v
+}
+
+type mailImportsOutput struct {
+	Imports []mailImportInfo `json:"imports"`
+}
+
+type mailImportIDInput struct {
+	ID       int64 `json:"id" jsonschema:"mailbox id from list_mailboxes"`
+	ImportID int64 `json:"import_id" jsonschema:"import id from list_mail_imports"`
+}
+
+type cancelledOutput struct {
+	Cancelled int64 `json:"cancelled" jsonschema:"the import that was cancelled or removed"`
 }

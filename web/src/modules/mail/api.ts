@@ -1,6 +1,10 @@
-import { encodeSegment, request } from '../../shared/api/index.ts'
+import { ApiError, encodeSegment, fallbackMessage, request } from '../../shared/api/index.ts'
 import type {
   ApplyResult,
+  ImportCheck,
+  ImportChoices,
+  ImportSource,
+  MailImport,
   LimitsChange,
   MailAlias,
   MailDomain,
@@ -62,4 +66,69 @@ export async function applyMailRecords(domain: string, confirm: boolean): Promis
     applied: data.applied,
     changes: (data.changes ?? []).map((change) => ({ ...change, old: change.old ?? [], new: change.new ?? [] })),
   }
+}
+
+// ---- import and export ----
+
+const mailboxPath = (domain: string, localPart: string) =>
+  `${domainPath(domain)}/mailboxes/${encodeSegment(localPart)}`
+
+export const checkImport = (domain: string, localPart: string, source: ImportSource) =>
+  request<ImportCheck>(`${mailboxPath(domain, localPart)}/imports/check`, { method: 'POST', body: source })
+export const startImport = (domain: string, localPart: string, source: ImportSource, choices: ImportChoices) =>
+  request<MailImport>(`${mailboxPath(domain, localPart)}/imports`, { method: 'POST', body: { ...source, choices } })
+export const createUpload = (domain: string, localPart: string, name: string, size: number) =>
+  request<MailImport>(`${mailboxPath(domain, localPart)}/uploads`, { method: 'POST', body: { name, size } })
+export const startFileImport = (domain: string, localPart: string, id: number, choices: ImportChoices) =>
+  request<MailImport>(`${mailboxPath(domain, localPart)}/imports/${id}/start`, { method: 'POST', body: { choices } })
+export const continueImport = (domain: string, localPart: string, id: number, password: string) =>
+  request<MailImport>(`${mailboxPath(domain, localPart)}/imports/${id}/start`, { method: 'POST', body: { password } })
+export const listImports = async (domain: string, localPart: string) =>
+  (await request<MailImport[] | null>(`${mailboxPath(domain, localPart)}/imports`)) ?? []
+export const getImport = (domain: string, localPart: string, id: number) =>
+  request<MailImport>(`${mailboxPath(domain, localPart)}/imports/${id}`)
+export const cancelImport = (domain: string, localPart: string, id: number) =>
+  request<void>(`${mailboxPath(domain, localPart)}/imports/${id}`, { method: 'DELETE' })
+// A file download, opened as a link (the session cookie goes along).
+export const exportHref = (domain: string, localPart: string) => `/api${mailboxPath(domain, localPart)}/export`
+
+// uploadPart sends one part of a file and reports the bytes sent so far;
+// it resolves with how many bytes the server has stored.
+export function uploadPart(
+  domain: string,
+  localPart: string,
+  id: number,
+  offset: number,
+  part: Blob,
+  onBytes: (sent: number) => void,
+  signal?: AbortSignal,
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('PUT', `/api${mailboxPath(domain, localPart)}/uploads/${id}?offset=${offset}`)
+    xhr.setRequestHeader('X-Ownpanel-Request', '1')
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream')
+    xhr.withCredentials = true
+    xhr.upload.onprogress = (event) => onBytes(event.loaded)
+    xhr.onerror = () => reject(new ApiError(0, "Can't reach the panel. Check your connection and try again."))
+    xhr.ontimeout = xhr.onerror
+    xhr.onabort = () => reject(new DOMException('The upload was stopped.', 'AbortError'))
+    xhr.onload = () => {
+      let data: unknown = null
+      try {
+        data = JSON.parse(xhr.responseText)
+      } catch {
+        // Not JSON; handled below.
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && data && typeof data === 'object' && 'received' in data) {
+        resolve(Number(data.received))
+        return
+      }
+      const message =
+        data && typeof data === 'object' && 'error' in data && typeof data.error === 'string' ? data.error : ''
+      reject(new ApiError(xhr.status, message || fallbackMessage(xhr.status)))
+    }
+    signal?.addEventListener('abort', () => xhr.abort())
+    xhr.send(part)
+  })
 }

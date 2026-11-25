@@ -305,6 +305,8 @@ func TestToolsAndAnnotations(t *testing.T) {
 		"list_mail_aliases":    {readOnly: true, idempotent: true},
 		"set_mail_alias":       {destructive: true},
 		"delete_mail_alias":    {destructive: true},
+		"list_mail_imports":    {readOnly: true, idempotent: true},
+		"cancel_mail_import":   {destructive: true},
 	}
 	got := map[string]bool{}
 	for _, tool := range res.Tools {

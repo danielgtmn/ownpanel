@@ -184,6 +184,15 @@ func (s *Service) SyncMail(ctx context.Context, a Actor) error {
 	return s.mailSync(ctx)
 }
 
+// importEventActions names the activity of the service's import events
+// like the panel's own (mail.mailbox.import-started).
+var importEventActions = map[string]string{
+	config.EventImportFinished:    "mail.mailbox.import-finished",
+	config.EventImportFailed:      "mail.mailbox.import-failed",
+	config.EventImportPaused:      "mail.mailbox.import-paused",
+	config.EventImportInterrupted: "mail.mailbox.import-interrupted",
+}
+
 // recordMailEvents copies new events of the mail service into the
 // activity log and remembers how far it got.
 func (s *Service) recordMailEvents(ctx context.Context) error {
@@ -237,7 +246,11 @@ func (s *Service) recordMailEvents(ctx context.Context) error {
 		if !utf8.ValidString(detail) {
 			detail = ""
 		}
-		s.record(ctx, mailActor, "mail."+e.Kind, target, detail)
+		action := "mail." + e.Kind
+		if a, ok := importEventActions[e.Kind]; ok {
+			action = a
+		}
+		s.record(ctx, mailActor, action, target, detail)
 	}
 	if last == cursor {
 		return nil

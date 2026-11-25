@@ -34,9 +34,11 @@ Errors are JSON with a readable sentence:
 | `401` | not signed in, wrong credentials, or an invalid token |
 | `403` | known, but not allowed (read-only or site-limited token, not an admin, missing header) |
 | `404` | missing, or not visible to you (the two look the same); unknown endpoint |
-| `409` | cannot be done in the current state: name taken, nothing to go back to, last admin, user still owns sites, setup already done |
-| `429` | too many failed sign-in attempts, too many sign-ins at the same moment, or Hetzner's request limit was reached |
-| `502` | the change is saved but the web server could not be updated yet (the loop retries), or an outside service such as Hetzner is unavailable |
+| `409` | cannot be done in the current state: name taken, nothing to go back to, last admin, user still owns sites, setup already done, another import of the mailbox running |
+| `413` | a file or part of an upload is too large |
+| `429` | too many failed sign-in attempts, too many sign-ins at the same moment, Hetzner's request limit was reached, or too many mail imports in an hour |
+| `502` | the change is saved but the web server could not be updated yet (the loop retries), or an outside service such as Hetzner or another mail server is unavailable or refused (for an import: its answer, never the password) |
+| `507` | not enough free disk space on the server (mail import) |
 | `500` | something went wrong on the server; the details are only in the log |
 
 Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limited to 1 MB; archives to 512 MB.
@@ -184,6 +186,22 @@ Entries of `GET /api/dns/zones` are Zone objects, with `nameservers`.
 | `GET` | `/api/mail/aliases/{id}` | mail read, own | | Alias |
 | `PUT` | `/api/mail/aliases/{id}` | mail write, own | same as `POST` | Alias (stays in its domain) |
 | `DELETE` | `/api/mail/aliases/{id}` | mail write, own | | `204` |
+
+**Moving mail in and out** of a mailbox (see [[E-Mail|E-Mail]] and "Import and export" in [[E-Mail architecture|E-Mail-Architecture]]). The mailbox is addressed by its domain and local part. Importing and exporting need mail write (a password sign-in or an unrestricted `write` token) and owning the mail domain or being an admin; listing imports needs mail read (read tokens too). Another person's mailbox answers `404`. Passwords of other accounts are passed to the mail service only, never stored, logged, returned or written to the activity log. Each person and each mailbox may begin 10 checks, starts and uploads per hour.
+
+**Import:** `{"id", "address", "kind", "state", "error", "host", "port", "username", "file_name", "file_size", "received", "check", "choices", "folders", "messages", "copied", "skipped", "failed", "bytes", "created", "started", "finished", "failures"}`. `kind` is `imap` or `file`; `state` is `uploading`, `checking`, `ready` (a file was read; start it), `waiting`, `running`, `paused` (the other server limits downloads), `interrupted` (the mail service restarted; IMAP imports need the password again), `done`, `failed` or `cancelled`. `folders` lists `{"remote", "local", "copied", "skipped", "failed", "done"}`; `failures` (only from `GET …/imports/{id}`, at most 1000) `{"folder", "date", "subject", "reason"}`. **Import check:** `{"folders": [{"remote", "local", "special_use", "messages", "bytes", "selected", "note"}], "messages", "bytes", "quota_bytes", "used_bytes", "quota_left", "skipped_entries", "own_export"}`; `note` is `junk`, `trash`, `starred`, `important`, `all-mail` or `too-many`; `quota_left` `-1` means no limit; `own_export` is true for a zip from "Download all mail" (the web interface then also selects Junk and Trash). **Choices:** `{"folders": ["INBOX", …], "include_junk", "include_trash"}`; with `folders`, exactly those are copied, otherwise the default ones plus junk and trash as the flags say.
+
+| Method | Path below `/api/mail/domains/{domain}/mailboxes/{local_part}` | Who | Body | Answer |
+|---|---|---|---|---|
+| `POST` | `/imports/check` | mail write, own | `{"host", "port", "username", "password"}`; `port` 993 (default) or 143 | Import check, after signing in to the other account; nothing is copied. `502` with the other server's reason (sign-in refused, certificate, unreachable) |
+| `POST` | `/imports` | mail write, own | the same plus `"choices"` | `201` Import (`waiting`) |
+| `POST` | `/uploads` | mail write, own | `{"name", "size"}`, at most 20 GiB | `201` Import (`uploading`) |
+| `PUT` | `/uploads/{id}?offset=N` | mail write, own | the bytes from `N` on, at most 256 MiB, `Content-Length` required | `{"received"}`. `N` must be what the server has (`received` of the import); otherwise `409`, then read the import and go on from there. After the last part the file is read (`checking`, then `ready` with `check`) |
+| `POST` | `/imports/{id}/start` | mail write, own | `{"choices"}` for a `ready` file; `{"password"}` to continue a `paused` or `interrupted` IMAP import (empty body: default choices) | Import |
+| `GET` | `/imports` | mail read, own | | list of Import, newest first, without `failures` |
+| `GET` | `/imports/{id}` | mail read, own | | Import with `failures` |
+| `DELETE` | `/imports/{id}` | mail write, own | | `204`; cancels an unfinished import (copied mail stays) or removes a finished one from the list |
+| `GET` | `/export` | mail write, own | | `application/zip`, attachment `mail-<address>-<date>.zip`, streamed: `manifest.json` and one mboxrd file per folder. One export per mailbox at a time (`409`), four in the service (`429`). A connection cut before the end means the zip is incomplete |
 
 A change that is saved but could not be sent to the mail service answers `502` with "saved, but the mail server could not be updated yet"; the panel keeps retrying. Without a mail service (`-mail-admin` not set) everything is stored, and `GET /api/mail/status` says the service is not set up.
 

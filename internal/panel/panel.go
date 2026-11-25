@@ -138,6 +138,8 @@ type Service struct {
 	// setupHosts knows which names for setting up mail programs point
 	// here (mailsetup.go).
 	setupHosts setupHostsState
+	// importRate limits imports per person (mailtransfer.go).
+	importRate importRate
 }
 
 // New returns a Service. It rejects invalid web server options up front, and

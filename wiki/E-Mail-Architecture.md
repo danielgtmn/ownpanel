@@ -715,6 +715,8 @@ in the service. The same is said in [[Security|Security]].
   when the export reaches it; messages expunged meanwhile are skipped.
 - Our zip imports back without loss: folders, special use, subscriptions,
   flags, dates.
+  Its check says `own_export`; the interface then also selects Junk and
+  Trash (they were cleaned up once already).
 
 ### Remote connections
 

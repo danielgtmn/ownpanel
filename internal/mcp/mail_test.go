@@ -2,11 +2,15 @@ package mcp
 
 import (
 	"context"
+	"io"
 	"net"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	mailconfig "github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/panel"
 	"github.com/danielgtmn/ownpanel/internal/secrets"
 )
@@ -125,4 +129,100 @@ func TestMailRecordAndHealthTools(t *testing.T) {
 	ro := e.connect(t, e.read)
 	ok(t, call_(t, ro, "get_mail_records", map[string]any{"domain": "example.com"}), &r)
 	refused(t, call_(t, ro, "set_up_mail_records", map[string]any{"domain": "example.com", "confirm": true}), "can only read")
+}
+
+// importMail is a mail service with one import job per mailbox.
+type importMail struct {
+	mu       sync.Mutex
+	hash     string
+	canceled []int64
+}
+
+func (f *importMail) Load(_ context.Context, cfg *mailconfig.Config) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hash = cfg.Hash()
+	return nil
+}
+func (f *importMail) Status(context.Context) (mailconfig.Status, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return mailconfig.Status{ConfigHash: f.hash}, nil
+}
+func (f *importMail) Events(context.Context, int64) ([]mailconfig.Event, error) { return nil, nil }
+func (f *importMail) Unblock(context.Context, string) error                     { return nil }
+func (f *importMail) DeleteMailbox(context.Context, string) error               { return nil }
+func (f *importMail) CheckOutbound(context.Context) (mailconfig.OutboundCheck, error) {
+	return mailconfig.OutboundCheck{OK: true}, nil
+}
+func (f *importMail) CheckImport(context.Context, string, mailconfig.ImportSource) (mailconfig.ImportCheck, error) {
+	return mailconfig.ImportCheck{}, nil
+}
+func (f *importMail) StartImport(context.Context, string, mailconfig.ImportStart) (mailconfig.ImportJob, error) {
+	return mailconfig.ImportJob{}, nil
+}
+func (f *importMail) CreateUpload(context.Context, string, mailconfig.UploadRequest) (mailconfig.ImportJob, error) {
+	return mailconfig.ImportJob{}, nil
+}
+func (f *importMail) UploadPart(context.Context, string, int64, int64, io.Reader, int64) (int64, error) {
+	return 0, nil
+}
+func (f *importMail) ResumeImport(context.Context, string, int64, mailconfig.ImportResume) (mailconfig.ImportJob, error) {
+	return mailconfig.ImportJob{}, nil
+}
+func (f *importMail) job(sid string) mailconfig.ImportJob {
+	return mailconfig.ImportJob{ID: 7, StorageID: sid, Kind: mailconfig.ImportIMAP, State: mailconfig.ImportRunning,
+		Host: "imap.example.org", Username: "me", Copied: 3, Created: time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC)}
+}
+func (f *importMail) ImportJobs(_ context.Context, sid string) ([]mailconfig.ImportJob, error) {
+	return []mailconfig.ImportJob{f.job(sid)}, nil
+}
+func (f *importMail) ImportJob(_ context.Context, sid string, id int64) (mailconfig.ImportJob, error) {
+	if id != 7 {
+		return mailconfig.ImportJob{}, &mailconfig.Error{Status: 404, Msg: "unknown import"}
+	}
+	return f.job(sid), nil
+}
+func (f *importMail) CancelImport(_ context.Context, _ string, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.canceled = append(f.canceled, id)
+	return nil
+}
+func (f *importMail) Export(context.Context, string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
+
+func TestMailImportTools(t *testing.T) {
+	mail := &importMail{}
+	e := newEnvWith(t, "", func(c *panel.Config) {
+		box, err := secrets.Open(filepath.Join(t.TempDir(), secrets.KeyFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Secrets, c.MXResolver, c.MailHost, c.Mail = box, mxHere{}, "mail.example.net", mail
+	})
+	ctx := context.Background()
+	if _, err := e.svc.EnableMailDomain(ctx, e.admin, "example.com"); err != nil {
+		t.Fatal(err)
+	}
+	box, err := e.svc.CreateMailbox(ctx, e.admin, "example.com", panel.MailboxInput{LocalPart: "info", Password: "mailbox-password-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ro := e.connect(t, e.read)
+	var list mailImportsOutput
+	ok(t, call_(t, ro, "list_mail_imports", map[string]any{"id": box.ID}), &list)
+	if len(list.Imports) != 1 || list.Imports[0].Source != "me at imap.example.org" || list.Imports[0].Copied != 3 ||
+		list.Imports[0].Address != "info@example.com" || list.Imports[0].Created != "2026-11-25T10:00:00Z" {
+		t.Fatalf("imports %+v", list)
+	}
+	refused(t, call_(t, ro, "cancel_mail_import", map[string]any{"id": box.ID, "import_id": 7}), "can only read")
+	cs := e.connect(t, e.write)
+	var out cancelledOutput
+	ok(t, call_(t, cs, "cancel_mail_import", map[string]any{"id": box.ID, "import_id": 7}), &out)
+	refused(t, call_(t, cs, "cancel_mail_import", map[string]any{"id": box.ID, "import_id": 8}), "unknown import")
+	if out.Cancelled != 7 || len(mail.canceled) != 1 {
+		t.Fatalf("cancel %+v %v", out, mail.canceled)
+	}
 }

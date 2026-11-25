@@ -57,8 +57,10 @@ Version ids come from `get_site`; a version id starts with a UTC timestamp. Erro
 | `list_mail_aliases` | `domain` (optional) | Lists aliases with `id`, `address`, `catch_all`, `targets`. Read-only. |
 | `set_mail_alias` | `id` (optional), `domain` (for new aliases), `local_part`, `targets` | Creates an alias, or replaces the one with `id`. `*` is the catch-all. An address is either a mailbox or an alias. |
 | `delete_mail_alias` | `id`, `confirm_address` | Deletes an alias. `confirm_address` must equal its address. |
+| `list_mail_imports` | `id` (mailbox) | Lists the imports of mail into a mailbox, newest first: `id`, `source` (user and server, or file name), `state`, `error`, counts of messages copied, skipped as already there and failed, `bytes`, `created`, `finished`. Read-only. |
+| `cancel_mail_import` | `id` (mailbox), `import_id` | Stops an import that has not finished (copied mail stays), or removes a finished one from the list. |
 
-Tools that change something need a `write` token. Read-only tools are `list_sites`, `get_site`, `check_site_domains`, `list_redirects`, `get_mail_status`, `get_mail_records`, `get_mail_health`, `list_mail_domains`, `list_mailboxes` and `list_mail_aliases`. Tokens limited to sites cannot use the e-mail tools.
+Tools that change something need a `write` token. Read-only tools are `list_sites`, `get_site`, `check_site_domains`, `list_redirects`, `get_mail_status`, `get_mail_records`, `get_mail_health`, `list_mail_domains`, `list_mailboxes`, `list_mail_aliases` and `list_mail_imports`. Tokens limited to sites cannot use the e-mail tools.
 
 ### `publish_files`
 
@@ -90,4 +92,4 @@ curl --fail-with-body -X POST --data-binary @site.zip '<url>'
 
 DNS connections and records cannot be managed through MCP; use the web interface or the [[API|API]].
 
-Mailboxes cannot be created and their passwords cannot be set through MCP, on purpose: mailbox passwords should never pass through an AI agent. Use the web interface or the [[API|API]] (`POST /api/mail/domains/{domain}/mailboxes`, `POST /api/mail/mailboxes/{id}/password`).
+Mailboxes cannot be created and their passwords cannot be set through MCP, on purpose: mailbox passwords should never pass through an AI agent. For the same reason imports of mail cannot be started (they take another account's password) and mailboxes cannot be downloaded (it reads all their mail); use the web interface or the [[API|API]]. Use the web interface or the [[API|API]] (`POST /api/mail/domains/{domain}/mailboxes`, `POST /api/mail/mailboxes/{id}/password`).

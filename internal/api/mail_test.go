@@ -85,6 +85,13 @@ func (noRecords) LookupAddr(_ context.Context, addr string) ([]string, error) {
 
 func newMailEnv(t *testing.T) (*env, *fakeMailService) {
 	t.Helper()
+	mail := &fakeMailService{}
+	return newMailEnvWith(t, mail), mail
+}
+
+// newMailEnvWith: a panel with the mail service mail, set up with root.
+func newMailEnvWith(t *testing.T, mail panel.MailService) *env {
+	t.Helper()
 	dir := t.TempDir()
 	st, err := store.Open(filepath.Join(dir, "ownpanel.db"))
 	if err != nil {
@@ -95,7 +102,6 @@ func newMailEnv(t *testing.T) (*env, *fakeMailService) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mail := &fakeMailService{}
 	svc, err := panel.New(panel.Config{
 		Store:         st,
 		Deploys:       &deploy.Manager{Base: filepath.Join(dir, "sites")},
@@ -115,7 +121,7 @@ func newMailEnv(t *testing.T) (*env, *fakeMailService) {
 	}
 	e := &env{t: t, h: (&Server{Panel: svc}).Handler(), svc: svc, code: filepath.Join(dir, "setup-code")}
 	e.cookie = e.setup("root", "root-password-1")
-	return e, mail
+	return e
 }
 
 var (

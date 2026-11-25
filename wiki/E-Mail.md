@@ -192,6 +192,87 @@ password first if it may have been stolen.
 Mail that claims to come from one of your own domains but was not sent by
 its servers (no passing SPF or signature) is refused.
 
+## Moving mail in and out
+
+Each mailbox has **Import mail** and **Download all mail**. Both are for the
+owner of the mail domain and administrators, signed in with a password (or
+with an unrestricted write token through the [[API|API]]), and both are
+noted in the activity log.
+
+### Bring mail from another account
+
+1. Open the domain under **E-mail**, choose **Import mail** at the mailbox,
+   then **From another mail account**.
+2. Enter the user name (usually the full address), the password and the
+   incoming mail server your provider names for mail programs (for well-known
+   providers it is filled in from the address). Keep **Encrypted from the
+   start (port 993)** unless the provider says otherwise.
+3. **Check the account:** the panel signs in and lists the folders with the
+   number of messages and their size, and whether they fit into the mailbox.
+   Nothing is copied yet. Untick folders you don't want; junk and deleted
+   mail are left out unless you switch them on.
+4. **Start copying.** The import runs on the server; you can close the page.
+   The mailbox shows its progress, what was copied, skipped as already there
+   or not copied, and the messages that were left out with the reason.
+
+The old account is only read: its messages stay unread there and nothing is
+deleted. The password is used while copying and never saved, so an import
+that was **paused** (the provider limits downloads per day; Gmail allows
+about 2.5 GB a day) or **interrupted** (the panel was updated) asks for it
+again under **Continue** and goes on where it stopped.
+
+Providers:
+
+- **Gmail:** needs an *app password*: turn on 2-step verification in your
+  Google account, then create one under Security › App passwords and enter
+  it instead of your password. Google Workspace administrators can forbid
+  this. Server `imap.gmail.com`. Large Gmail accounts are better moved this
+  way than with Takeout (no file size limit, can be repeated).
+- **Yahoo:** also an app password (Account security), server
+  `imap.mail.yahoo.com`. **iCloud:** an app-specific password from
+  account.apple.com, server `imap.mail.me.com`.
+- **IONOS, Strato, GMX, web.de, other panels:** the normal password usually
+  works; some (GMX, web.de) need access by mail programs turned on in their
+  settings first.
+- **Microsoft 365 and Outlook.com are not supported yet:** they only allow a
+  sign-in through Microsoft's own page. Export the mail as a file, or move it
+  with a mail program that has both accounts.
+
+### Bring mail from a file
+
+Choose **From a file** and upload a `.mbox`, `.eml` or `.zip` of those (up to
+20 GB). The file is sent in parts; if the connection breaks, the upload goes
+on where it stopped. The panel then reads the file and shows the same folder
+overview.
+
+- **Google Takeout:** at takeout.google.com select only *Mail*, choose the
+  **.zip** format (not .tgz), download it and upload the zip. Gmail labels
+  become folders; mail without a label goes to Archive.
+- **Thunderbird:** right-click a folder and export it (with the ImportExport
+  add-on) as `.mbox`, or put the `Mail`/`ImapMail` folder of your profile into
+  a `.zip`: subfolders are recognised.
+- **Apple Mail:** Mailbox › Export Mailbox, then compress the exported
+  folder into a `.zip`.
+- A `.zip` from **Download all mail** of an ownpanel server brings back every
+  folder with its read and flagged state, and includes Junk and Trash.
+
+### Moving a domain here (cutover)
+
+1. Turn on e-mail for the domain and create the mailboxes; leave the MX
+   record pointing at the old provider for now.
+2. Import each mailbox from the old account.
+3. Switch the MX record to this server (see [Set it up](#set-it-up)) and set
+   up the mail programs.
+4. A day later, run the same import again: only mail that arrived at the old
+   provider in between is copied; what is there already is skipped.
+
+### Download all mail
+
+**Download all mail** gives one `.zip` with a `.mbox` file per folder and a
+list of the folders. Thunderbird (ImportExport add-on), Apple Mail and most
+mail programs can open the `.mbox` files; ownpanel imports the zip back
+without loss. One download per mailbox runs at a time.
+
 ## New server address: warm it up
 
 Large providers judge new addresses by their history. For the first weeks,
@@ -209,7 +290,8 @@ Deleting a mailbox or turning off e-mail for a domain deletes its stored
 mail.
 
 Administrators can set any mailbox's password, and with it read the
-mailbox. Mailbox owners should know this.
+mailbox; they and the domain's owner can also download all of its mail.
+Mailbox owners should know this.
 
 ## Troubleshooting
 
