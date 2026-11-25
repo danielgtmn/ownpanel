@@ -65,7 +65,7 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 
 **Mailbox:** `{"id", "address", "domain", "local_part", "owner", "quota_bytes", "send_per_hour", "send_per_day", "created_at", "display_name", "app_passwords_only", "usage"}`. `quota_bytes` `0` means no limit. `display_name` (may be empty) is shown as the sender's name; with `app_passwords_only` mail programs sign in only with app passwords. `usage` is `{"used_bytes", "messages", "blocked", "blocked_reason", "blocked_at"}` as reported by the mail service, or `null` when it could not be asked. Password hashes are never returned.
 
-**Organisation:** `{"id", "name", "owner", "domains": [..], "created_at"}`. Groups mail domains; mailboxes will be able to share only within one organisation (see [[E-Mail|E-Mail]]).
+**Organisation:** `{"id", "name", "owner", "domains": [..], "created_at"}`. `domains` are only those you may see (an administrator may have put someone else's domain into your organisation). Groups mail domains; mailboxes will be able to share only within one organisation (see [[E-Mail|E-Mail]]).
 
 **App password:** `{"id", "name", "created_at", "last_used_at", "last_used_network"}`. `last_used_network` is the /24 (IPv4) or /48 (IPv6) of the last sign-in, never the full address. Only the answer to creating one also has `"password"`; it is never shown again.
 

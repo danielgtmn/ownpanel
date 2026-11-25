@@ -60,7 +60,7 @@ Version ids come from `get_site`; a version id starts with a UTC timestamp. Erro
 | `list_mail_imports` | `id` (mailbox) | Lists the imports of mail into a mailbox, newest first: `id`, `source` (user and server, or file name), `state`, `error`, counts of messages copied, skipped as already there and failed, `bytes`, `created`, `finished`. Read-only. |
 | `cancel_mail_import` | `id` (mailbox), `import_id` | Stops an import that has not finished (copied mail stays), or removes a finished one from the list. |
 | `set_mailbox_display_name` | `id`, `display_name` | Sets the name shown as the sender and in address books (at most 64 characters, no `<>"`); empty removes it. |
-| `list_mail_organisations` | none | Lists the organisations you manage (admins: all) with `id`, `name`, `owner` and `domains`. Read-only. |
+| `list_mail_organisations` | none | Lists the organisations you manage (admins: all) with `id`, `name`, `owner` and `domains` (only the domains you may see). Read-only. |
 | `set_mail_organisation` | `id` (optional), `name` | Creates an organisation, or renames the one with `id`. |
 | `delete_mail_organisation` | `id`, `confirm_name` | Deletes an organisation; its domains stand alone again. `confirm_name` must equal its name. |
 | `set_mail_domain_organisation` | `domain`, `organisation` | Puts a mail domain into one of your organisations, or lets it stand alone (`organisation` empty). Grouping domains of different owners is for admins only. |

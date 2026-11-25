@@ -624,3 +624,42 @@ func TestFailingAccountEventDoesNotBlock(t *testing.T) {
 		t.Fatalf("pending left: %s", m[keyMailEventsPending])
 	}
 }
+
+// TestOrganisationListHidesOthersDomains: an organisation an admin put
+// another owner's domain into lists only the domains its owner may see.
+func TestOrganisationListHidesOthersDomains(t *testing.T) {
+	ctx := context.Background()
+	w := newMailWorld(t)
+	svc := w.svc
+	org, err := svc.CreateOrganisation(ctx, bob, "Bob GmbH")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SetMailDomainOrganisation(ctx, bob, "bobsite.example.com", org.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SetMailDomainOrganisation(ctx, admin, "rootsite.example.com", org.ID); err != nil {
+		t.Fatal(err)
+	}
+	list, err := svc.Organisations(ctx, bob)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("%+v %v", list, err)
+	}
+	if d := list[0].Domains; len(d) != 1 || d[0] != "bobsite.example.com" {
+		t.Fatalf("bob sees %v", d)
+	}
+	renamed, err := svc.RenameOrganisation(ctx, bob, org.ID, "Bob AG")
+	if err != nil || len(renamed.Domains) != 1 {
+		t.Fatalf("rename shows %+v %v", renamed, err)
+	}
+	if list, _ := svc.Organisations(ctx, admin); len(list[0].Domains) != 2 {
+		t.Fatalf("admin sees %v", list[0].Domains)
+	}
+	// Deleting it does not name the other owner's domain to bob either.
+	if err := svc.DeleteOrganisation(ctx, bob, org.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, detail, _ := lastActivity(t, w); strings.Contains(detail, "rootsite") {
+		t.Fatalf("activity names another owner's domain: %q", detail)
+	}
+}

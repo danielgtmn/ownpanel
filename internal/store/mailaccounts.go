@@ -9,14 +9,16 @@ import (
 
 // ---- organisations ----
 
-// Organisation groups mail domains. Domains lists its domains, sorted.
+// Organisation groups mail domains. Domains lists its domains, sorted;
+// DomainOwners has the owner of each.
 type Organisation struct {
-	ID        string
-	OwnerID   int64
-	Owner     string
-	Name      string
-	CreatedAt time.Time
-	Domains   []string
+	ID           string
+	OwnerID      int64
+	Owner        string
+	Name         string
+	CreatedAt    time.Time
+	Domains      []string
+	DomainOwners map[string]int64
 }
 
 // Organisations returns every organisation with its domains, sorted by name.
@@ -35,7 +37,7 @@ func (s *Store) Organisations(ctx context.Context) ([]Organisation, error) {
 			rows.Close()
 			return nil, err
 		}
-		o.CreatedAt, o.Domains = unix(created), []string{}
+		o.CreatedAt, o.Domains, o.DomainOwners = unix(created), []string{}, map[string]int64{}
 		idx[o.ID] = len(out)
 		out = append(out, o)
 	}
@@ -43,18 +45,20 @@ func (s *Store) Organisations(ctx context.Context) ([]Organisation, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	drows, err := s.db.QueryContext(ctx, `SELECT organisation_id, domain FROM mail_domains WHERE organisation_id IS NOT NULL ORDER BY domain`)
+	drows, err := s.db.QueryContext(ctx, `SELECT organisation_id, domain, owner_id FROM mail_domains WHERE organisation_id IS NOT NULL ORDER BY domain`)
 	if err != nil {
 		return nil, err
 	}
 	defer drows.Close()
 	for drows.Next() {
 		var id, d string
-		if err := drows.Scan(&id, &d); err != nil {
+		var owner int64
+		if err := drows.Scan(&id, &d, &owner); err != nil {
 			return nil, err
 		}
 		if i, ok := idx[id]; ok {
 			out[i].Domains = append(out[i].Domains, d)
+			out[i].DomainOwners[d] = owner
 		}
 	}
 	return out, drows.Err()

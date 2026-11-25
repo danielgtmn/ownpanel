@@ -93,8 +93,21 @@ type MailDomainOrganisation struct {
 	Domains []string `json:"domains"`
 }
 
-func organisationView(o store.Organisation) Organisation {
-	return Organisation{ID: o.ID, Name: o.Name, Owner: o.Owner, Domains: o.Domains, CreatedAt: o.CreatedAt}
+// organisationView is an organisation as a sees it: only the domains a may
+// see (an admin may have put another owner's domain into it).
+func organisationView(a Actor, o store.Organisation) Organisation {
+	return Organisation{ID: o.ID, Name: o.Name, Owner: o.Owner, Domains: visibleDomains(a, o), CreatedAt: o.CreatedAt}
+}
+
+// visibleDomains are the domains of o that a may see.
+func visibleDomains(a Actor, o store.Organisation) []string {
+	out := []string{}
+	for _, d := range o.Domains {
+		if a.canSeeMail(o.DomainOwners[d]) {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 func (a Actor) canSeeOrganisation(o store.Organisation) bool { return a.canSeeMail(o.OwnerID) }
@@ -127,7 +140,7 @@ func (s *Service) Organisations(ctx context.Context, a Actor) ([]Organisation, e
 	out := []Organisation{}
 	for _, o := range all {
 		if a.canSeeOrganisation(o) {
-			out = append(out, organisationView(o))
+			out = append(out, organisationView(a, o))
 		}
 	}
 	return out, nil
@@ -152,7 +165,7 @@ func (s *Service) CreateOrganisation(ctx context.Context, a Actor, name string) 
 		return Organisation{}, storeError(err)
 	}
 	s.record(ctx, a, "mail.organisation.create", n, "")
-	return organisationView(o), nil
+	return organisationView(a, o), nil
 }
 
 // RenameOrganisation changes an organisation's name.
@@ -169,14 +182,14 @@ func (s *Service) RenameOrganisation(ctx context.Context, a Actor, id, name stri
 		return Organisation{}, err
 	}
 	if n == o.Name {
-		return organisationView(o), nil
+		return organisationView(a, o), nil
 	}
 	if err := s.store.RenameOrganisation(ctx, o.ID, n); err != nil {
 		return Organisation{}, storeError(err)
 	}
 	s.record(ctx, a, "mail.organisation.rename", n, "was "+o.Name)
 	o.Name = n
-	return organisationView(o), nil
+	return organisationView(a, o), nil
 }
 
 // DeleteOrganisation removes an organisation; its domains then stand alone.
@@ -192,8 +205,8 @@ func (s *Service) DeleteOrganisation(ctx context.Context, a Actor, id string) er
 		return storeError(err)
 	}
 	detail := ""
-	if len(o.Domains) > 0 {
-		detail = "its domains now stand alone: " + strings.Join(o.Domains, ", ")
+	if visible := visibleDomains(a, o); len(visible) > 0 {
+		detail = "its domains now stand alone: " + strings.Join(visible, ", ")
 	}
 	s.record(ctx, a, "mail.organisation.delete", o.Name, detail)
 	if len(o.Domains) == 0 {
