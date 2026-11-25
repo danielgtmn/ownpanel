@@ -42,7 +42,7 @@ rm -f /var/lib/ownpanel/ownpanel.db /var/lib/ownpanel/ownpanel.db-wal /var/lib/o
 rm -f /var/lib/ownpanel-mail/mail.db /var/lib/ownpanel-mail/mail.db-wal /var/lib/ownpanel-mail/mail.db-shm
 tar -xzf ownpanel-2026-01-31.tar.gz -C /var/lib/ownpanel --exclude 'mail/*' --exclude mail
 tar -xzf ownpanel-2026-01-31.tar.gz -C /var/lib/ownpanel-mail --strip-components 1 mail
-chown -R ownpanel:ownpanel /var/lib/ownpanel/ownpanel.db /var/lib/ownpanel/sites /var/lib/ownpanel/secret.key /var/lib/ownpanel/mail-tls
+(cd /var/lib/ownpanel && chown -R ownpanel:ownpanel ownpanel.db secret.key $(ls -d sites mail-tls 2>/dev/null))
 chown -R caddy:caddy /var/lib/ownpanel/caddy
 chown -R ownpanel-mail:ownpanel-mail /var/lib/ownpanel-mail
 systemctl start ownpanel-caddy ownpanel-mail ownpaneld

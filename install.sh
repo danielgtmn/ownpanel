@@ -530,7 +530,11 @@ plan_changes() {
     cmp -s "$src/ownpaneld" "$BIN/ownpaneld" || [ "$old_version" != "$new_version" ] || changes+=("ownpaneld binary replaced")
     cmp -s "$src/caddy" "$BIN/caddy" || changes+=("Caddy $(caddy_version "$BIN/caddy") -> $(caddy_version "$src/caddy")")
     for f in ownpaneld.service ownpanel-caddy.service ownpanel-mail.service "${UPDATE_UNITS[@]}"; do
-      cmp -s "$src/deploy/$f" "$UNITS/$f" || changes+=("unit file $f updated")
+      if [ ! -f "$UNITS/$f" ]; then
+        changes+=("unit file $f added")
+      else
+        cmp -s "$src/deploy/$f" "$UNITS/$f" || changes+=("unit file $f updated")
+      fi
     done
     for f in install.sh update.sh deploy/ownpanel-update; do
       cmp -s "$src/$f" "$LIB/${f#deploy/}" || changes+=("$LIB/${f#deploy/} updated")
