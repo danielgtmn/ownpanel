@@ -16,7 +16,6 @@ import {
   ArrowLeftIcon,
   EmptyState,
   ErrorState,
-  ExternalIcon,
   LoadingState,
   PageHeader,
   Section,
@@ -38,23 +37,6 @@ const backLink = (
     All sites
   </a>
 )
-
-function DomainLinks({ domains }: { domains: string[] }) {
-  if (domains.length === 0) return <span className="muted">No domains yet</span>
-  return (
-    <ul className="domain-links" aria-label="Domains">
-      {domains.map((domain) => (
-        <li key={domain}>
-          <a className="inline-link" href={`https://${domain}`} target="_blank" rel="noreferrer noopener">
-            {domain}
-            <ExternalIcon />
-            <span className="visually-hidden">(opens in a new tab)</span>
-          </a>
-        </li>
-      ))}
-    </ul>
-  )
-}
 
 function Loaded({ site, reload }: { site: Site; reload: () => Promise<void> }) {
   const [editing, setEditing] = useState(false)
@@ -117,14 +99,19 @@ function Loaded({ site, reload }: { site: Site; reload: () => Promise<void> }) {
             <StatusBadge tone={live ? 'positive' : 'neutral'}>{live ? 'Live' : 'No content yet'}</StatusBadge>
             {live ? <span className="muted">Published {formatReleaseDate(site.current_release)}</span> : null}
             {isAdmin ? <span className="muted">Owner: {site.owner}</span> : null}
-            <DomainLinks domains={site.domains} />
           </>
         }
       />
+      <PublishSection name={site.name} onPublished={reload} />
+      <VersionsSection site={site} onChanged={reload} />
       <Section
         title="Domains"
         description="Visitors reach this site on these domains."
-        actions={<Button onClick={() => setEditing(true)}>Edit</Button>}
+        actions={
+          <Button onClick={() => setEditing(true)}>
+            Change<span className="visually-hidden"> domains</span>
+          </Button>
+        }
       >
         {site.domains.length > 0 ? (
           <DomainsStatus siteName={site.name} domains={site.domains} />
@@ -139,8 +126,6 @@ function Loaded({ site, reload }: { site: Site; reload: () => Promise<void> }) {
         onChanged={mainAddressChanged}
       />
       <PathRedirectsSection site={site} redirects={pathRedirects} onChanged={redirectsChanged} />
-      <PublishSection name={site.name} onPublished={reload} />
-      <VersionsSection site={site} onChanged={reload} />
       <Section
         title="Delete site"
         description="Takes the site offline and removes its files and all versions."

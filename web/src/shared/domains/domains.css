@@ -37,3 +37,9 @@
 .domain-check .status-badge {
   white-space: normal;
 }
+
+.domain-check-found {
+  margin: 0;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
