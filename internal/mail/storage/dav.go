@@ -32,13 +32,15 @@ import (
 // The epoch (meta dav_epoch) is part of every sync token, ETag and ctag.
 // It changes when the start-up check found index and files apart or after
 // a restore, like UIDVALIDITY for mail, so clients drop what they cached.
+// Collection ids are AUTOINCREMENT, never reused: a calendar deleted and
+// created again never accepts the old one's ETags or sync tokens.
 //
 // DAV data counts towards the mailbox's quota: its bytes are part of
 // mailboxes.used_bytes (not of messages).
 
 const davSchema = `
 CREATE TABLE IF NOT EXISTS dav_collections (
-	id           INTEGER PRIMARY KEY,
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
 	storage_id   TEXT NOT NULL,
 	kind         TEXT NOT NULL,
 	name         TEXT NOT NULL,
