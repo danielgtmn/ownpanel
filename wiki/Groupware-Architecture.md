@@ -593,8 +593,8 @@ Synchronizer add-on.
   replace); the page lists calendars and address books with import and
   download and shows the settings for programs.
 - **Export and backup:** the mailbox export zip gains
-  `calendars/<name>.ics` and `contacts/<name>.vcf` (the zip import skips
-  them); the backup copies `dav/` with the rest of the data directory;
+  `calendars/<name>.ics` and `contacts/<name>.vcf`, listed under `dav` in `manifest.json` (the zip import skips exactly those entries; mail folders of any name come
+  back); the backup copies `dav/` with the rest of the data directory;
   deleting a mailbox deletes its collections.
 - **Libraries (spike):** `emersion/go-webdav` was read and **not used**:
   its CalDAV/CardDAV servers own the request handling (fixed `Backend`

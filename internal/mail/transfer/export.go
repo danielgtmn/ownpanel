@@ -91,9 +91,11 @@ func Export(ctx context.Context, st *storage.Store, sid string, w io.Writer, now
 		}
 		man.Folders = append(man.Folders, mf)
 	}
-	if err := exportDAV(ctx, st, sid, zw, now); err != nil {
+	dav, err := exportDAV(ctx, st, sid, zw, now, paths)
+	if err != nil {
 		return err
 	}
+	man.DAV = dav
 	mw, err := zw.CreateHeader(&zip.FileHeader{Name: "manifest.json", Method: zip.Deflate, Modified: now})
 	if err != nil {
 		return err
@@ -107,13 +109,16 @@ func Export(ctx context.Context, st *storage.Store, sid string, w io.Writer, now
 }
 
 // exportDAV adds the mailbox's calendars (calendars/<name>.ics) and
-// address books (contacts/<name>.vcf). The import of our zip skips them.
-func exportDAV(ctx context.Context, st *storage.Store, sid string, zw *zip.Writer, now time.Time) error {
+// address books (contacts/<name>.vcf) and returns them for the manifest;
+// the import of our zip skips exactly those. Folder paths always end in
+// .mbox and are in paths, so they never collide.
+func exportDAV(ctx context.Context, st *storage.Store, sid string, zw *zip.Writer, now time.Time, paths *pathSet) ([]manifestDAV, error) {
 	colls, err := st.DAVCollections(ctx, sid, "")
 	if err != nil {
-		return err
+		return nil, err
 	}
-	used := map[string]bool{}
+	used := paths.used
+	var out []manifestDAV
 	for _, c := range colls {
 		dir, ext := davCalendarsDir, ".ics"
 		if c.Kind == davobj.AddressBook {
@@ -127,13 +132,14 @@ func exportDAV(ctx context.Context, st *storage.Store, sid string, zw *zip.Write
 		used[strings.ToLower(p)] = true
 		fw, err := zw.CreateHeader(&zip.FileHeader{Name: p, Method: zip.Deflate, Modified: now})
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if err := st.ExportDAVCollection(ctx, c, fw); err != nil {
-			return err
+			return nil, err
 		}
+		out = append(out, manifestDAV{Kind: c.Kind, Name: c.Name, Path: p})
 	}
-	return nil
+	return out, nil
 }
 
 // Folders of calendars and address books in the export.
