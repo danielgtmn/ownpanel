@@ -12,7 +12,7 @@ import (
 
 	mailconfig "github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/panel"
-	"github.com/danielgtmn/ownpanel/internal/secrets"
+	"github.com/danielgtmn/panzerschrank"
 )
 
 type mxHere struct{}
@@ -23,7 +23,7 @@ func (mxHere) LookupMX(context.Context, string) ([]*net.MX, error) {
 
 func TestMailTools(t *testing.T) {
 	e := newEnvWith(t, "", func(c *panel.Config) {
-		box, err := secrets.Open(filepath.Join(t.TempDir(), secrets.KeyFile))
+		box, err := panzerschrank.OpenKeyFile(filepath.Join(t.TempDir(), panzerschrank.KeyFile))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -103,7 +103,7 @@ func TestMailTools(t *testing.T) {
 
 func TestMailRecordAndHealthTools(t *testing.T) {
 	e := newEnvWith(t, "", func(c *panel.Config) {
-		box, err := secrets.Open(filepath.Join(t.TempDir(), secrets.KeyFile))
+		box, err := panzerschrank.OpenKeyFile(filepath.Join(t.TempDir(), panzerschrank.KeyFile))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -197,7 +197,7 @@ func (f *importMail) Export(context.Context, string) (io.ReadCloser, error) {
 func TestMailImportTools(t *testing.T) {
 	mail := &importMail{}
 	e := newEnvWith(t, "", func(c *panel.Config) {
-		box, err := secrets.Open(filepath.Join(t.TempDir(), secrets.KeyFile))
+		box, err := panzerschrank.OpenKeyFile(filepath.Join(t.TempDir(), panzerschrank.KeyFile))
 		if err != nil {
 			t.Fatal(err)
 		}

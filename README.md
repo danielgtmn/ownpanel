@@ -26,7 +26,6 @@ internal/store     SQLite database and its migrations (internal/store/migrations
 internal/caddy     Caddy config builder and admin API client
 internal/deploy    releases, activation, rollback
 internal/dns       DNS provider interface, zone lookup, "does the domain point here?"; dns/hetzner is the Hetzner Cloud client
-internal/secrets   encryption of stored secrets (DNS tokens) with the key in <data>/secret.key
 internal/api       HTTP API: authentication, then a thin adapter over internal/panel
 internal/mcp       MCP server (/mcp): the same operations as tools for AI assistants
 internal/backup    backup archives

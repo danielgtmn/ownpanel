@@ -4,6 +4,8 @@ go 1.26.0
 
 require (
 	blitiri.com.ar/go/spf v1.6.0
+	github.com/danielgtmn/panzerschrank v0.1.0
+	github.com/danielgtmn/sesam v0.3.0
 	github.com/emersion/go-imap/v2 v2.0.0-beta.9
 	github.com/emersion/go-message v0.18.2
 	github.com/emersion/go-msgauth v0.7.0
@@ -17,7 +19,6 @@ require (
 )
 
 require (
-	github.com/danielgtmn/sesam v0.3.0 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect

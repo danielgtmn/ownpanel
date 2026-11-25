@@ -15,8 +15,8 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/deploy"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/panel"
-	"github.com/danielgtmn/ownpanel/internal/secrets"
 	"github.com/danielgtmn/ownpanel/internal/store"
+	"github.com/danielgtmn/panzerschrank"
 )
 
 type fakeMailService struct {
@@ -100,7 +100,7 @@ func newMailEnvWith(t *testing.T, mail panel.MailService) *env {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	box, err := secrets.Open(filepath.Join(dir, secrets.KeyFile))
+	box, err := panzerschrank.OpenKeyFile(filepath.Join(dir, panzerschrank.KeyFile))
 	if err != nil {
 		t.Fatal(err)
 	}

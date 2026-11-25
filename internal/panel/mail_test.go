@@ -20,8 +20,8 @@ import (
 
 	"github.com/danielgtmn/ownpanel/internal/caddy"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
-	"github.com/danielgtmn/ownpanel/internal/secrets"
 	"github.com/danielgtmn/ownpanel/internal/store"
+	"github.com/danielgtmn/panzerschrank"
 )
 
 func init() {
@@ -217,9 +217,9 @@ func newMailWorld(t *testing.T) *mailWorld {
 	w := &mailWorld{world: newWorld(t), mail: &fakeMail{}, mx: &fakeMX{hosts: map[string][]string{}, errs: map[string]error{}},
 		now: time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)}
 	svc := w.svc
-	key := make([]byte, secrets.KeySize)
+	key := make([]byte, panzerschrank.KeySize)
 	rand.Read(key)
-	box, err := secrets.New(key)
+	box, err := panzerschrank.New(key)
 	if err != nil {
 		t.Fatal(err)
 	}

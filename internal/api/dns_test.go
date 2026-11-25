@@ -20,8 +20,8 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/dns/hetzner"
 	"github.com/danielgtmn/ownpanel/internal/dns/hetzner/hetznertest"
 	"github.com/danielgtmn/ownpanel/internal/panel"
-	"github.com/danielgtmn/ownpanel/internal/secrets"
 	"github.com/danielgtmn/ownpanel/internal/store"
+	"github.com/danielgtmn/panzerschrank"
 )
 
 const (
@@ -56,7 +56,7 @@ func newDNSEnv(t *testing.T, serverIPs ...string) *dnsEnv {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	box, err := secrets.Open(filepath.Join(dir, secrets.KeyFile))
+	box, err := panzerschrank.OpenKeyFile(filepath.Join(dir, panzerschrank.KeyFile))
 	if err != nil {
 		t.Fatal(err)
 	}
