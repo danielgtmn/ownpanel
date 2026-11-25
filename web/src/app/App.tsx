@@ -1,5 +1,6 @@
 import { OverlayHost } from '@ui-sdk/react/overlays'
 import { useEffect, useSyncExternalStore } from 'react'
+import { accountHost } from '../account/accountHost.ts'
 import { ErrorState, LoadingState } from '../shared/ui/index.ts'
 import { getSessionState, loadSession, SessionProvider, subscribeSession } from '../shared/session/index.ts'
 import { screenFor } from './screen.ts'
@@ -11,6 +12,9 @@ import { SignInScreen } from './SignInScreen.tsx'
 
 // The first-run wizard is shown once per panel, so its code loads only then.
 const SetupWizard = lazyPage(() => import('./setup/SetupWizard.tsx').then((page) => page.SetupWizard))
+// Mailbox users on the mail server's name never see the panel, nor load its session.
+const AccountScreen = lazyPage(() => import('../account/AccountScreen.tsx').then((page) => page.AccountScreen))
+const mailHost = accountHost()
 
 function Screen() {
   const state = useSyncExternalStore(subscribeSession, getSessionState)
@@ -54,7 +58,13 @@ function Screen() {
 export function App() {
   return (
     <>
-      <Screen />
+      {mailHost ? (
+        <PageFrame frame="gate">
+          <AccountScreen host={mailHost} />
+        </PageFrame>
+      ) : (
+        <Screen />
+      )}
       <OverlayHost />
     </>
   )

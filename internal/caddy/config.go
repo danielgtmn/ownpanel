@@ -9,6 +9,7 @@ package caddy
 import (
 	"fmt"
 	"net/netip"
+	"path/filepath"
 	"sort"
 	"strconv"
 )
@@ -52,6 +53,14 @@ type Options struct {
 	// the HTTPS port, so Caddy does not request a certificate for it.
 	MailHost string
 
+	// MailWeb, when its Host is set, serves the mail host on the HTTPS
+	// port for the people who read mail: see MailWeb.
+	MailWeb MailWeb
+	// MailWebSocket is the absolute path of the mail service's web socket
+	// (ownpaneld mail -web); "" when the mail service has none. Build does
+	// not use it: the panel copies it into MailWeb.Socket.
+	MailWebSocket string
+
 	// MailSetupHosts are names like autoconfig.<domain> and
 	// autodiscover.<domain> that point to this server: the paths where
 	// mail programs look for their settings (MailSetupPaths) are passed to
@@ -63,6 +72,45 @@ type Options struct {
 	// before the site's files.
 	MailAutoconfigDomains []string
 }
+
+// MailWeb is the site of the mail host (wiki/Groupware-Architecture.md,
+// "G0"). The self-service API, calendars and contacts go to the mail
+// service's web socket; everything else goes to the panel, which serves
+// only the self-service web app on this name. The panel's own API and MCP
+// are never routed here.
+//
+// Caddy does not obtain a certificate for Host: the panel already has one
+// (it answers the ACME challenges for the name on the HTTP port) and
+// Certificates are loaded as they are. Without certificates (none issued
+// yet) the site is left out, except with TLSOff.
+type MailWeb struct {
+	Host         string
+	Socket       string
+	Certificates []Certificate
+}
+
+// Certificate is a PEM certificate chain and its private key. The key only
+// travels to Caddy through the admin API; it is never logged.
+type Certificate struct {
+	CertPEM string
+	KeyPEM  string
+}
+
+// Paths of the mail host passed to the mail service's web socket.
+var MailWebServicePaths = []string{"/dav", "/dav/*", "/.well-known/caldav", "/.well-known/carddav", "/account/api/*"}
+
+// Paths of the mail host that never reach anything (the panel's API).
+var MailWebBlockedPaths = []string{"/api", "/api/*", "/mcp", "/mcp/*"}
+
+// Request size limits on the mail host: uploads of calendar entries and
+// contacts, and the plain page requests of the web app.
+const (
+	MailWebMaxBody    = 16 << 20
+	MailWebAppMaxBody = 64 << 10
+)
+
+// mailWebTag marks the loaded certificates of the mail host.
+const mailWebTag = "ownpanel-mail-host"
 
 // acmeChallengePath is where ACME HTTP-01 challenges are answered.
 const acmeChallengePath = "/.well-known/acme-challenge/*"
@@ -137,6 +185,13 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 			"handle":   []obj{h},
 			"terminal": true,
 		})
+	}
+	mailWeb, err := opts.mailWebRoute()
+	if err != nil {
+		return nil, err
+	}
+	if mailWeb != nil {
+		routes = append(routes, mailWeb)
 	}
 	routes = append(routes, domainRedirects...)
 	if len(opts.MailSetupHosts) > 0 {
@@ -279,8 +334,22 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 			policies = append(policies, obj{"issuers": []obj{{"module": "acme", "email": opts.ACMEEmail}}})
 		}
 	}
+	tlsApp := obj{}
 	if len(policies) > 0 {
-		apps["tls"] = obj{"automation": obj{"policies": policies}}
+		tlsApp["automation"] = obj{"policies": policies}
+	}
+	if mailWeb != nil && opts.TLSMode != TLSOff {
+		// The panel's certificate for the mail host, and no certificate
+		// management of Caddy's own for it.
+		var pems []obj
+		for _, c := range opts.MailWeb.Certificates {
+			pems = append(pems, obj{"certificate": c.CertPEM, "key": c.KeyPEM, "tags": []string{mailWebTag}})
+		}
+		tlsApp["certificates"] = obj{"load_pem": pems}
+		server["automatic_https"] = obj{"skip_certificates": []string{opts.MailWeb.Host}}
+	}
+	if len(tlsApp) > 0 {
+		apps["tls"] = tlsApp
 	}
 	if opts.TLSMode == TLSInternal || (len(ips) > 0 && opts.TLSMode != TLSOff) {
 		// Never try to modify the system trust store from a daemon.
@@ -291,6 +360,48 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 		"admin":   obj{"listen": opts.AdminListen},
 		"storage": obj{"module": "file_system", "root": opts.StorageDir},
 		"apps":    apps,
+	}, nil
+}
+
+// mailWebRoute is the route of the mail host's site, or nil when there is
+// none (see MailWeb).
+func (o Options) mailWebRoute() (obj, error) {
+	w := o.MailWeb
+	if w.Host == "" || w.Socket == "" {
+		return nil, nil
+	}
+	if w.Host == o.PanelDomain {
+		// The panel domain is the panel; a mail host of the same name gets
+		// no self-service site (the panel's mail health says so).
+		return nil, nil
+	}
+	if o.TLSMode != TLSOff && len(w.Certificates) == 0 {
+		return nil, nil
+	}
+	if o.PanelUpstream == "" {
+		return nil, fmt.Errorf("mail host %s needs the panel's address", w.Host)
+	}
+	if !filepath.IsAbs(w.Socket) || filepath.Clean(w.Socket) != w.Socket {
+		return nil, fmt.Errorf("the mail service's web socket %q is not an absolute path", w.Socket)
+	}
+	service := proxyTo("unix/" + w.Socket)
+	service["transport"].(obj)["response_header_timeout"] = MailWebResponseHeaderTimeout
+	return obj{
+		"match": []obj{{"host": []string{w.Host}}},
+		"handle": []obj{{"handler": "subroute", "routes": []obj{
+			{
+				"match":    []obj{{"path": MailWebServicePaths}},
+				"handle":   []obj{{"handler": "request_body", "max_size": MailWebMaxBody}, service},
+				"terminal": true,
+			},
+			{
+				"match":    []obj{{"path": MailWebBlockedPaths}},
+				"handle":   []obj{{"handler": "static_response", "status_code": 404, "body": "Not found.\n"}},
+				"terminal": true,
+			},
+			{"handle": []obj{{"handler": "request_body", "max_size": MailWebAppMaxBody}, proxyTo(o.PanelUpstream)}},
+		}}},
+		"terminal": true,
 	}, nil
 }
 
@@ -316,6 +427,8 @@ const (
 	// including its body, has been passed on: the panel needs it to unpack
 	// and publish an archive.
 	ProxyResponseHeaderTimeout = "10m"
+	// MailWebResponseHeaderTimeout bounds the mail service's answers.
+	MailWebResponseHeaderTimeout = "2m"
 )
 
 func withTimeouts(server obj) obj {

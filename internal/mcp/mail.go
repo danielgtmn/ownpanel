@@ -215,7 +215,7 @@ type mailRecordChangesOutput struct {
 }
 
 type mailHealthCheckInfo struct {
-	ID       string   `json:"id" jsonschema:"service, mail_host_dns, mail_host_spf, ptr, outbound_port, certificate, listeners, postmaster or blocklists"`
+	ID       string   `json:"id" jsonschema:"service, mail_host_dns, mail_host_spf, ptr, outbound_port, certificate, listeners, postmaster, blocklists or self_service"`
 	State    string   `json:"state" jsonschema:"ok, warning, error or unknown"`
 	Found    []string `json:"found" jsonschema:"what was found"`
 	Expected []string `json:"expected" jsonschema:"what was expected"`

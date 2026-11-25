@@ -11,6 +11,16 @@ const check = (id: string, state: string, more: Partial<HealthCheck> = {}): Heal
 })
 
 describe('healthLine', () => {
+  it('says where mailbox users sign in, or that they cannot yet', () => {
+    expect(healthLine(check('self_service', 'ok'), 'mail.example.com').title).toBe(
+      'Mailbox users sign in at mail.example.com.',
+    )
+    const line = healthLine(check('self_service', 'warning', { detail: 'Choose another name.' }), 'mail.example.com')
+    expect(line).toMatchObject({ tone: 'warning', title: "Mailbox users don't have their own sign-in page yet." })
+    expect(line.ownDetail).toBeFalsy()
+    expect(healthLine(check('self_service', 'unknown'), '').title).toBe("Couldn't check where mailbox users sign in.")
+  })
+
   it('says in words what each check found', () => {
     expect(healthLine(check('service', 'ok'), 'mail.example.com')).toEqual({
       tone: 'positive',

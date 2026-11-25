@@ -122,7 +122,7 @@ func TestMailRecordAndHealthTools(t *testing.T) {
 
 	var h mailHealthOutput
 	ok(t, call_(t, cs, "get_mail_health", nil), &h)
-	if h.MailHost != "mail.example.net" || len(h.Checks) != 9 || h.Checks[0].ID != "service" || h.Checks[0].State != "error" {
+	if h.MailHost != "mail.example.net" || len(h.Checks) != 10 || h.Checks[0].ID != "service" || h.Checks[0].State != "error" {
 		t.Fatalf("health %+v", h)
 	}
 

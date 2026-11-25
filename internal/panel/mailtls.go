@@ -147,6 +147,11 @@ func fingerprint(certs []config.Certificate) string {
 func (s *Service) runMailCerts(ctx context.Context) {
 	for {
 		if s.refreshMailCerts(ctx, true) {
+			// The web server serves the mail host with the same
+			// certificates (caddy.MailWeb).
+			if err := s.sync(ctx); err != nil && ctx.Err() == nil {
+				slog.Warn("web server not in sync after a certificate change", "err", err)
+			}
 			if err := s.mailSync(ctx); err != nil && ctx.Err() == nil {
 				slog.Warn("mail server not in sync after a certificate change", "err", err)
 			}

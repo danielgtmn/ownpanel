@@ -42,7 +42,11 @@ SETUP_CODE=$DATA/setup-code
 UPDATE_DIR=$DATA/update
 MAIL_DATA=/var/lib/ownpanel-mail
 MAIL_ADMIN_ARG="-mail-admin unix:///run/ownpanel-mail/admin.sock"
-DEFAULT_ARGS="-tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock $MAIL_ADMIN_ARG"
+# The mail service's web socket, which Caddy passes the mail host's account
+# pages to (see ownpanel-mail.service).
+MAIL_WEB_ARG="-mail-web unix:///run/ownpanel-mail-web/web.sock"
+MAIL_WEB_GROUP=ownpanel-mail-web
+DEFAULT_ARGS="-tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock $MAIL_ADMIN_ARG $MAIL_WEB_ARG"
 SERVICES=(ownpanel-caddy ownpanel-mail ownpaneld)
 UPDATE_UNITS=(ownpanel-update.service ownpanel-update.path ownpanel-update.timer)
 # Files of a release, relative to its directory.
@@ -69,8 +73,8 @@ Options:
   -y, --yes                 do not ask for confirmation (only --purge asks)
   --uninstall               stop and remove services and binaries; keeps data and settings
   --purge                   with --uninstall: also delete /var/lib/ownpanel, /var/lib/ownpanel-mail
-                            (all stored mail), /etc/ownpanel and the users ownpanel,
-                            ownpanel-mail and caddy
+                            (all stored mail), /etc/ownpanel, the users ownpanel,
+                            ownpanel-mail and caddy and the group ownpanel-mail-web
   -h, --help                show this help
 
 Options given on an upgrade replace the stored ones; everything else in
@@ -218,7 +222,7 @@ check_system() {
   esac
 
   local cmd
-  for cmd in tar sha256sum install useradd usermod systemctl; do
+  for cmd in tar sha256sum install useradd usermod groupadd getent systemctl; do
     command -v "$cmd" >/dev/null || die "the command '$cmd' is missing"
   done
   if [ -z "$opt_from_dir" ]; then
@@ -545,6 +549,10 @@ choose_settings() {
   if [ -z "$(flag_values "$new_args" mail-admin)" ]; then
     new_args="$new_args $MAIL_ADMIN_ARG"
   fi
+  # Nor those from before the mail host's account pages its web socket.
+  if [ -z "$(flag_values "$new_args" mail-web)" ]; then
+    new_args="$new_args $MAIL_WEB_ARG"
+  fi
   if [ ${#ips[@]} -gt 0 ]; then
     new_args="$(without_flag "$new_args" server-ip) -server-ip $(IFS=,; echo "${ips[*]}")"
   fi
@@ -638,6 +646,10 @@ install_files() {
   # in $MAIL_DATA stays 0700, so the membership grants nothing else.
   id -u ownpanel-mail >/dev/null 2>&1 || useradd --system --user-group --home "$MAIL_DATA" --shell /usr/sbin/nologin ownpanel-mail
   usermod -a -G ownpanel-mail ownpanel
+  # Caddy reaches the mail service's web socket (not its admin socket)
+  # through the group ownpanel-mail-web.
+  getent group "$MAIL_WEB_GROUP" >/dev/null || groupadd --system "$MAIL_WEB_GROUP"
+  usermod -a -G "$MAIL_WEB_GROUP" caddy
 
   [ "$installed" = 1 ] && systemctl stop ownpaneld ownpanel-mail ownpanel-caddy 2>/dev/null || true
 
@@ -864,6 +876,7 @@ do_uninstall() {
     say "Deleted $DATA, $MAIL_DATA and $ETC"
     if id -u ownpanel >/dev/null 2>&1; then userdel ownpanel && say "Removed user ownpanel"; fi
     if id -u ownpanel-mail >/dev/null 2>&1; then userdel ownpanel-mail && say "Removed user ownpanel-mail"; fi
+    if getent group "$MAIL_WEB_GROUP" >/dev/null; then groupdel "$MAIL_WEB_GROUP" && say "Removed group $MAIL_WEB_GROUP"; fi
     # The caddy user may belong to a Caddy package; only remove ours.
     if [ "$(getent passwd caddy | cut -d: -f6)" = "$DATA/caddy-home" ]; then
       userdel caddy && say "Removed user caddy"

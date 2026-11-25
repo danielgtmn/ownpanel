@@ -13,6 +13,11 @@ search `node_modules/@ui-sdk/react/docs/core.md` by heading, and read
 ## Structure
 
 - `src/app/` is the shell: layout, sidebar navigation, routing, global styles.
+- `src/account/` is the account area for mailbox users. It renders instead of
+  the panel when the page was opened on the mail server's name (the panel
+  marks `index.html` with `<meta name="ownpanel-mail-host">` there), never
+  loads the panel's session and talks only to `/account/api/` of the mail
+  service. It is loaded on demand like a page.
 - `src/shared/` holds code every module may use: `api/` (API client, shared
   lookups), `session/` (signed-in person, `useSession()`, name and password
   rules), `format/` (dates), `routing/`, `hooks/`, `ui/` (small UI pieces and

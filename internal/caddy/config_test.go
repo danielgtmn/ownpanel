@@ -255,3 +255,76 @@ func TestBuildMailSetupRoutes(t *testing.T) {
 		t.Fatal("setup names without the panel's address must fail")
 	}
 }
+
+func TestBuildMailWeb(t *testing.T) {
+	cert := Certificate{CertPEM: "-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----\n", KeyPEM: "-----BEGIN PRIVATE KEY-----\ny\n-----END PRIVATE KEY-----\n"}
+	base := Options{AdminListen: "127.0.0.1:2019", StorageDir: "/data/caddy", HTTPPort: 80, HTTPSPort: 443, TLSMode: TLSACME,
+		PanelUpstream: "127.0.0.1:8600", PanelDomain: "panel.example.com", MailHost: "mail.example.com",
+		MailWeb: MailWeb{Host: "mail.example.com", Socket: "/run/ownpanel-mail-web/web.sock", Certificates: []Certificate{cert}}}
+	js := func(o Options) string {
+		t.Helper()
+		cfg, err := Build(o, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(cfg)
+		return string(b)
+	}
+	got := js(base)
+	for _, want := range []string{
+		`"dial":"unix//run/ownpanel-mail-web/web.sock"`,
+		`"path":["/dav","/dav/*","/.well-known/caldav","/.well-known/carddav","/account/api/*"]`,
+		`"path":["/api","/api/*","/mcp","/mcp/*"]`,
+		`"max_size":16777216`,
+		`"load_pem":[{"certificate":`,
+		`"tags":["ownpanel-mail-host"]`,
+		`"automatic_https":{"skip_certificates":["mail.example.com"]}`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("config misses %s", want)
+		}
+	}
+	// The mail host's route comes before the catch-all for unknown hosts.
+	if strings.Index(got, `"host":["mail.example.com"]}]`) > strings.Index(got, "Unknown site.") {
+		t.Error("mail host route after the catch-all")
+	}
+
+	noSite := func(name string, o Options) {
+		t.Helper()
+		got := js(o)
+		if strings.Contains(got, "web.sock") || strings.Contains(got, "load_pem") || strings.Contains(got, "skip_certificates") {
+			t.Errorf("%s: mail host site present", name)
+		}
+	}
+	o := base
+	o.MailWeb.Certificates = nil
+	noSite("no certificate yet", o)
+	o = base
+	o.MailWeb.Socket = ""
+	noSite("no web socket", o)
+	o = base
+	o.PanelDomain = "mail.example.com"
+	noSite("mail host is the panel domain", o)
+
+	// Plain HTTP: the site without certificates.
+	o = base
+	o.TLSMode, o.MailWeb.Certificates = TLSOff, nil
+	if got := js(o); !strings.Contains(got, "web.sock") || strings.Contains(got, "load_pem") {
+		t.Error("TLS off: mail host site missing or certificates loaded")
+	}
+
+	o = base
+	o.MailWeb.Socket = "run/web.sock"
+	if _, err := Build(o, nil); err == nil {
+		t.Error("a relative socket path must fail")
+	}
+}
+
+func TestRedactKeys(t *testing.T) {
+	if got := redactKeys("loading: -----BEGIN PRIVATE KEY----- abc"); strings.Contains(got, "abc") {
+		t.Fatalf("key in message: %q", got)
+	}
+	if got := redactKeys("plain error"); got != "plain error" {
+		t.Fatal(got)
+	}
+}

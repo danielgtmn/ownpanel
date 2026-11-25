@@ -84,7 +84,7 @@ Updating replaces binaries and restarts services, which needs root; the panel ru
 
 ### E-mail
 
-- The mail server runs as its own service and user (`ownpanel-mail`) with its own data in `/var/lib/ownpanel-mail` (0700). It cannot read the panel's database or `secret.key`; the panel cannot read stored mail. They talk only through a local socket of the group `ownpanel-mail`. The unit keeps only the capability to open ports below 1024, with a read-only system and no access to home directories.
+- The mail server runs as its own service and user (`ownpanel-mail`) with its own data in `/var/lib/ownpanel-mail` (0700). It cannot read the panel's database or `secret.key`; the panel cannot read stored mail. They talk only through a local socket of the group `ownpanel-mail`. Caddy reaches the mail service only through a second socket, `/run/ownpanel-mail-web/web.sock` (group `ownpanel-mail-web`, of which only `caddy` is a member), which serves the mailbox users' account pages and nothing of the admin API; `X-Forwarded-For` is trusted only there. The unit keeps only the capability to open ports below 1024, with a read-only system and no access to home directories.
 - Mailbox passwords are argon2id hashes; mail programs sign in only over encrypted connections. Failed sign-ins are limited per address and network and per network, never per address alone (that would let anyone lock a mailbox). Unknown addresses take as long as wrong passwords.
 - DKIM keys are stored encrypted with `secret.key`. Password hashes and keys never appear in API answers, logs or the activity log.
 - A domain receives mail only once its MX record points at the mail server (or an administrator says so), so nobody can catch mail sent from this server to a domain they do not own.

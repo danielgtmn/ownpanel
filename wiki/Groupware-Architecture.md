@@ -121,6 +121,37 @@ spike** decides library vs. own code (see [Libraries](#libraries)).
 - **Request limits:** request-size limits in Caddy. Rate limits live in the
   mail service, because standard Caddy has no rate-limit module.
 
+**Built (G0)** — how it turned out:
+
+- The mail service opens the web socket with `ownpaneld mail -web
+  unix:///run/ownpanel-mail-web/web.sock` (package `internal/mail/web`):
+  `GET /account/api/health` answers `{"status":"ok"}`; `/dav/…` answers
+  501 and `/.well-known/caldav|carddav` 404 until G4. Limits: 10 s for
+  headers, 2 min per request, 64 KB of headers, 16 MB of body.
+- **Hooks for G1:** `server.Options.AccountHandler` (an `http.Handler`)
+  serves everything below `/account/api/` except `health`, with the full
+  path. `web.ClientIP(r)` returns the client's address: the right-most
+  `X-Forwarded-For` entry, the hop Caddy appended (Caddy replaces what the
+  client sent). It is set only on the web socket; `ok == false` means
+  unknown, never trusted.
+- `ownpanel-mail.service` lists both runtime directories
+  (`RuntimeDirectory=ownpanel-mail ownpanel-mail-web`, 0750). systemd
+  resets their owner and mode before every command it starts, so the
+  service itself hands `/run/ownpanel-mail-web` and `web.sock` to the group
+  `ownpanel-mail-web` (`-web-group`); it is a member through
+  `SupplementaryGroups=`, and `caddy` is the only other member.
+- The panel learns the socket from `-mail-web` and adds the Caddy site only
+  when `mail_host` differs from the panel domain and the certificate is
+  there. Request limits in Caddy: 16 MB to the mail service, 64 KB to the
+  web app.
+- The panel answers requests for `mail_host` with the web app only (`/api`
+  and `/mcp` are 404 there too). `index.html` then carries
+  `<meta name="ownpanel-mail-host">`, which makes the app show the account
+  area (`web/src/account/`, a placeholder until G1) instead of the panel.
+- The settings do not refuse `mail_host` = panel domain yet (there is no
+  groupware switch to refuse); Mail health has the check `self_service`,
+  a warning in that case.
+
 ## G1 — Mailbox accounts
 
 **Display name** per mailbox: set by the domain owner and changeable by the

@@ -38,6 +38,17 @@ import (
 type Options struct {
 	DataDir     string
 	AdminSocket string
+	// WebSocket is the Unix socket Caddy passes the mail host's
+	// self-service API and calendars and contacts to (package web); ""
+	// leaves it closed.
+	WebSocket string
+	// WebGroup, when set, is the group the web socket's directory and the
+	// socket are handed to (the web server's; the service must be a
+	// member).
+	WebGroup string
+	// AccountHandler serves /account/api/… on the web socket (see
+	// web.Options.Account).
+	AccountHandler http.Handler
 	// Listener addresses: SMTP (port 25), submission with STARTTLS (587),
 	// submission with TLS (465) and IMAPS (993). An empty address leaves
 	// that listener closed.
@@ -115,6 +126,8 @@ type Server struct {
 
 	admin   *http.Server
 	adminLn net.Listener
+	web     *http.Server // nil without Options.WebSocket
+	webLn   net.Listener
 }
 
 // runtime is an immutable snapshot of the loaded configuration.
@@ -574,8 +587,18 @@ func (s *Server) Run(ctx context.Context) error {
 		s.store.Close()
 		return err
 	}
+	if err := s.listenWeb(); err != nil {
+		s.admin.Close()
+		os.Remove(s.opts.AdminSocket)
+		s.store.Close()
+		return err
+	}
 	adminDone := make(chan error, 1)
 	go func() { adminDone <- s.admin.Serve(s.adminLn) }()
+	webDone := make(chan error, 1)
+	if s.web != nil {
+		go func() { webDone <- s.web.Serve(s.webLn) }()
+	}
 	s.syncListeners()
 	s.store.PruneEvents(ctx)
 	s.limits.Prune(ctx)
@@ -598,6 +621,11 @@ func (s *Server) Run(ctx context.Context) error {
 				s.shutdown()
 				return fmt.Errorf("admin socket: %w", err)
 			}
+		case err := <-webDone:
+			if !errors.Is(err, http.ErrServerClosed) {
+				s.shutdown()
+				return fmt.Errorf("web socket: %w", err)
+			}
 		case <-retry.C:
 			// A port that was busy (another mail server) may be free now.
 			s.syncListeners()
@@ -619,25 +647,8 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) listenAdmin() error {
-	path := s.opts.AdminSocket
-	if fi, err := os.Lstat(path); err == nil {
-		if fi.Mode()&os.ModeSocket == 0 {
-			return fmt.Errorf("%s exists and is not a socket", path)
-		}
-		if c, err := net.DialTimeout("unix", path, time.Second); err == nil {
-			c.Close()
-			return fmt.Errorf("%s is in use: is the mail service already running?", path)
-		}
-		if err := os.Remove(path); err != nil {
-			return err
-		}
-	}
-	ln, err := net.Listen("unix", path)
+	ln, err := listenUnix(s.opts.AdminSocket)
 	if err != nil {
-		return err
-	}
-	if err := os.Chmod(path, 0o660); err != nil {
-		ln.Close()
 		return err
 	}
 	s.adminLn = ln
@@ -674,6 +685,14 @@ func (s *Server) shutdown() error {
 	// Imports stop at the next message; they continue (files) or are
 	// interrupted (IMAP) after the next start.
 	s.imports.Shutdown(ctx)
+	if s.web != nil {
+		wctx, wcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.web.Shutdown(wctx); err != nil {
+			s.web.Close()
+		}
+		wcancel()
+		os.Remove(s.opts.WebSocket)
+	}
 	if s.admin != nil {
 		actx, acancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := s.admin.Shutdown(actx); err != nil {

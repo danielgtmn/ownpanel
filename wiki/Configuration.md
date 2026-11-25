@@ -25,6 +25,7 @@ On a server installed with `install.sh`, flags live in `/etc/ownpanel/ownpaneld.
 | `-acme-email` | empty | Contact address given to the certificate authority. Optional; only used with `-tls acme`. Overrides the panel settings (see below). |
 | `-panel-domain` | empty | Serve the panel itself through Caddy on this domain, with a certificate like any site. The domain cannot also be used by a site. Also makes `/mcp` reachable on that domain and builds upload links on it. Overrides the panel settings (see below). |
 | `-mail-admin` | empty | Admin socket of the mail service (`ownpaneld mail`) as `unix:///absolute/path.sock`; the installer passes `unix:///run/ownpanel-mail/admin.sock`. Empty: no mail service; mail domains and mailboxes are only stored. See [[E-Mail architecture|E-Mail-Architecture]]. |
+| `-mail-web` | empty | Web socket of the mail service (`ownpaneld mail -web`) as `unix:///absolute/path.sock`; the installer passes `unix:///run/ownpanel-mail-web/web.sock`. With it, and a mail server name different from the panel domain, Caddy serves the mail server name over HTTPS for mailbox users (their sign-in page). Empty: no such site. See [[Groupware architecture|Groupware-Architecture]]. |
 | `-mail-host` | empty | Name of the mail server (MX target, what mail programs connect to), e.g. `mail.example.com`. It cannot be a site, redirect or mail domain; it may be the panel domain. Overrides the panel settings (see below). |
 | `-reconcile-interval` | `30s` | How often the web server is re-synced in the background (a Go duration such as `30s` or `1m`). |
 | `-releases-api` | `https://api.github.com` | Where the panel looks for new releases ([[Installation|Installation#updating]]). Only change it for testing. |
@@ -74,6 +75,8 @@ The mail service ([[E-Mail|E-Mail]]). `install.sh` runs it as `ownpanel-mail.ser
 |---|---|---|
 | `-data` | `/var/lib/ownpanel-mail` | Its data: last configuration, mail index, messages, queue. |
 | `-admin` | `/run/ownpanel-mail/admin.sock` | Unix socket the panel configures it through (`-mail-admin unix://…` of `serve`). |
+| `-web` | empty | Unix socket for the web requests of the mail server name that Caddy passes on (account pages; later calendars and contacts), as `unix:///absolute/path.sock`; the installer passes `unix:///run/ownpanel-mail-web/web.sock` (`-mail-web` of `serve`). Empty: closed. It trusts `X-Forwarded-For` from Caddy, so only Caddy may be able to connect (see [[Installation|Installation]]). |
+| `-web-group` | empty | Group the web socket and its directory are handed to (the installer's unit: `ownpanel-mail-web`, of which only Caddy's user is a member). The service must be a member itself. Empty: they keep the service's group. |
 | `-smtp` | `:25` | Incoming mail from other servers. |
 | `-submission` | `:587` | Mail programs sending mail (STARTTLS before sign-in); `""` turns it off. |
 | `-submissions` | `:465` | Mail programs sending mail over TLS; `""` turns it off. |
