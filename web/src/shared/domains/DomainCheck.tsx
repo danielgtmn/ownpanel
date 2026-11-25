@@ -1,11 +1,10 @@
 import { Button } from '@ui-sdk/react/button'
-import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '@ui-sdk/react/collapsible'
 import { toast } from '@ui-sdk/react/toast'
 import { errorMessage, getDomainStatus, pointAnyDomain } from '../api/index.ts'
 import { useResource } from '../hooks/index.ts'
 import { StatusBadge } from '../ui/index.ts'
-import { ServerAddresses } from './ServerAddresses.tsx'
-import { pointedMessage, statusAction, statusText, statusTone } from './status.ts'
+import { PointHelp } from './PointHelp.tsx'
+import { foundText, pointedMessage, statusAction, statusText, statusTone } from './status.ts'
 
 export function DomainCheck({ domain }: { domain: string }) {
   const status = useResource(() => getDomainStatus(domain), `domain-check:${domain}`)
@@ -44,19 +43,9 @@ export function DomainCheck({ domain }: { domain: string }) {
             Point to this server<span className="visually-hidden"> for {domain}</span>
           </Button>
         ) : null}
+        {action === 'manual' ? <PointHelp domains={[domain]} /> : null}
       </div>
-      {action === 'manual' ? (
-        <Collapsible className="domain-check-manual">
-          <CollapsibleTrigger>How to point {domain} here</CollapsibleTrigger>
-          <CollapsiblePanel>
-            <p>
-              {domain} isn't managed from here. Connect the company that manages it under DNS, or set an A or AAAA
-              record for it to these addresses yourself:
-            </p>
-            <ServerAddresses />
-          </CollapsiblePanel>
-        </Collapsible>
-      ) : null}
+      {foundText(current) ? <p className="muted domain-check-found">{foundText(current)}</p> : null}
     </div>
   )
 }

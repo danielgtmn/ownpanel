@@ -1,4 +1,5 @@
 import {
+  attentionText,
   familyStatus,
   familySummary,
   findFamily,
@@ -21,7 +22,12 @@ function FamilyContent({ family, sources, states }: { family: Family; sources: D
       <PageHeader
         title={family.domain}
         description={familySummary(family)}
-        meta={<StatusBadge tone={tone}>{STATUS_TEXT[status].charAt(0).toUpperCase() + STATUS_TEXT[status].slice(1)}</StatusBadge>}
+        meta={
+          <>
+            <StatusBadge tone={tone}>{STATUS_TEXT[status].charAt(0).toUpperCase() + STATUS_TEXT[status].slice(1)}</StatusBadge>
+            {status === 'attention' ? <span className="muted">{attentionText(family, states)}</span> : null}
+          </>
+        }
       />
       <AddressesSection family={family} sources={sources} />
       <Section title="Websites" description={`Sites on ${family.domain} and its subdomains.`}>
@@ -76,8 +82,9 @@ function FamilyContent({ family, sources, states }: { family: Family; sources: D
       <Section title="DNS" description="Where the records of this domain are managed.">
         {family.zones.length === 0 ? (
           <p className="muted">
-            None of your DNS connections holds {family.domain}, so its records are changed at your domain provider.{' '}
-            <a href={hrefFor('dns')}>Connect a DNS account</a>
+            None of your DNS connections holds {family.domain}, so its records are changed wherever you manage the
+            domain.{' '}
+            <a href={hrefFor('dns')}>Add a DNS connection</a>
           </p>
         ) : (
           <ul className="record-list" aria-label={`DNS of ${family.domain}`}>

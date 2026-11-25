@@ -22,10 +22,11 @@ export function ZonesSection({ zones, hasConnections }: { zones: Resource<ZoneLi
         : null}
       {view && view.rows.length === 0 && view.notices.length === 0 ? (
         <EmptyState
+          inSection
           title="No domains yet"
           description={
             hasConnections
-              ? 'The connected accounts don\'t have any domains yet.'
+              ? 'Your DNS connections don\'t have any domains yet.'
               : 'Connect Hetzner above to see your domains here.'
           }
         />

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getDomainStatuses, getServerAddresses, pointDomain, type DomainStatus } from '../api/index.ts'
-import { needsServerAddresses, pointedMessage, statusAction, statusText, statusTone } from './status.ts'
+import { foundText, pointedMessage, statusAction, statusText, statusTone } from './status.ts'
 
 const zone = { connection_id: 3, connection_name: 'Main', zone: 'example.com', record_name: '@' }
 
@@ -18,8 +18,9 @@ afterEach(() => {
 describe('statusText', () => {
   it('describes every state', () => {
     expect(statusText(status('points_here'))).toBe('Points to this server')
-    expect(statusText(status('points_elsewhere', { found: ['1.2.3.4', '5.6.7.8'] }))).toBe(
-      'Points somewhere else (found: 1.2.3.4, 5.6.7.8)',
+    expect(statusText(status('points_elsewhere', { found: ['1.2.3.4', '5.6.7.8'] }))).toBe('Points somewhere else')
+    expect(foundText(status('points_elsewhere', { found: ['1.2.3.4', '5.6.7.8'] }))).toBe(
+      'Right now it points to 1.2.3.4, 5.6.7.8.',
     )
     expect(statusText(status('points_elsewhere'))).toBe('Points somewhere else')
     expect(statusText(status('no_record'))).toBe('No address record yet')
@@ -46,10 +47,9 @@ describe('statusAction', () => {
     }
   })
 
-  it('shows the manual hint when no connection manages the domain', () => {
+  it('shows the manual help when no connection manages the domain', () => {
     expect(statusAction(status('no_record', { zone: null }))).toBe('manual')
-    expect(needsServerAddresses([status('points_here'), status('no_record', { zone: null })])).toBe(true)
-    expect(needsServerAddresses([status('points_here'), status('no_record')])).toBe(false)
+    expect(statusAction(status('no_record'))).toBe('point')
   })
 })
 

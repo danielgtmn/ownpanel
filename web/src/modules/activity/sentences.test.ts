@@ -18,13 +18,26 @@ describe('describeActivity', () => {
     ['account.password', '', 'anna changed their password'],
     ['account.login', '', 'anna signed in'],
     ['setup', '', 'anna set up the panel'],
+    ['setup.complete', '', 'anna finished setting up the panel'],
+    ['settings.update', '', 'anna changed the settings'],
+    ['site.upload-link', 'blog', 'anna created an upload link for blog'],
+    ['redirect.create', 'old.example.com', 'anna added a redirect from old.example.com'],
+    ['redirect.update', 'old.example.com/a', 'anna changed the redirect from old.example.com/a'],
+    ['redirect.delete', 'old.example.com', 'anna removed the redirect from old.example.com'],
+    ['dns.connect', 'Hetzner', 'anna connected Hetzner'],
+    ['dns.disconnect', 'Hetzner', 'anna disconnected Hetzner'],
+    ['dns.zone.create', 'example.com', 'anna added the domain example.com'],
+    ['dns.zone.delete', 'example.com', 'anna removed the domain example.com'],
+    ['dns.record.set', 'example.com', 'anna changed a DNS record of example.com'],
+    ['dns.record.delete', 'example.com', 'anna deleted a DNS record of example.com'],
+    ['dns.point', 'blog.example.com', 'anna pointed blog.example.com to this server'],
   ])('describes %s', (action, target, sentence) => {
     expect(describeActivity(entry(action, target))).toBe(sentence)
   })
 
   it('falls back to a neutral sentence for unknown actions', () => {
-    expect(describeActivity(entry('dns.record.add', 'example.com'))).toBe('anna made a change to example.com')
-    expect(describeActivity(entry('dns.record.add'))).toBe('anna made a change')
+    expect(describeActivity(entry('something.new', 'example.com'))).toBe('anna made a change to example.com')
+    expect(describeActivity(entry('something.new'))).toBe('anna made a change')
   })
 
   it('copes with a missing target and a missing actor', () => {

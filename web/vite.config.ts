@@ -23,7 +23,10 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:8600',
+      // Keep the browser's Host header: the panel refuses changes whose
+      // Origin names another host, and the string shorthand would rewrite
+      // Host to 127.0.0.1:8600.
+      '/api': { target: 'http://127.0.0.1:8600', changeOrigin: false },
     },
   },
   test: {

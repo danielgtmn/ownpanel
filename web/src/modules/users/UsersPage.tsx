@@ -21,7 +21,6 @@ type PersonRowProps = {
 }
 
 function PersonRow({ person, self, onChangeRole, onNewPassword, onRemove }: PersonRowProps) {
-  const noteId = `person-note-${person.id}`
   return (
     <li className="record-row">
       <div className="record-main">
@@ -36,33 +35,24 @@ function PersonRow({ person, self, onChangeRole, onNewPassword, onRemove }: Pers
           </li>
         </ul>
         {self ? (
-          <p className="muted record-note" id={noteId}>
-            This is your own account. Another administrator can change your role or remove you.
-          </p>
+          <p className="muted record-note">Another administrator can change your role or remove you.</p>
         ) : null}
       </div>
       <div className="record-actions">
-        <Button
-          disabled={self}
-          aria-describedby={self ? noteId : undefined}
-          pendingAnnouncement="Saving"
-          onClick={() => onChangeRole(person)}
-        >
-          {person.role === 'admin' ? 'Make member' : 'Make administrator'}
-          <span className="visually-hidden"> ({person.name})</span>
-        </Button>
+        {self ? null : (
+          <Button pendingAnnouncement="Saving" onClick={() => onChangeRole(person)}>
+            {person.role === 'admin' ? 'Make member' : 'Make administrator'}
+            <span className="visually-hidden"> ({person.name})</span>
+          </Button>
+        )}
         <Button onClick={() => onNewPassword(person)}>
           Set new password<span className="visually-hidden"> ({person.name})</span>
         </Button>
-        <Button
-          data-variant="destructive"
-          disabled={self}
-          aria-describedby={self ? noteId : undefined}
-          pendingAnnouncement="Removing"
-          onClick={() => onRemove(person)}
-        >
-          Remove<span className="visually-hidden"> {person.name}</span>
-        </Button>
+        {self ? null : (
+          <Button data-variant="destructive" pendingAnnouncement="Removing" onClick={() => onRemove(person)}>
+            Remove<span className="visually-hidden"> {person.name}</span>
+          </Button>
+        )}
       </div>
     </li>
   )
