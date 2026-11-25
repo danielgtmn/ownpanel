@@ -11,7 +11,6 @@ import (
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
 
-	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/mail/signin"
 	"github.com/danielgtmn/ownpanel/internal/mail/storage"
 )
@@ -34,7 +33,7 @@ type session struct {
 	// while calling the store: the storage callback takes it under the
 	// store's write lock.
 	mu     sync.Mutex
-	box    config.Mailbox
+	box    signin.Grant
 	authed bool
 	gone   bool // the mailbox's data was deleted
 	sel    *selected
@@ -44,7 +43,7 @@ type session struct {
 var _ imapserver.SessionIMAP4rev2 = (*session)(nil)
 var _ imapserver.SessionAppendLimit = (*session)(nil)
 
-func (s *session) mailbox() (config.Mailbox, bool) {
+func (s *session) mailbox() (signin.Grant, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.box, s.authed

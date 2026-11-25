@@ -279,6 +279,18 @@ CREATE TABLE import_watermarks (
 	PRIMARY KEY (storage_id, host, username, folder)
 );
 `,
+	// Mailbox accounts (G1): account events carry their change as JSON
+	// (config.AccountChange); account_overlays keeps the changes a mailbox
+	// made itself until the panel's configuration includes them
+	// (directory.Overlay as JSON). Not bound to the mailboxes table: a
+	// mailbox may change its account before it stored any mail.
+	`
+ALTER TABLE events ADD COLUMN account TEXT NOT NULL DEFAULT '';
+CREATE TABLE account_overlays (
+	storage_id TEXT PRIMARY KEY,
+	data       TEXT NOT NULL
+);
+`,
 }
 
 func migrate(db *sql.DB) error {
