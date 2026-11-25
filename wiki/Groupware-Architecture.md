@@ -489,10 +489,39 @@ subset: **own interpreter**, as expected.
   mail read to see, mail write to change, own domains), API routes
   `/api/mail/mailboxes/{id}/rules|out-of-office|forwarding|may-forward`,
   MCP tools `get_/set_/clear_mailbox_out_of_office`, table
-  `mailbox_no_forwarding` (migration 0015). The panel sees whether a reply
+  `mailbox_no_forwarding` (migration 0017, after G3's 0015/0016). The panel sees whether a reply
   is on and its dates; text and forwarding address only if a panel user set
   them. Activity: `mail.mailbox.out-of-office`, `mail.mailbox.forwarding`,
   `mail.mailbox.may-forward` (never the text).
+- **mail.db:** G2's tables (`sieve_scripts`, `sieve_replies`,
+  `sieve_duplicates`) are migration 10, after G3's 8 and G4a's 9.
+
+**Built with G3 (the Manage right):**
+
+- **Self-service:** the four filter routes take `?mailbox=<address>`
+  (`account/filters.go`, `rulesTarget`): the signed-in mailbox, or one it
+  has Manage on per `directory.Rights` (shared, or personal through
+  self-delegation), checked on every request; grants across organisations
+  never reach `Rights`. Anything else is `404`. The answer carries
+  `mailbox`; out-of-office and forwarding record the managing mailbox as
+  `set_by` with the time. The page shows a choice "Your mailbox / …" above
+  the three sections (`AccountFilters`, `managedMailboxes` from `/me`'s
+  `access`).
+- **ManageSieve:** the PLAIN authorization identity may name a mailbox the
+  user has Manage on; the session then works on that mailbox's scripts.
+  Checked after the password (no hint whether the mailbox exists) and
+  again before every command (losing the right ends the session with BYE).
+- **Delivery:** a shared mailbox runs its own script like any mailbox.
+  **Decision:** `\Seen` from a filter (`imap4flags`, `keep`/`fileinto
+  :flags`) is dropped when storing into a shared mailbox (`deliver.store`),
+  because the read state there is per reader (`shared_seen`) and a stored
+  `\Seen` is nobody's; it would only reappear if the mailbox became
+  personal. Other flags are kept.
+- **Out-of-office from a shared mailbox:** `From` is the shared address;
+  `:from` accepts only the shared mailbox's own address and aliases
+  (`MaySendAs` of that mailbox), never the address of a holder.
+- **Panel:** unchanged; the domain owner manages a shared mailbox's
+  out-of-office and forwarding like any other.
 
 ## G3 — Shared mailboxes, delegation, distribution groups
 
@@ -661,10 +690,9 @@ and its sessions end) and back (a password is set). Import (exists) works for sh
   - Messages already read before a mailbox became shared, and imported
     messages, are unread for each reader: the stored flag is nobody's read
     state there.
-  - `manage` is stored and checked by the directory, but has an effect
-    only with G2's filters; honouring `imap4flags` at delivery into shared
-    mailboxes is G2's too (a `\Seen` set at delivery is ignored for
-    readers).
+  - `manage` opens the mailbox's filters and out-of-office on the holder's
+    own page and through ManageSieve (see G2, "Built with G3"); a `\Seen`
+    set by a filter at delivery into a shared mailbox is dropped.
   - Subscriptions of shared folders are fixed.
   - `HideFromDirectory` is stored and pushed; it takes effect with the
     address book (G4a).

@@ -1,5 +1,5 @@
 import { validForwardAddress } from '../shared/mailrules/index.ts'
-import type { FilterCondition, FilterField, FilterOp, FilterRule } from './api.ts'
+import type { FilterCondition, FilterField, FilterOp, FilterRule, MailboxAccess } from './api.ts'
 
 // The simple filter editor. Limits are the mail server's (internal/mail/config/rules.go).
 export const RULES_MAX = 50
@@ -196,4 +196,11 @@ export function describeRule(rule: FilterRule): { when: string; then: string } {
 
 export function ruleTitle(rule: FilterRule, index: number): string {
   return rule.name || `Rule ${index + 1}`
+}
+
+// ---- other mailboxes ----
+
+// The other mailboxes whose out-of-office reply, forwarding and filters the person may change (the Manage right).
+export function managedMailboxes(access: MailboxAccess[]): MailboxAccess[] {
+  return access.filter((entry) => entry.rights.includes('manage'))
 }

@@ -10,6 +10,12 @@ package account
 //
 // 409 when a script written in a mail program is active and replace is
 // not set.
+//
+// ?mailbox=<address> addresses another mailbox the signed-in one has the
+// Manage right on (G3), above all a shared mailbox, which cannot sign in
+// itself. The right is checked on every request against the directory as
+// it is now; grants never cross an organisation (directory.buildGrants).
+// A mailbox without the right answers 404 like one that does not exist.
 
 import (
 	"context"
@@ -18,8 +24,10 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/mail/directory"
 	"github.com/danielgtmn/ownpanel/internal/mail/rules"
 	"github.com/danielgtmn/ownpanel/internal/mail/server"
 )
@@ -43,7 +51,30 @@ type filtersView struct {
 	Folders []string `json:"folders"`
 	// MayForward: the domain owner allows forwarding for this mailbox.
 	MayForward bool `json:"may_forward"`
+	// Mailbox is the address of the mailbox the settings are of, when it
+	// is not the signed-in one (see ?mailbox=).
+	Mailbox string `json:"mailbox,omitempty"`
 }
+
+// rulesTarget is the mailbox a filter request is about: the signed-in one,
+// or with ?mailbox= one it may manage. On false the answer is written.
+func (h *Handler) rulesTarget(w http.ResponseWriter, r *http.Request, s *session) (*config.Mailbox, bool) {
+	addr := directory.Normalize(r.URL.Query().Get("mailbox"))
+	if addr == "" || addr == s.mailbox.Address {
+		return &s.mailbox, true
+	}
+	dir := h.opts.Backend.Directory()
+	m, ok := dir.Mailbox(addr)
+	if !ok || m.StorageID == s.mailbox.StorageID || !dir.Rights(m.StorageID, s.mailbox.StorageID).Has(config.Manage) {
+		writeError(w, http.StatusNotFound, "Not found.")
+		return nil, false
+	}
+	c := *m
+	return &c, true
+}
+
+// delegated tells whether box is another mailbox than the signed-in one.
+func delegated(s *session, box *config.Mailbox) bool { return box.StorageID != s.mailbox.StorageID }
 
 func (h *Handler) filterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /account/api/filters", h.authed(h.getFilters))
@@ -60,13 +91,16 @@ func (h *Handler) rulesBackend(w http.ResponseWriter) (RulesBackend, bool) {
 	return rb, ok
 }
 
-func (h *Handler) filtersView(ctx context.Context, s *session, mr config.MailRules) (filtersView, error) {
-	v := filtersView{Rules: mr, Folders: []string{}, MayForward: !s.mailbox.NoForwarding}
+func (h *Handler) filtersView(ctx context.Context, s *session, box *config.Mailbox, mr config.MailRules) (filtersView, error) {
+	v := filtersView{Rules: mr, Folders: []string{}, MayForward: !box.NoForwarding}
+	if delegated(s, box) {
+		v.Mailbox = box.Address
+	}
 	st := h.opts.Backend.Store()
-	if err := st.EnsureMailbox(ctx, s.mailbox.StorageID); err != nil {
+	if err := st.EnsureMailbox(ctx, box.StorageID); err != nil {
 		return v, err
 	}
-	folders, err := st.ListFolders(ctx, s.mailbox.StorageID)
+	folders, err := st.ListFolders(ctx, box.StorageID)
 	if err != nil {
 		return v, err
 	}
@@ -81,16 +115,24 @@ func (h *Handler) getFilters(w http.ResponseWriter, r *http.Request, s *session)
 	if !ok {
 		return
 	}
-	mr, err := rb.MailRules(r.Context(), s.mailbox.StorageID)
+	box, ok := h.rulesTarget(w, r, s)
+	if !ok {
+		return
+	}
+	mr, err := rb.MailRules(r.Context(), box.StorageID)
+	if errors.Is(err, server.ErrUnknownMailbox) && delegated(s, box) {
+		writeError(w, http.StatusNotFound, "Not found.")
+		return
+	}
 	if err != nil {
 		h.fail(w, err)
 		return
 	}
-	h.writeFilters(w, r, s, mr)
+	h.writeFilters(w, r, s, box, mr)
 }
 
-func (h *Handler) writeFilters(w http.ResponseWriter, r *http.Request, s *session, mr config.MailRules) {
-	v, err := h.filtersView(r.Context(), s, mr)
+func (h *Handler) writeFilters(w http.ResponseWriter, r *http.Request, s *session, box *config.Mailbox, mr config.MailRules) {
+	v, err := h.filtersView(r.Context(), s, box, mr)
 	if err != nil {
 		h.fail(w, err)
 		return
@@ -98,13 +140,13 @@ func (h *Handler) writeFilters(w http.ResponseWriter, r *http.Request, s *sessio
 	writeJSON(w, http.StatusOK, v)
 }
 
-// update applies a change and answers.
-func (h *Handler) update(w http.ResponseWriter, r *http.Request, s *session, replace bool, fn func(*rules.Settings) error) {
+// update applies a change to the mailbox box and answers.
+func (h *Handler) update(w http.ResponseWriter, r *http.Request, s *session, box *config.Mailbox, replace bool, fn func(*rules.Settings) error) {
 	rb, ok := h.rulesBackend(w)
 	if !ok {
 		return
 	}
-	mr, err := rb.UpdateRules(r.Context(), s.mailbox.StorageID, replace, fn)
+	mr, err := rb.UpdateRules(r.Context(), box.StorageID, replace, fn)
 	var inv *server.RulesInvalid
 	switch {
 	case errors.Is(err, server.ErrNotManaged):
@@ -113,6 +155,9 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request, s *session, rep
 	case errors.As(err, &inv):
 		writeError(w, http.StatusBadRequest, sentence(inv.Error()))
 		return
+	case errors.Is(err, server.ErrUnknownMailbox) && delegated(s, box):
+		writeError(w, http.StatusNotFound, "Not found.")
+		return
 	case errors.Is(err, server.ErrUnknownMailbox):
 		writeError(w, http.StatusUnauthorized, errEnded)
 		return
@@ -120,7 +165,18 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request, s *session, rep
 		h.fail(w, err)
 		return
 	}
-	h.writeFilters(w, r, s, mr)
+	h.writeFilters(w, r, s, box, mr)
+}
+
+// setBy is who a change of the out-of-office reply or forwarding is
+// recorded as: nobody when the mailbox changes its own, else the mailbox
+// that manages it, with the time (shown on the pages like a change made
+// from the panel).
+func (h *Handler) setBy(s *session, box *config.Mailbox) (string, time.Time) {
+	if !delegated(s, box) {
+		return "", time.Time{}
+	}
+	return s.mailbox.Address, h.opts.Now().UTC().Truncate(time.Second)
 }
 
 func (h *Handler) setOutOfOffice(w http.ResponseWriter, r *http.Request, s *session) {
@@ -128,13 +184,14 @@ func (h *Handler) setOutOfOffice(w http.ResponseWriter, r *http.Request, s *sess
 		OutOfOffice config.OutOfOffice `json:"out_of_office"`
 		Replace     bool               `json:"replace"`
 	}
-	if !decodeRules(w, r, &in) {
+	box, ok := h.rulesTarget(w, r, s)
+	if !ok || !decodeRules(w, r, &in) {
 		return
 	}
 	o := in.OutOfOffice
 	// Set by the person: whoever set it before no longer counts.
-	o.SetBy, o.SetAt = "", config.OutOfOffice{}.SetAt
-	h.update(w, r, s, in.Replace, func(st *rules.Settings) error {
+	o.SetBy, o.SetAt = h.setBy(s, box)
+	h.update(w, r, s, box, in.Replace, func(st *rules.Settings) error {
 		st.OutOfOffice = o
 		return nil
 	})
@@ -145,12 +202,13 @@ func (h *Handler) setForwarding(w http.ResponseWriter, r *http.Request, s *sessi
 		Forwarding config.Forwarding `json:"forwarding"`
 		Replace    bool              `json:"replace"`
 	}
-	if !decodeRules(w, r, &in) {
+	box, ok := h.rulesTarget(w, r, s)
+	if !ok || !decodeRules(w, r, &in) {
 		return
 	}
 	f := in.Forwarding
-	f.SetBy, f.SetAt = "", config.Forwarding{}.SetAt
-	h.update(w, r, s, in.Replace, func(st *rules.Settings) error {
+	f.SetBy, f.SetAt = h.setBy(s, box)
+	h.update(w, r, s, box, in.Replace, func(st *rules.Settings) error {
 		st.Forwarding = f
 		return nil
 	})
@@ -161,13 +219,14 @@ func (h *Handler) setFilters(w http.ResponseWriter, r *http.Request, s *session)
 		Filters []config.FilterRule `json:"filters"`
 		Replace bool                `json:"replace"`
 	}
-	if !decodeRules(w, r, &in) {
+	box, ok := h.rulesTarget(w, r, s)
+	if !ok || !decodeRules(w, r, &in) {
 		return
 	}
 	if in.Filters == nil {
 		in.Filters = []config.FilterRule{}
 	}
-	h.update(w, r, s, in.Replace, func(st *rules.Settings) error {
+	h.update(w, r, s, box, in.Replace, func(st *rules.Settings) error {
 		st.Filters = in.Filters
 		return nil
 	})

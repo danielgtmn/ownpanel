@@ -1,6 +1,8 @@
 import { confirm } from '@ui-sdk/react/alert-dialog'
 import { Button } from '@ui-sdk/react/button'
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from '@ui-sdk/react/collapsible'
+import { Field, FieldLabel } from '@ui-sdk/react/field'
+import { Radio, RadioGroup, RadioIndicator } from '@ui-sdk/react/radio'
 import { toast } from '@ui-sdk/react/toast'
 import { useState, type FormEvent } from 'react'
 import { formatDateTime } from '../shared/format/index.ts'
@@ -33,6 +35,7 @@ import {
   setOutOfOffice,
   type FilterRule,
   type Filters,
+  type MailboxAccess,
 } from './api.ts'
 import { FilterRuleDialog } from './FilterRuleDialog.tsx'
 import {
@@ -57,6 +60,11 @@ function FormError({ message }: { message?: string | null }) {
 }
 
 // Resolves with the server's answer, or null when the failure was already shown; throws what the form shows.
+// "Your" for the person's own mailbox, else the address of the mailbox they manage ("team@example.com's").
+function whose(data: Filters, own: 'Your' | 'your'): string {
+  return data.mailbox ? `${data.mailbox}'s` : own
+}
+
 export type Save = (run: () => Promise<Filters>) => Promise<Filters | null>
 
 // ---- out-of-office ----
@@ -80,7 +88,7 @@ export function OutOfOfficeSection({ data, locked, save }: { data: Filters; lock
     setForm(null)
     let next: Filters | null = null
     try {
-      next = await save(() => setOutOfOffice(outOfOfficeBody(draft), !data.rules.managed))
+      next = await save(() => setOutOfOffice(outOfOfficeBody(draft), !data.rules.managed, data.mailbox))
     } catch (failure) {
       setForm(accountErrorMessage(failure))
     }
@@ -90,8 +98,8 @@ export function OutOfOfficeSection({ data, locked, save }: { data: Filters; lock
     setDraft(outOfOfficeDraft(now))
     toast.success(
       now.enabled
-        ? `Your out-of-office reply is on. ${outOfOfficeWhen(draft, formatDay)}.`
-        : 'Your out-of-office reply is off.',
+        ? `${whose(data, 'Your')} out-of-office reply is on. ${outOfOfficeWhen(draft, formatDay)}.`
+        : `${whose(data, 'Your')} out-of-office reply is off.`,
     )
   }
 
@@ -101,7 +109,11 @@ export function OutOfOfficeSection({ data, locked, save }: { data: Filters; lock
       description="Answers mail automatically while you're away, for example on holiday."
     >
       <form className="form" onSubmit={submit} noValidate>
-        {setBy ? <p className="mailrules-set-by">{setBy}. Saving here makes it yours.</p> : null}
+        {setBy ? (
+          <p className="mailrules-set-by">
+            {setBy}.{data.mailbox ? null : ' Saving here makes it yours.'}
+          </p>
+        ) : null}
         <fieldset className="mailrules-fieldset" disabled={locked || busy}>
           <OutOfOfficeFields
             draft={draft}
@@ -148,7 +160,7 @@ export function ForwardingSection({ data, locked, save }: { data: Filters; locke
     setForm(null)
     let next: Filters | null = null
     try {
-      next = await save(() => setForwarding(forwardingBody(draft), !data.rules.managed))
+      next = await save(() => setForwarding(forwardingBody(draft), !data.rules.managed, data.mailbox))
     } catch (failure) {
       setForm(accountErrorMessage(failure))
     }
@@ -156,7 +168,8 @@ export function ForwardingSection({ data, locked, save }: { data: Filters; locke
     if (!next) return
     const now = next.rules.forwarding
     setDraft(forwardingDraft(now))
-    toast.success(now.enabled ? `Your mail is now forwarded to ${now.to}.` : 'Your mail is no longer forwarded.')
+    const mail = `${whose(data, 'Your')} mail`
+    toast.success(now.enabled ? `${mail} is now forwarded to ${now.to}.` : `${mail} is no longer forwarded.`)
   }
 
   return (
@@ -167,7 +180,11 @@ export function ForwardingSection({ data, locked, save }: { data: Filters; locke
             Forwarding is turned off for this mailbox by the people who manage it.
           </p>
         ) : null}
-        {setBy ? <p className="mailrules-set-by">{setBy}. Saving here makes it yours.</p> : null}
+        {setBy ? (
+          <p className="mailrules-set-by">
+            {setBy}.{data.mailbox ? null : ' Saving here makes it yours.'}
+          </p>
+        ) : null}
         <fieldset className="mailrules-fieldset" disabled={locked || off || busy}>
           <ForwardingFields
             draft={draft}
@@ -229,7 +246,7 @@ export function FiltersSection({ data, locked, save }: { data: Filters; locked: 
     setForm(null)
     let next: Filters | null = null
     try {
-      next = await save(() => setFilterRules(rulesBody(list), !data.rules.managed))
+      next = await save(() => setFilterRules(rulesBody(list), !data.rules.managed, data.mailbox))
     } catch (failure) {
       setForm(accountErrorMessage(failure))
     }
@@ -238,7 +255,8 @@ export function FiltersSection({ data, locked, save }: { data: Filters; locked: 
     const now = next.rules.filters ?? []
     setList(keyRules(now))
     setBase(now)
-    toast.success(now.length === 0 ? 'Your filters were saved. No rules sort your mail now.' : 'Your filters were saved.')
+    const saved = `${whose(data, 'Your')} filters were saved.`
+    toast.success(now.length === 0 ? `${saved} No rules sort ${whose(data, 'your')} mail now.` : saved)
   }
 
   return (
@@ -331,8 +349,57 @@ export function FiltersSection({ data, locked, save }: { data: Filters; locked: 
 
 // ---- the three together ----
 
-export function AccountFilters() {
-  const resource = useResource(loadFilters, 'filters')
+// The person's own settings and, with a choice above them, those of the mailboxes they manage (above all
+// shared ones, which nobody signs in to). managed comes from managedMailboxes.
+export function AccountFilters({ managed = [] }: { managed?: MailboxAccess[] }) {
+  const [chosen, setChosen] = useState('')
+  // A mailbox that is no longer managed falls back to the person's own.
+  const mailbox = managed.some((entry) => entry.address === chosen) ? chosen : ''
+  return (
+    <>
+      {managed.length > 0 ? (
+        <Section
+          title="Out-of-office and filters of other mailboxes"
+          description="You may also change the out-of-office reply, forwarding and filters of these mailboxes."
+        >
+          <RadioGroup
+            aria-label="Whose settings to show"
+            value={mailbox}
+            onValueChange={(value) => setChosen(typeof value === 'string' ? value : '')}
+          >
+            <Field>
+              <Radio value="">
+                <RadioIndicator />
+              </Radio>
+              <FieldLabel>Your mailbox</FieldLabel>
+            </Field>
+            {managed.map((entry) => (
+              <Field key={entry.address}>
+                <Radio value={entry.address}>
+                  <RadioIndicator />
+                </Radio>
+                <FieldLabel>
+                  {entry.address}
+                  {entry.shared ? <span className="muted"> · Shared mailbox</span> : null}
+                </FieldLabel>
+              </Field>
+            ))}
+          </RadioGroup>
+          {mailbox ? (
+            <p className="notice account-notice">
+              The settings below are those of {mailbox}. Changes apply to all mail it receives, and you are shown as
+              the person who set the out-of-office reply and forwarding.
+            </p>
+          ) : null}
+        </Section>
+      ) : null}
+      <MailboxFilters key={mailbox} mailbox={mailbox || undefined} />
+    </>
+  )
+}
+
+function MailboxFilters({ mailbox }: { mailbox?: string }) {
+  const resource = useResource(() => loadFilters(mailbox), `filters:${mailbox ?? ''}`)
   const [latest, setLatest] = useState<Filters | null>(null)
   const [replace, setReplace] = useState(false)
   const data = latest ?? (resource.status === 'ready' ? resource.data : null)
@@ -372,7 +439,7 @@ export function AccountFilters() {
       if (error instanceof AccountError && error.status === 409) {
         toast.error(error.message)
         try {
-          setLatest(await loadFilters())
+          setLatest(await loadFilters(mailbox))
         } catch {
           // The message above already says what happened.
         }

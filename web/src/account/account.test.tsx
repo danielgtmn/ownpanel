@@ -3,7 +3,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { ChangePasswordForm, ShareForm } from './AccountDialogs.tsx'
 import { AccountPage } from './AccountPage.tsx'
-import { FiltersSection, ForwardingSection, OutOfOfficeSection } from './AccountFilters.tsx'
+import { AccountFilters, FiltersSection, ForwardingSection, OutOfOfficeSection } from './AccountFilters.tsx'
+import { managedMailboxes } from './filters.ts'
 import type { Filters, Me } from './api.ts'
 import { SignInForm } from './SignInForm.tsx'
 
@@ -136,6 +137,35 @@ describe('account area', () => {
     expect(change).toContain('ben@example.com')
     // Read is ticked and locked because Write is on.
     expect(change.match(/data-disabled/g)?.length ?? 0).toBeGreaterThan(0)
+  })
+
+  it('offers the settings of mailboxes the person manages, and only those', () => {
+    const access = [
+      ...sharing.access,
+      {
+        address: 'team@example.com',
+        display_name: '',
+        shared: true,
+        rights: ['read', 'manage'],
+        folder: 'Shared/team@example.com',
+      },
+    ]
+    expect(managedMailboxes(access).map((entry) => entry.address)).toEqual(['team@example.com'])
+    expect(renderToStaticMarkup(<AccountFilters managed={[]} />)).not.toContain('of other mailboxes')
+    const html = renderToStaticMarkup(<AccountFilters managed={managedMailboxes(access)} />)
+    expect(html).toContain('Out-of-office and filters of other mailboxes')
+    expect(html).toContain('Your mailbox')
+    expect(html).toContain('team@example.com')
+    expect(html).not.toContain('info@example.com')
+    expect(html).not.toMatch(/sieve|grant|delegat/i)
+  })
+
+  it('does not offer to make a setting yours in a mailbox you manage', () => {
+    const html = renderToStaticMarkup(
+      <OutOfOfficeSection data={{ ...filters, mailbox: 'team@example.com' }} locked={false} save={async () => null} />,
+    )
+    expect(html).toContain('Set by admin')
+    expect(html).not.toContain('makes it yours')
   })
 
   it('shows who set the out-of-office reply and locks the editors for filters from a mail program', () => {

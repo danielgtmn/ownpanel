@@ -19,6 +19,7 @@ import {
   type PasswordChange,
 } from './AccountDialogs.tsx'
 import { CalendarsSection } from './CalendarsSection.tsx'
+import { managedMailboxes } from './filters.ts'
 import {
   accountErrorMessage,
   APPLE_SETUP_URL,
@@ -220,7 +221,7 @@ export function AccountPage({
           ) : null}
         </Section>
 
-        <AccountFilters />
+        <AccountFilters managed={managedMailboxes(me.access)} />
 
         <Section
           title="Your name"

@@ -305,7 +305,7 @@ what it may do:
 |---|---|
 | Read | see the folders and messages; mark them read or unread for themselves |
 | Write | also flag, move and delete messages, create, rename and delete folders (includes Read) |
-| Manage | the shared mailbox's filters and out-of-office (takes effect once filters exist) |
+| Manage | the shared mailbox's out-of-office reply, forwarding and filters (see [For a shared mailbox](#for-a-shared-mailbox)) |
 | Send as | send with the shared address as sender |
 | Send on behalf | send for the shared address, showing who sent it |
 
@@ -451,6 +451,34 @@ you can also turn off **Filters of this mailbox may forward mail**
 
 When the person's filters were written in a mail program, the page and the
 panel show them read-only and offer to replace them.
+
+### For a shared mailbox
+
+Nobody signs in to a shared mailbox, so the people with the **Manage**
+right on it set its out-of-office reply, forwarding and filters (see
+[Give people access](#give-people-access)); the domain's owner can too, in
+the panel, as for any mailbox.
+
+- On their own mailbox's page, under **Out-of-office and filters of other
+  mailboxes**, they choose the shared mailbox; the out-of-office reply,
+  forwarding and filters below are then its own. The same works for a
+  personal mailbox someone shared with them with **Manage** (for example
+  an assistant who sets the boss's out-of-office reply).
+- The page shows who set the reply and forwarding last. Whether someone
+  may still do it is checked on every change: once the right is taken
+  away, the mailbox disappears from the choice.
+- The filters run when mail for the shared mailbox arrives. The
+  out-of-office reply comes from the shared address (or one of its own
+  forwarding addresses), never from the address of the person who set it.
+- **Read state:** a filter's "mark as read" has no effect in a shared
+  mailbox: everyone there has their own read state, so new mail stays
+  unread for everyone. Moving, deleting, forwarding and other flags work
+  as usual.
+- **In a mail program** that edits filters (below), sign in with your own
+  address and password and enter the shared address as the user to act
+  for (the setting is usually called *authorization*; the Sieve add-on for
+  Thunderbird has it in its server settings). The program then shows the
+  shared mailbox's filters.
 
 ### Filters with a mail program (ManageSieve)
 

@@ -263,7 +263,13 @@ export type MailRules = {
   script?: string
 }
 
-export type Filters = { rules: MailRules; folders: string[] | null; may_forward: boolean }
+export type Filters = {
+  rules: MailRules
+  folders: string[] | null
+  may_forward: boolean
+  // The address of the mailbox these are for when it is not the person's own (one they may manage).
+  mailbox?: string
+}
 
 export type OutOfOfficeInput = Pick<OutOfOffice, 'enabled' | 'subject' | 'text' | 'days'> & {
   start: string
@@ -294,13 +300,22 @@ async function saveFilters(path: string, body: unknown): Promise<Filters> {
   }
 }
 
-export const loadFilters = async () => filterLists(await request<Filters>('/filters'))
+// Without mailbox: the person's own; with it, a mailbox they may manage (the server checks).
+function forMailbox(path: string, mailbox?: string): string {
+  return mailbox ? `${path}?mailbox=${encodeURIComponent(mailbox)}` : path
+}
 
-export const setOutOfOffice = (outOfOffice: OutOfOfficeInput, replace: boolean) =>
-  saveFilters('/out-of-office', replace ? { out_of_office: outOfOffice, replace } : { out_of_office: outOfOffice })
+export const loadFilters = async (mailbox?: string) =>
+  filterLists(await request<Filters>(forMailbox('/filters', mailbox)))
 
-export const setForwarding = (forwarding: ForwardingInput, replace: boolean) =>
-  saveFilters('/forwarding', replace ? { forwarding, replace } : { forwarding })
+export const setOutOfOffice = (outOfOffice: OutOfOfficeInput, replace: boolean, mailbox?: string) =>
+  saveFilters(
+    forMailbox('/out-of-office', mailbox),
+    replace ? { out_of_office: outOfOffice, replace } : { out_of_office: outOfOffice },
+  )
 
-export const setFilterRules = (filters: FilterRule[], replace: boolean) =>
-  saveFilters('/filters', replace ? { filters, replace } : { filters })
+export const setForwarding = (forwarding: ForwardingInput, replace: boolean, mailbox?: string) =>
+  saveFilters(forMailbox('/forwarding', mailbox), replace ? { forwarding, replace } : { forwarding })
+
+export const setFilterRules = (filters: FilterRule[], replace: boolean, mailbox?: string) =>
+  saveFilters(forMailbox('/filters', mailbox), replace ? { filters, replace } : { filters })

@@ -90,6 +90,29 @@ describe('account API', () => {
     ])
   })
 
+  it('names the managed mailbox in every filter request', async () => {
+    const answer = {
+      rules: { managed: true, out_of_office: { enabled: false }, forwarding: { enabled: false }, filters: null, active_script: '' },
+      folders: null,
+      may_forward: true,
+      mailbox: 'team@example.com',
+    }
+    const fetch = respond(200, answer)
+    vi.stubGlobal('fetch', fetch)
+    const loaded = await loadFilters('team@example.com')
+    expect(loaded.mailbox).toBe('team@example.com')
+    await setForwarding({ enabled: false, to: '', keep_copy: false }, false, 'team@example.com')
+    await setFilterRules([], false, 'team@example.com')
+    const reply = { enabled: false, subject: '', text: '', start: '', end: '', zone: '', days: 7 }
+    await setOutOfOffice(reply, false, 'team@example.com')
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      '/account/api/filters?mailbox=team%40example.com',
+      '/account/api/forwarding?mailbox=team%40example.com',
+      '/account/api/filters?mailbox=team%40example.com',
+      '/account/api/out-of-office?mailbox=team%40example.com',
+    ])
+  })
+
   it('explains a refusal because of filters from a mail program', async () => {
     vi.stubGlobal('fetch', respond(409, { error: 'script is not managed' }))
     await expect(setFilterRules([], false)).rejects.toThrow('Your filters were written in a mail program.')
