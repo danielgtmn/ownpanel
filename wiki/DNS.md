@@ -24,7 +24,7 @@ They must be public addresses unless `-tls` is `internal` or `off` (the document
 
 1. In the Hetzner Console, open the **project** that holds your zones.
 2. Go to **Security**, then **API tokens**, and create a token with **Read & Write** access.
-3. In ownpanel, open **DNS** and add a connection: a name (1 to 64 characters, unique among your connections) and the token.
+3. In ownpanel, open **DNS** and choose **Connect Hetzner**: a name (1 to 64 characters, unique among your connections) and the token.
 
 A token covers exactly one project. For zones in several projects, add one connection per project.
 
@@ -105,7 +105,7 @@ For each domain, the status is one of:
 
 **The status asks the zone's authoritative nameservers directly**, not a normal (recursive) resolver. A recursive resolver can remember "no such domain" for up to an hour (the zone's negative cache time), so a record you just created would keep showing "no record". Asking the zone's own nameservers avoids that. If no authoritative nameserver can be reached, the system resolver is used instead. Results are cached for 30 seconds; a lookup times out after 8 seconds. CNAME chains are followed.
 
-If the zone of a domain is found among your connections, the status also tells which connection and zone "point to this server" would use.
+If the zone of a domain is found among your connections, the status also tells which connection and zone "point to this server" would use. Otherwise the web interface offers **How to point it here**: the records to create where the domain's DNS is managed.
 
 ## Point to this server
 
