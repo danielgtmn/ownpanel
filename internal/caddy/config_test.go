@@ -70,7 +70,7 @@ func TestBuildUnixAdminAndPanelDomain(t *testing.T) {
 	if !strings.Contains(got, `"admin":{"listen":"unix//run/ownpanel/caddy-admin.sock|0660"}`) {
 		t.Errorf("admin socket missing: %s", got)
 	}
-	want := `{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8600"}]}],"match":[{"host":["panel.example.com"]}],"terminal":true}`
+	want := `{"handle":[{"handler":"reverse_proxy","transport":{"dial_timeout":"5s","protocol":"http","response_header_timeout":"10m"},"upstreams":[{"dial":"127.0.0.1:8600"}]}],"match":[{"host":["panel.example.com"]}],"terminal":true}`
 	if !strings.Contains(got, `"routes":[`+want) {
 		t.Errorf("panel route must come first: %s", got)
 	}
@@ -80,6 +80,40 @@ func TestBuildUnixAdminAndPanelDomain(t *testing.T) {
 	opts.PanelUpstream = ""
 	if _, err := Build(opts, nil); err == nil {
 		t.Error("panel domain without upstream must fail")
+	}
+}
+
+func TestBuildTimeouts(t *testing.T) {
+	opts := Options{
+		AdminListen: "127.0.0.1:2019", StorageDir: "/data/caddy", TLSMode: TLSACME, HTTPPort: 80, HTTPSPort: 443,
+		PanelDomain: "panel.example.com", PanelUpstream: "127.0.0.1:8600", PanelIPs: []string{"203.0.113.5"},
+	}
+	cfg, err := Build(opts, []Site{{Name: "b", Domains: []string{"b.example.com"}, Root: "/sites/b/current", Live: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers := cfg["apps"].(obj)["http"].(obj)["servers"].(obj)
+	if len(servers) != 2 {
+		t.Fatalf("want sites and ip_http servers, got %v", servers)
+	}
+	for name, s := range servers {
+		srv := s.(obj)
+		for key, want := range map[string]string{
+			"read_header_timeout": "10s", "read_idle_timeout": "1m", "read_timeout": "1h",
+			"write_idle_timeout": "1m", "idle_timeout": "2m",
+		} {
+			if srv[key] != want {
+				t.Errorf("server %s: %s = %v, want %s", name, key, srv[key], want)
+			}
+		}
+		// An overall write limit would cut off slow downloads of large files.
+		if _, ok := srv["write_timeout"]; ok {
+			t.Errorf("server %s must not limit the whole response", name)
+		}
+	}
+	b, _ := json.Marshal(cfg)
+	if n := strings.Count(string(b), `"response_header_timeout":"10m"`); n != 2 {
+		t.Errorf("both panel routes need proxy timeouts, found %d", n)
 	}
 }
 

@@ -31,14 +31,14 @@ func buildJSON(t *testing.T, opts Options) (string, map[string]any) {
 
 func TestBuildIPAccess(t *testing.T) {
 	got, _ := buildJSON(t, ipOpts(TLSACME))
-	ipRoute := `{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8600"}]}],"match":[{"host":["127.0.0.1","203.0.113.5","2001:db8::5"]}],"terminal":true}`
+	ipRoute := `{"handle":[{"handler":"reverse_proxy","transport":{"dial_timeout":"5s","protocol":"http","response_header_timeout":"10m"},"upstreams":[{"dial":"127.0.0.1:8600"}]}],"match":[{"host":["127.0.0.1","203.0.113.5","2001:db8::5"]}],"terminal":true}`
 	for _, want := range []string{
 		`"routes":[` + ipRoute,
 		`"tls_connection_policies":[{"default_sni":"203.0.113.5"}]`,
 		`{"issuers":[{"module":"internal"}],"subjects":["127.0.0.1","203.0.113.5","2001:db8::5"]}`,
 		`"install_trust":false`,
 		// HTTP on the addresses goes to HTTPS on the same address.
-		`"ip_http":{"listen":[":80"]`,
+		`"ip_http":{"idle_timeout":"2m","listen":[":80"]`,
 		`"Location":["https://[2001:db8::5]{http.request.uri}"]`,
 		`"Location":["https://203.0.113.5{http.request.uri}"]`,
 	} {
@@ -61,7 +61,7 @@ func TestBuildIPAccess(t *testing.T) {
 	o = ipOpts(TLSInternal)
 	o.HTTPPort, o.HTTPSPort = 8080, 8443
 	got, _ = buildJSON(t, o)
-	if !strings.Contains(got, `"https://[2001:db8::5]:8443{http.request.uri}"`) || !strings.Contains(got, `"ip_http":{"listen":[":8080"]`) {
+	if !strings.Contains(got, `"https://[2001:db8::5]:8443{http.request.uri}"`) || !strings.Contains(got, `"ip_http":{"idle_timeout":"2m","listen":[":8080"]`) {
 		t.Errorf("ports: %s", got)
 	}
 	if !strings.Contains(got, `"policies":[{"issuers":[{"module":"internal"}],"subjects":["127.0.0.1","203.0.113.5","2001:db8::5"]},{"issuers":[{"module":"internal"}]}]`) {
