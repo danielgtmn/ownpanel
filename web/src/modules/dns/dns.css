@@ -1,22 +1,3 @@
-.connection-health {
-  margin: 0;
-  font-size: 0.875rem;
-}
-
-.connection-health[data-tone='problem'] {
-  color: var(--ui-destructive);
-}
-
-.connection-health[data-tone='ok'],
-.connection-health[data-tone='unknown'] {
-  color: var(--ui-muted-foreground);
-}
-
-.connection-note {
-  margin: 0;
-  font-size: 0.875rem;
-}
-
 .notice-problem {
   margin: 0 0 0.75rem;
   border: 1px solid color-mix(in oklab, var(--ui-destructive) 40%, var(--ui-background));
@@ -98,4 +79,9 @@
 .domain-uses {
   margin: 0.25rem 0;
   padding-left: 1.25rem;
+}
+
+.dns-accounts-note {
+  margin: 1rem 0 0;
+  font-size: 0.875rem;
 }

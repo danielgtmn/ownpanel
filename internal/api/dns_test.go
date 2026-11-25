@@ -236,11 +236,36 @@ func TestDNSRoutesJSONShapes(t *testing.T) {
 	wantStatus(t, rec, 200, "")
 	wantKeys(t, rec.Body.Bytes(), "id", "provider", "name", "owner", "created_at", "last_checked_at", "last_error", "can_write", "zone_count")
 
+	// Connecting adopts nothing: the zone is only available until chosen.
 	rec = d.root("GET", "/api/dns/zones", "")
-	if rec.Code != 200 || rec.Body.String() != `{"zones":[{"connection_id":`+id+`,"connection_name":"main","name":"example.com","read_only":false,`+
-		`"nameservers":["hydrogen.ns.hetzner.com","oxygen.ns.hetzner.com","helium.ns.hetzner.de"]}],"problems":[]}`+"\n" {
+	if rec.Code != 200 || rec.Body.String() != `{"zones":[],"problems":[]}`+"\n" {
+		t.Fatalf("zones before choosing: %d %s", rec.Code, rec.Body)
+	}
+	zoneJSON := func(adopted bool) string {
+		return `{"connection_id":` + id + `,"connection_name":"main","name":"example.com","read_only":false,` +
+			`"nameservers":["hydrogen.ns.hetzner.com","oxygen.ns.hetzner.com","helium.ns.hetzner.de"],"adopted":` + fmt.Sprint(adopted) + `,"used_by":[]}`
+	}
+	rec = d.root("GET", "/api/dns/zones/available", "")
+	if rec.Code != 200 || rec.Body.String() != `{"zones":[`+zoneJSON(false)+`],"problems":[]}`+"\n" {
+		t.Fatalf("available zones: %d %s", rec.Code, rec.Body)
+	}
+	managed := "/api/dns/connections/" + id + "/zones/example.com/managed"
+	rec = d.root("PUT", managed, "")
+	if rec.Code != 200 || rec.Body.String() != zoneJSON(true)+"\n" {
+		t.Fatalf("adopt: %d %s", rec.Code, rec.Body)
+	}
+	wantStatus(t, d.root("PUT", managed, ""), 200, "")
+	wantStatus(t, d.root("PUT", "/api/dns/connections/"+id+"/zones/nope.example/managed", ""), 404, "not part of")
+	rec = d.root("GET", "/api/dns/zones", "")
+	if rec.Code != 200 || rec.Body.String() != `{"zones":[`+zoneJSON(true)+`],"problems":[]}`+"\n" {
 		t.Fatalf("zones: %d %s", rec.Code, rec.Body)
 	}
+	if rec = d.root("GET", "/api/dns/zones/available", ""); rec.Body.String() != `{"zones":[],"problems":[]}`+"\n" {
+		t.Fatalf("available after adopting: %s", rec.Body)
+	}
+	wantStatus(t, d.root("DELETE", managed, ""), 204, "")
+	wantStatus(t, d.root("DELETE", managed, ""), 404, "not managed in the panel")
+	wantStatus(t, d.root("PUT", managed, ""), 200, "")
 
 	base := "/api/dns/connections/" + id + "/zones/example.com/records"
 	rec = d.root("PUT", base+"/www/A", `{"ttl":null,"values":["198.51.100.7"]}`)
@@ -324,6 +349,10 @@ func TestDNSRoutesStatusMapping(t *testing.T) {
 	if list := decode[[]struct{ Owner string }](t, rec); len(list) != 1 || list[0].Owner != "bob" {
 		t.Fatalf("members see their own: %s", rec.Body)
 	}
+	wantStatus(t, d.bob("PUT", "/api/dns/connections/"+bobID+"/zones/bob.example/managed", ""), 200, "")
+	wantStatus(t, d.bob("PUT", "/api/dns/connections/"+rootID+"/zones/example.com/managed", ""), 404, "")
+	wantStatus(t, d.bob("DELETE", "/api/dns/connections/"+rootID+"/zones/example.com/managed", ""), 404, "")
+	wantStatus(t, d.root("PUT", "/api/dns/connections/"+bobID+"/zones/bob.example/managed", ""), 403, "belongs to bob")
 	rec = d.bob("GET", "/api/dns/zones", "")
 	if z := decode[panel.DNSZones](t, rec); len(z.Zones) != 1 || z.Zones[0].Name != "bob.example" {
 		t.Fatalf("bob's zones: %s", rec.Body)
@@ -336,6 +365,9 @@ func TestDNSRoutesStatusMapping(t *testing.T) {
 		body: `{"provider":"hetzner","name":"x","token":"` + hzToken + `"}`}), 403, "")
 	wantStatus(t, d.call(req{method: "PUT", path: records(rootID, "example.com") + "/www/A", token: readTok,
 		body: `{"values":["198.51.100.7"]}`}), 403, "")
+	wantStatus(t, d.call(req{method: "GET", path: "/api/dns/zones/available", token: readTok}), 200, "")
+	wantStatus(t, d.call(req{method: "PUT", path: "/api/dns/connections/" + rootID + "/zones/example.com/managed", token: readTok}), 403, "")
+	wantStatus(t, d.call(req{method: "DELETE", path: "/api/dns/connections/" + rootID + "/zones/example.com/managed", token: readTok}), 403, "")
 	wantStatus(t, d.root("PUT", "/api/sites/blog", `{"domains":["blog.example.com"]}`), 200, "")
 	_, siteTok := d.createToken("write", `["blog"]`)
 	wantStatus(t, d.call(req{method: "GET", path: "/api/dns/zones", token: siteTok}), 403, "limited to certain sites")

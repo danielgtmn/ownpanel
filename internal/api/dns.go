@@ -9,6 +9,9 @@ func (s *Server) dnsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/dns/connections/{id}/check", s.checkDNSConnection)
 	mux.HandleFunc("DELETE /api/dns/connections/{id}", s.deleteDNSConnection)
 	mux.HandleFunc("GET /api/dns/zones", s.listDNSZones)
+	mux.HandleFunc("GET /api/dns/zones/available", s.listAvailableDNSZones)
+	mux.HandleFunc("PUT /api/dns/connections/{id}/zones/{zone}/managed", s.adoptDNSZone)
+	mux.HandleFunc("DELETE /api/dns/connections/{id}/zones/{zone}/managed", s.releaseDNSZone)
 	mux.HandleFunc("GET /api/dns/connections/{id}/zones/{zone}/records", s.listDNSRecords)
 	mux.HandleFunc("PUT /api/dns/connections/{id}/zones/{zone}/records/{name}/{type}", s.putDNSRecord)
 	mux.HandleFunc("DELETE /api/dns/connections/{id}/zones/{zone}/records/{name}/{type}", s.deleteDNSRecord)
@@ -83,6 +86,40 @@ func (s *Server) listDNSZones(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, zones)
+}
+
+func (s *Server) listAvailableDNSZones(w http.ResponseWriter, r *http.Request) {
+	zones, err := s.Panel.AvailableDNSZones(r.Context(), actorOf(r))
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, zones)
+}
+
+func (s *Server) adoptDNSZone(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r, "DNS connection")
+	if !ok {
+		return
+	}
+	z, err := s.Panel.AdoptDNSZone(r.Context(), actorOf(r), id, r.PathValue("zone"))
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, z)
+}
+
+func (s *Server) releaseDNSZone(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r, "DNS connection")
+	if !ok {
+		return
+	}
+	if err := s.Panel.ReleaseDNSZone(r.Context(), actorOf(r), id, r.PathValue("zone")); err != nil {
+		writeFailure(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) listDNSRecords(w http.ResponseWriter, r *http.Request) {

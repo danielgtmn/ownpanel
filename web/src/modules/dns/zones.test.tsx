@@ -2,52 +2,34 @@ import { Dialog } from '@ui-sdk/react/dialog'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createZone, deleteZone, recordPath, recordsPath, deleteRecord, listRecords, listZones, saveRecord } from './api.ts'
+import { AddDomainForm } from './AddDomainDialog.tsx'
 import { DeleteDomainForm } from './DeleteDomainDialog.tsx'
 import { Nameservers } from './Nameservers.tsx'
-import type { Connection, ZoneList } from './types.ts'
+import type { ZoneList } from './types.ts'
 import {
   canConfirmDelete,
-  connectionHealth,
   describeZones,
   findZone,
-  isOwnConnection,
   nameserverList,
   parseConnectionId,
   problemMessage,
   usesFromMessage,
-  validateConnection,
   validateZoneName,
-  zoneCountLabel,
 } from './zones.ts'
 
 const list: ZoneList = {
   zones: [
-    { connection_id: 2, connection_name: 'B', name: 'zeta.org', read_only: false, nameservers: [] },
-    { connection_id: 1, connection_name: 'A', name: 'alpha.com', read_only: true, nameservers: [] },
+    { connection_id: 2, connection_name: 'B', name: 'zeta.org', read_only: false, nameservers: [], adopted: true, used_by: [] },
+    { connection_id: 1, connection_name: 'A', name: 'alpha.com', read_only: true, nameservers: [], adopted: false, used_by: ['the site blog (alpha.com)'] },
   ],
   problems: [{ connection_id: 3, connection_name: 'Old', error: 'The API token was rejected.' }],
-}
-
-function connection(overrides: Partial<Connection> = {}): Connection {
-  return {
-    id: 1,
-    provider: 'hetzner',
-    name: 'Main',
-    owner: 'ana',
-    created_at: '2026-01-01T00:00:00Z',
-    last_checked_at: null,
-    last_error: '',
-    can_write: true,
-    zone_count: 2,
-    ...overrides,
-  }
 }
 
 describe('zone list', () => {
   it('sorts domains and turns problems into notices', () => {
     const view = describeZones(list)
     expect(view.rows.map((row) => row.name)).toEqual(['alpha.com', 'zeta.org'])
-    expect(view.rows[0]).toMatchObject({ connectionId: 1, readOnly: true })
+    expect(view.rows[0]).toMatchObject({ connectionId: 1, readOnly: true, usedBy: ['the site blog (alpha.com)'] })
     expect(view.notices).toEqual([
       { key: 3, text: "Couldn't load the domains from Old. The API token was rejected." },
     ])
@@ -69,39 +51,6 @@ describe('zone list', () => {
     expect(parseConnectionId('0')).toBeNull()
     expect(parseConnectionId('x')).toBeNull()
     expect(parseConnectionId(undefined)).toBeNull()
-  })
-})
-
-describe('connections', () => {
-  it('marks other people connections for admins only', () => {
-    const theirs = connection({ owner: 'bo' })
-    expect(isOwnConnection(theirs, { name: 'ana', role: 'admin' })).toBe(false)
-    expect(isOwnConnection(connection(), { name: 'ana', role: 'admin' })).toBe(true)
-    expect(isOwnConnection(theirs, { name: 'ana', role: 'member' })).toBe(true)
-  })
-
-  it('summarizes health', () => {
-    const format = (value: string) => `on ${value}`
-    expect(connectionHealth(connection({ last_error: 'Token rejected' }), format)).toEqual({
-      tone: 'problem',
-      text: 'Problem: Token rejected',
-    })
-    expect(connectionHealth(connection({ last_checked_at: '2026-02-02' }), format).tone).toBe('ok')
-    expect(connectionHealth(connection(), format)).toEqual({ tone: 'unknown', text: 'Not checked yet' })
-  })
-
-  it('labels the number of domains', () => {
-    expect(zoneCountLabel(null)).toBeNull()
-    expect(zoneCountLabel(1)).toBe('1 domain')
-    expect(zoneCountLabel(3)).toBe('3 domains')
-  })
-
-  it('validates the connect form', () => {
-    expect(validateConnection('', '')).toEqual({
-      name: 'Enter a name to recognize this connection.',
-      token: 'Paste the API token from Hetzner.',
-    })
-    expect(validateConnection('Main', 'abc')).toEqual({})
   })
 })
 
@@ -243,5 +192,64 @@ describe('adding and deleting domains', () => {
     )
     const error = await deleteZone(4, 'example.com', 'example.com').catch((caught: unknown) => caught)
     expect(usesFromMessage((error as Error).message)).toEqual(['The site blog (example.com)'])
+  })
+})
+
+describe('add domain form', () => {
+  const account = (id: number, name: string) => ({
+    id,
+    provider: 'hetzner' as const,
+    name,
+    owner: 'ana',
+    created_at: '2026-01-01T00:00:00Z',
+    last_checked_at: null,
+    last_error: '',
+    can_write: true,
+    zone_count: 1,
+  })
+  const zone = (connection_id: number, connection_name: string, name: string) => ({
+    connection_id,
+    connection_name,
+    name,
+    read_only: false,
+    nameservers: [],
+    adopted: false,
+    used_by: [],
+  })
+  const render = (props: Partial<Parameters<typeof AddDomainForm>[0]>) =>
+    renderToStaticMarkup(
+      <Dialog>
+        <AddDomainForm
+          accounts={[account(1, 'Home')]}
+          available={{ zones: [], problems: [] }}
+          onAdopt={async () => undefined}
+          onCreate={async () => undefined}
+          {...props}
+        />
+      </Dialog>,
+    )
+
+  it('starts with choosing when the accounts have domains that aren’t managed here', () => {
+    const html = render({ available: { zones: [zone(1, 'Home', 'example.com')], problems: [] } })
+    expect(html).toContain('Choose one from your accounts')
+    expect(html).toContain("Domains in Home that aren&#x27;t managed here yet")
+    expect(html).not.toContain('New domain')
+  })
+
+  it('offers only creating when every domain is managed here already', () => {
+    const html = render({})
+    expect(html).toContain('Every domain in your accounts is managed here already.')
+    expect(html).toContain('New domain')
+    expect(html).toContain('created in Home')
+  })
+
+  it('creates a prefilled domain that no account has, and lets you pick the account', () => {
+    const html = render({
+      accounts: [account(1, 'Home'), account(2, 'Work')],
+      available: { zones: [zone(1, 'Home', 'other.org')], problems: [] },
+      domain: 'fresh.com',
+    })
+    expect(html).toContain('value="fresh.com"')
+    expect(html).toContain('Account')
   })
 })
