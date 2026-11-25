@@ -607,3 +607,21 @@ func TestTokenExpiryOverAPI(t *testing.T) {
 		}
 	}
 }
+
+func TestAPIAnswersCarryARestrictivePolicy(t *testing.T) {
+	e := newEnv(t)
+	for _, r := range []req{
+		{method: "GET", path: "/api/session", cookie: e.cookie},
+		{method: "GET", path: "/api/sites"},
+		{method: "GET", path: "/api/no-such-thing"},
+		{method: "GET", path: "/api/sites", token: "op_wrong"},
+	} {
+		rec := e.do(r)
+		if got := rec.Header().Get("Content-Security-Policy"); got != "default-src 'none'; frame-ancestors 'none'" {
+			t.Errorf("%s %s (%d): Content-Security-Policy %q", r.method, r.path, rec.Code, got)
+		}
+		if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("%s %s: X-Content-Type-Options %q", r.method, r.path, got)
+		}
+	}
+}

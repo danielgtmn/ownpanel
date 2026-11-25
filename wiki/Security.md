@@ -18,6 +18,14 @@ This page describes what ownpanel does to protect your server, in plain words, a
 
 - Changing requests made with the cookie must carry the header `X-Ownpanel-Request: 1`, which other web sites cannot send without a CORS preflight, and the API never allows CORS. A mismatching `Origin` is refused as well.
 - The web interface is served with `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`. API answers are `no-store`.
+- The web interface has a strict **Content Security Policy**:
+
+  ```
+  default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+  ```
+
+  Scripts and style sheets only come from the panel itself; nothing inline is allowed, neither scripts nor styles, and there is no `'unsafe-inline'` or `'unsafe-eval'`. The page has no inline script. The UI library adds its CSS as constructed style sheets (an empty `csp-nonce` tag in `index.html` asks for that), which the policy does not block, so no nonce is needed. `data:` images are the small icons inside the panel's own style sheet. If someone managed to inject markup into the page, the browser would refuse to run scripts from it or send data to other sites.
+- API answers carry `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` and `nosniff`, so an answer opened directly in the browser can neither load nor run anything. Site icons get their own policy that allows only the icon's inline styles.
 - MCP does not accept cookies at all, and refuses cross-site browser requests.
 
 ### Access tokens
@@ -82,7 +90,6 @@ One-time links are valid for 15 minutes, for one site, and work once. They are r
 
 - **Sign-in throttling trusts `X-Forwarded-For` from local connections** (that is how it sees the visitor's address behind Caddy), so a local user can get around the per-address limits.
 - **The panel listens on plain HTTP** on a loopback port (`127.0.0.1:8600` by default). HTTPS exists only through Caddy with `-panel-domain`. Do not expose the port directly. Local users on the server can reach it.
-- **No Content Security Policy** for the web interface yet (a test asserts the header is not set).
 - **No per-site system users or quotas.** All site files belong to one user, and there is no limit on how many sites or how much disk space a person can use, beyond the per-upload limits.
 - **Upload links are kept in memory**, so a restart invalidates them (safe, but surprising).
 - **No second factor** for sign-in, and no list of a person's sessions to end them one by one; "sign out everywhere" ends all of them.

@@ -68,7 +68,21 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such API endpoint")
 	})
-	return s.authenticate(mux)
+	return apiHeaders(s.authenticate(mux))
+}
+
+// apiContentSecurityPolicy is sent with every API answer. They are data,
+// never a page, so nothing in them may load or run and no page may frame
+// them. A route with a better reason (the site icon) sets its own.
+const apiContentSecurityPolicy = "default-src 'none'; frame-ancestors 'none'"
+
+func apiHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", apiContentSecurityPolicy)
+		h.Set("X-Content-Type-Options", "nosniff")
+		next.ServeHTTP(w, r)
+	})
 }
 
 type actorKey struct{}

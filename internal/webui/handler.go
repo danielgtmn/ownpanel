@@ -15,6 +15,18 @@ import (
 
 const indexFile = "index.html"
 
+// ContentSecurityPolicy is sent with every answer of the web interface.
+// Scripts and style sheets only come from the panel itself; index.html has
+// no inline script. ui-sdk adds its CSS as constructed style sheets (the
+// empty csp-nonce meta tag in index.html asks for that), which style-src
+// does not restrict, and style properties set from script are not inline
+// style attributes, so no 'unsafe-inline' and no nonce are needed. data:
+// images are the small SVG icons inside the style sheet; site icons come
+// from /api.
+const ContentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; " +
+	"img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; " +
+	"base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+
 // Handler serves fsys as a single-page app: existing files as they are, every
 // other page address gets index.html so deep links survive a reload. Paths
 // below /api/ are never answered here. A nil fsys means no app is built in.
@@ -24,6 +36,7 @@ func Handler(fsys fs.FS) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Content-Security-Policy", ContentSecurityPolicy)
 
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			h.Set("Allow", "GET, HEAD")

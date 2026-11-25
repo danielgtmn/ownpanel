@@ -2,6 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- An empty csp-nonce tag makes ui-sdk add its CSS as constructed style
+         sheets, so the Content Security Policy (internal/webui) needs neither
+         a nonce nor 'unsafe-inline' for styles. -->
+    <meta property="csp-nonce" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ownpanel</title>
