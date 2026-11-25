@@ -43,7 +43,7 @@ func TestMergeSPF(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			m := mergeSPF(c.in)
+			m := mergeSPF(c.in, "mx")
 			if c.conflict != "" {
 				if !strings.Contains(m.conflict, c.conflict) || m.value != c.in {
 					t.Fatalf("want conflict %q, got %+v", c.conflict, m)
@@ -198,6 +198,29 @@ func (z *zoneLookups) LookupMX(_ context.Context, name string) ([]*net.MX, error
 	return out, err
 }
 
+// LookupNetIP follows a CNAME of the accounts to its target, then answers
+// A/AAAA records of the accounts, then the fake resolver's answers.
+func (z *zoneLookups) LookupNetIP(ctx context.Context, network, name string) ([]netip.Addr, error) {
+	for range 8 {
+		v, err := z.values(name, "CNAME")
+		if err != nil || len(v) == 0 {
+			break
+		}
+		name = strings.TrimSuffix(v[0], ".")
+	}
+	var out []netip.Addr
+	for _, typ := range []string{"A", "AAAA"} {
+		v, _ := z.values(name, typ)
+		for _, x := range v {
+			out = append(out, netip.MustParseAddr(x))
+		}
+	}
+	if len(out) > 0 {
+		return out, nil
+	}
+	return z.fakeResolver.LookupNetIP(ctx, network, name)
+}
+
 func (z *zoneLookups) LookupTXT(_ context.Context, name string) ([]string, error) {
 	return z.values(name, "TXT")
 }
@@ -227,9 +250,10 @@ func newRecordsWorld(t *testing.T) *recordsWorld {
 	t.Helper()
 	w := &recordsWorld{mailWorld: newMailWorld(t), bobDNS: newMemDNS("bobzone.org", "fresh.org"), rootDNS: newMemDNS("root.org")}
 	svc := w.svc
-	w.look = &zoneLookups{fakeResolver: &fakeResolver{answers: map[string][]netip.Addr{}, errs: map[string]error{}},
+	w.look = &zoneLookups{fakeResolver: &fakeResolver{answers: map[string][]netip.Addr{testMailHost: {serverV4}}, errs: map[string]error{}},
 		accounts: []*memDNS{w.bobDNS, w.rootDNS}, errs: map[string]error{}}
 	svc.resolver, svc.mx = w.look, w.look
+	svc.serverIPs = []netip.Addr{serverV4}
 	svc.newProvider = func(_, token string) (dns.Provider, error) {
 		switch token {
 		case bobToken:
@@ -286,7 +310,7 @@ func TestMailRecordStatuses(t *testing.T) {
 	if r.Domain != "bobzone.org" || r.MailHost != testMailHost || !r.CanApply || r.ConnectionID != w.bobConn || r.Zone != "bobzone.org" || r.ApplyNote != "" {
 		t.Fatalf("records %+v", r)
 	}
-	if len(r.Records) != 6 {
+	if len(r.Records) != 8 {
 		t.Fatalf("%d records", len(r.Records))
 	}
 	mx := recordOf(t, r, MailRecordMX)
@@ -363,7 +387,7 @@ func TestSetUpMailRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Applied || b.writes() != 0 || len(res.Changes) != 6 {
+	if res.Applied || b.writes() != 0 || len(res.Changes) != 8 {
 		t.Fatalf("plan %+v, %d writes", res, b.writes())
 	}
 	byKind := map[string]MailRecordChange{}
@@ -392,8 +416,8 @@ func TestSetUpMailRecords(t *testing.T) {
 	if err != nil || !res.Applied {
 		t.Fatalf("%+v %v", res, err)
 	}
-	if b.writes() != 4 {
-		t.Fatalf("%d writes, want mx, spf, dkim, submissions", b.writes())
+	if b.writes() != 6 {
+		t.Fatalf("%d writes, want mx, spf, dkim, submissions, autoconfig, autodiscover", b.writes())
 	}
 	if v := b.get("bobzone.org", "@", "MX"); !slices.Equal(v, []string{"10 mail.host.test."}) {
 		t.Fatalf("MX %v", v)
@@ -418,7 +442,7 @@ func TestSetUpMailRecords(t *testing.T) {
 	found := false
 	for _, a := range acts {
 		if a.Action == "mail.records.set" && a.Target == "bobzone.org" {
-			found = strings.Contains(a.Detail, "mx, spf, dkim, srv-submissions") && !strings.Contains(a.Detail, "DKIM1")
+			found = strings.Contains(a.Detail, "mx, spf, dkim, srv-submissions, autoconfig, autodiscover") && !strings.Contains(a.Detail, "DKIM1")
 		}
 	}
 	if !found {
@@ -433,7 +457,7 @@ func TestSetUpMailRecords(t *testing.T) {
 
 	// Again: nothing to do.
 	res, err = w.svc.SetUpMailRecords(ctx, bob, "bobzone.org", false)
-	if err != nil || !res.Applied || b.writes() != 4 {
+	if err != nil || !res.Applied || b.writes() != 6 {
 		t.Fatalf("%+v %v", res, err)
 	}
 	for _, c := range res.Changes {

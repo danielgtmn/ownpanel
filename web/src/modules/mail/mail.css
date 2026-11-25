@@ -118,8 +118,14 @@
   overflow-wrap: anywhere;
 }
 
-.mail-client-problem {
+.mail-client-problem,
+.mail-client-auto {
   margin-top: 0.75rem;
+}
+
+.mail-client-auto {
+  margin-bottom: 0;
+  max-width: 65ch;
 }
 
 .mail-changes {
@@ -157,6 +163,177 @@
     grid-template-columns: minmax(0, 1fr);
     gap: 0.125rem;
   }
+}
+
+.mail-download,
+.mail-download:visited {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* ---- import and export ---- */
+
+.import-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.import-dialog [data-slot='file-input'],
+.import-dialog + * [data-slot='file-input'] {
+  max-width: none;
+}
+
+.import-switch[data-slot='field'] {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.import-switch > [data-slot='switch'] {
+  flex: none;
+  margin-top: 0.125rem;
+}
+
+.import-folders {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.import-folders legend {
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+}
+
+.import-folders ul {
+  display: flex;
+  flex-direction: column;
+  max-height: min(20rem, 45vh);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  list-style: none;
+}
+
+.import-folders li {
+  padding: 0.5rem 0.75rem;
+}
+
+.import-folders li + li {
+  border-top: 1px solid var(--ui-border);
+}
+
+.import-folders label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.625rem;
+}
+
+.import-folder-name {
+  flex: 1 1 8rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.import-folder-size {
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.import-folder-note {
+  margin: 0.125rem 0 0 1.875rem;
+  font-size: 0.8125rem;
+}
+
+.import-total,
+.import-note {
+  margin: 0;
+}
+
+.import-hints {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: 0.875rem;
+}
+
+.import-jobs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.import-jobs h4 {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.import-jobs > ul {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  list-style: none;
+}
+
+.import-job {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  min-width: 0;
+}
+
+.import-job + .import-job {
+  border-top: 1px solid var(--ui-border);
+}
+
+.import-job-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem 0.75rem;
+}
+
+.import-job-source {
+  overflow-wrap: anywhere;
+}
+
+.import-job [data-slot='meter'] {
+  width: min(16rem, 100%);
+}
+
+.import-job-counts,
+.import-job-error {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.import-failures {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  max-height: 16rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  font-size: 0.875rem;
+}
+
+.import-failures li {
+  display: flex;
+  flex-direction: column;
+  overflow-wrap: anywhere;
 }
 
 .mail-unnamed {

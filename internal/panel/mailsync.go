@@ -184,6 +184,15 @@ func (s *Service) SyncMail(ctx context.Context, a Actor) error {
 	return s.mailSync(ctx)
 }
 
+// importEventActions names the activity of the service's import events
+// like the panel's own (mail.mailbox.import-started).
+var importEventActions = map[string]string{
+	config.EventImportFinished:    "mail.mailbox.import-finished",
+	config.EventImportFailed:      "mail.mailbox.import-failed",
+	config.EventImportPaused:      "mail.mailbox.import-paused",
+	config.EventImportInterrupted: "mail.mailbox.import-interrupted",
+}
+
 // recordMailEvents copies new events of the mail service into the
 // activity log and remembers how far it got.
 func (s *Service) recordMailEvents(ctx context.Context) error {
@@ -237,7 +246,11 @@ func (s *Service) recordMailEvents(ctx context.Context) error {
 		if !utf8.ValidString(detail) {
 			detail = ""
 		}
-		s.record(ctx, mailActor, "mail."+e.Kind, target, detail)
+		action := "mail." + e.Kind
+		if a, ok := importEventActions[e.Kind]; ok {
+			action = a
+		}
+		s.record(ctx, mailActor, action, target, detail)
 	}
 	if last == cursor {
 		return nil
@@ -260,6 +273,13 @@ func (s *Service) runMail(ctx context.Context, interval time.Duration) {
 	healthy := true
 	for {
 		s.activateMailDomains(ctx)
+		if s.checkMailSetupHosts(ctx) && ctx.Err() == nil {
+			// A name for setting up mail programs points here now (or no
+			// more): the web server serves it from now on (or stops).
+			if err := s.sync(ctx); err != nil {
+				slog.Warn("web server not in sync", "err", err)
+			}
+		}
 		err := s.mailSync(ctx)
 		switch {
 		case err != nil && ctx.Err() == nil:
@@ -334,7 +354,7 @@ func (s *Service) MailStatus(ctx context.Context, a Actor) (MailStatus, error) {
 	out := MailStatus{
 		MailHost:  host,
 		Listeners: []MailListener{},
-		Client:    MailClientSettings{Server: host, IMAPPort: 993, SMTPPort: 465, SMTPStartTLS: 587, UserNameIsEmail: true},
+		Client:    s.clientSettings(host),
 	}
 	if host == "" {
 		out.Problem = "The name of the mail server is not set yet; an admin sets it in the settings."

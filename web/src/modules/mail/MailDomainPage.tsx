@@ -25,12 +25,14 @@ import {
 import { AliasDialog } from './AliasDialog.tsx'
 import {
   activateMailDomain,
+  appleProfileHref,
   checkMailDomain,
   createAlias,
   createMailbox,
   deleteAlias,
   deleteMailbox,
   deleteMailDomain,
+  exportHref,
   getMailDomain,
   getMailStatus,
   listAliases,
@@ -40,10 +42,12 @@ import {
   unblockMailbox,
   updateAlias,
 } from './api.ts'
+import { ImportDialog } from './ImportDialog.tsx'
 import { CreateMailboxDialog, MailboxLimitsDialog, MailboxPasswordDialog } from './MailboxDialogs.tsx'
+import { MailboxImports } from './MailboxImports.tsx'
 import { RecordsSection } from './RecordsSection.tsx'
 import { aliasTitle, clientRows, domainState, sendLimitsText, sortAliases, usageShare, usageText } from './rules.ts'
-import type { LimitsChange, MailAlias, MailDomain, Mailbox, MailStatus } from './types.ts'
+import type { LimitsChange, MailAlias, MailDomain, MailImport, Mailbox, MailStatus } from './types.ts'
 
 // A change that is saved but not yet passed on to the mail server is not a failure for the person.
 async function saved(run: () => Promise<unknown>, success: string) {
@@ -125,15 +129,25 @@ function StatusSection({
 function MailboxRow({
   mailbox,
   isAdmin,
+  importsVersion,
   onPassword,
   onLimits,
+  onImport,
+  onChooseFolders,
+  onImportsSettled,
+  onDownload,
   onUnblock,
   onDelete,
 }: {
   mailbox: Mailbox
   isAdmin: boolean
+  importsVersion: number
   onPassword: (mailbox: Mailbox) => void
   onLimits: (mailbox: Mailbox) => void
+  onImport: (mailbox: Mailbox) => void
+  onChooseFolders: (mailbox: Mailbox, job: MailImport) => void
+  onImportsSettled: () => void
+  onDownload: (mailbox: Mailbox) => Promise<void>
   onUnblock: (mailbox: Mailbox) => Promise<void>
   onDelete: (mailbox: Mailbox) => Promise<void>
 }) {
@@ -179,6 +193,15 @@ function MailboxRow({
         <Button onClick={() => onLimits(mailbox)}>
           Limits<span className="visually-hidden"> of {mailbox.address}</span>
         </Button>
+        <Button onClick={() => onImport(mailbox)}>
+          Import mail<span className="visually-hidden"> into {mailbox.address}</span>
+        </Button>
+        <Button onClick={() => onDownload(mailbox)}>
+          Download all mail<span className="visually-hidden"> of {mailbox.address}</span>
+        </Button>
+        <Button className="mail-download" render={<a href={appleProfileHref(mailbox.id)} download />}>
+          Download setup for Apple devices<span className="visually-hidden"> for {mailbox.address}</span>
+        </Button>
         {isAdmin && blocked ? (
           <Button pendingAnnouncement="Allowing" onClick={() => onUnblock(mailbox)}>
             Allow sending<span className="visually-hidden"> from {mailbox.address}</span>
@@ -188,8 +211,24 @@ function MailboxRow({
           Delete<span className="visually-hidden"> {mailbox.address}</span>
         </Button>
       </div>
+      <MailboxImports
+        target={mailbox}
+        refreshKey={importsVersion}
+        onChoose={(job) => onChooseFolders(mailbox, job)}
+        onSettled={onImportsSettled}
+      />
     </li>
   )
+}
+
+// startDownload saves a file the server sends, like a click on a link.
+function startDownload(href: string) {
+  const link = document.createElement('a')
+  link.href = href
+  link.download = ''
+  document.body.append(link)
+  link.click()
+  link.remove()
 }
 
 function MailboxesSection({ domain, onChange }: { domain: string; onChange: () => void }) {
@@ -198,6 +237,25 @@ function MailboxesSection({ domain, onChange }: { domain: string; onChange: () =
   const [creating, setCreating] = useState(false)
   const [passwordFor, setPasswordFor] = useState<Mailbox | null>(null)
   const [limitsFor, setLimitsFor] = useState<Mailbox | null>(null)
+  const [importInto, setImportInto] = useState<{ mailbox: Mailbox; ready: MailImport | null } | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
+  const [importsVersion, setImportsVersion] = useState(0)
+
+  function openImport(mailbox: Mailbox, ready: MailImport | null) {
+    setImportInto({ mailbox, ready })
+    setImportOpen(true)
+  }
+
+  async function download(mailbox: Mailbox) {
+    const yes = await confirm({
+      title: `Download all mail of ${mailbox.address}?`,
+      description:
+        'You get one .zip file with every folder of the mailbox. It can be imported here again or opened with mail programs that read .mbox files. The download is noted in the activity log.',
+      confirmLabel: 'Download',
+      cancelLabel: 'Cancel',
+    })
+    if (yes) startDownload(exportHref(mailbox.domain, mailbox.local_part))
+  }
 
   async function refresh() {
     await mailboxes.reload()
@@ -265,8 +323,13 @@ function MailboxesSection({ domain, onChange }: { domain: string; onChange: () =
               key={mailbox.id}
               mailbox={mailbox}
               isAdmin={isAdmin}
+              importsVersion={importsVersion}
               onPassword={setPasswordFor}
               onLimits={setLimitsFor}
+              onImport={(box) => openImport(box, null)}
+              onChooseFolders={openImport}
+              onImportsSettled={() => void mailboxes.reload()}
+              onDownload={download}
               onUnblock={unblock}
               onDelete={remove}
             />
@@ -276,6 +339,17 @@ function MailboxesSection({ domain, onChange }: { domain: string; onChange: () =
       <CreateMailboxDialog open={creating} onOpenChange={setCreating} domain={domain} onSubmit={create} />
       <MailboxPasswordDialog mailbox={passwordFor} onClose={() => setPasswordFor(null)} onSubmit={setPassword} />
       <MailboxLimitsDialog mailbox={limitsFor} isAdmin={isAdmin} onClose={() => setLimitsFor(null)} onSubmit={setLimits} />
+      <ImportDialog
+        key={importInto ? `${importInto.mailbox.id}:${importInto.ready?.id ?? 'new'}` : 'none'}
+        target={importInto?.mailbox ?? null}
+        ready={importInto?.ready ?? null}
+        open={importOpen}
+        onOpenChange={(open) => {
+          setImportOpen(open)
+          if (!open) setImportsVersion((n) => n + 1)
+        }}
+        onStarted={() => setImportsVersion((n) => n + 1)}
+      />
     </Section>
   )
 }
@@ -391,6 +465,11 @@ function ClientSection({ data }: { data: MailStatus }) {
           </div>
         ))}
       </dl>
+      <p className="muted mail-client-auto">
+        Most mail programs fill these in by themselves from the address once the domain's recommended records are set
+        up. On an iPhone, iPad or Mac, open the mailbox's setup for Apple devices instead; it asks for the password when
+        you install it.
+      </p>
       {data.problem ? <p className="notice mail-client-problem">{data.problem}</p> : null}
     </Section>
   )

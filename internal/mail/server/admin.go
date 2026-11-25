@@ -21,6 +21,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("DELETE "+config.PathMailbox+"{id}", s.handleDelete)
 	mux.HandleFunc("POST "+config.PathOutbound, s.handleOutbound)
 	mux.HandleFunc("POST "+config.PathSend, s.handleSend)
+	s.transferRoutes(mux)
 	return mux
 }
 
@@ -116,6 +117,12 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	defer s.loadMu.Unlock()
 	if _, ok := s.Directory().MailboxByStorageID(id); ok {
 		http.Error(w, "the mailbox is still configured", http.StatusConflict)
+		return
+	}
+	// Import jobs stop first, so none can write into the mailbox while or
+	// after it is deleted.
+	if err := s.imports.StopMailbox(r.Context(), id); err != nil {
+		s.internalError(w, "delete", err)
 		return
 	}
 	if err := s.store.DeleteMailbox(r.Context(), id); err != nil {

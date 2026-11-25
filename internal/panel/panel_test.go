@@ -88,8 +88,11 @@ func newService(t *testing.T) (*Service, *fakeWeb, string) {
 func addUser(t *testing.T, svc *Service, name, role string) store.User {
 	t.Helper()
 	ctx := context.Background()
-	au, err := svc.pw.CreateUser(ctx, sesam.NewUser{Username: name}, name+"-password")
+	au, err := svc.auth.CreateUser(ctx, sesam.NewUser{Username: name})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.pw.SetPasswordHash(ctx, au.ID, userHash(t, name+"-password")); err != nil {
 		t.Fatal(err)
 	}
 	u, err := svc.store.CreateUser(ctx, name, au.ID, role, false)
@@ -97,6 +100,25 @@ func addUser(t *testing.T, svc *Service, name, role string) store.User {
 		t.Fatal(err)
 	}
 	return u
+}
+
+// userHashes keeps one hash per password for the whole test run: hashing
+// is slow on purpose, and the permission matrices build hundreds of
+// services. The hash has the format the panel used before sesam, which
+// sesam accepts.
+var userHashes sync.Map
+
+func userHash(t *testing.T, pw string) string {
+	t.Helper()
+	if h, ok := userHashes.Load(pw); ok {
+		return h.(string)
+	}
+	h, err := mailboxHashSlots.Hash(pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userHashes.Store(pw, h)
+	return h
 }
 
 // newEmptyService has no users yet, like a fresh install.

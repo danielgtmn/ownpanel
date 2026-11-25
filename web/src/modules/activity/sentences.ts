@@ -69,6 +69,26 @@ function describeAccountChange(part: string): string {
   return ACCOUNT_CHANGES[part] ?? part.replace(/^role (\w+)$/, (_, role: string) => `Role: ${describeRole(role)}`)
 }
 
+// "import 3 from me@x.org at imap.x.org (continued)" from the panel, or
+// "import 3 from old.mbox: 5 copied, 1 already there, 0 failed: reason"
+// from the mail service.
+function describeImport(detail: string): string {
+  const match = /^import \d+ from (?:file (.+?)|(.+?)(?: at (\S+))?)( \(continued\))?(?:: (\d+) copied, (\d+) already there, (\d+) failed(?:: (.+))?)?$/.exec(
+    detail,
+  )
+  if (!match) return detail
+  const [, file, user, host, continued, copied, there, failed, reason] = match
+  const parts = [file ? `From the file ${file}` : host ? `From ${user} on ${host}` : `From ${user}`]
+  if (continued) parts.push('Continued')
+  if (copied !== undefined) {
+    parts.push(`${copied} copied`)
+    if (there !== '0') parts.push(`${there} already there`)
+    if (failed !== '0') parts.push(`${failed} not copied`)
+  }
+  if (reason) parts.push(reason.charAt(0).toUpperCase() + reason.slice(1))
+  return parts.join(' · ')
+}
+
 export function describeDetail({ action, detail }: Pick<Activity, 'action' | 'detail'>): string {
   if (!detail) return ''
   switch (action) {
@@ -125,6 +145,13 @@ export function describeDetail({ action, detail }: Pick<Activity, 'action' | 'de
       return 'Incoming mail is not checked against it until it answers again. See how the mail server is doing in the settings.'
     case 'mail.delivery.not-forwarded':
       return describeNotForwarded(detail)
+    case 'mail.mailbox.import-started':
+    case 'mail.mailbox.import-cancelled':
+    case 'mail.mailbox.import-finished':
+    case 'mail.mailbox.import-failed':
+    case 'mail.mailbox.import-paused':
+    case 'mail.mailbox.import-interrupted':
+      return describeImport(detail)
     case 'mail.alias.create':
     case 'mail.alias.update':
     case 'mail.alias.delete':
@@ -225,6 +252,28 @@ export function describeActivity({ actor, action, target }: Entry): string {
       return about(target, (t) => `${who} deleted the mailbox ${t}`, `${who} deleted a mailbox`)
     case 'mail.mailbox.unblock':
       return about(target, (t) => `${who} let ${t} send again`, `${who} let a mailbox send again`)
+    case 'mail.mailbox.import-started':
+      return about(target, (t) => `${who} started importing mail into ${t}`, `${who} started importing mail`)
+    case 'mail.mailbox.import-cancelled':
+      return about(target, (t) => `${who} cancelled an import into ${t}`, `${who} cancelled an import`)
+    case 'mail.mailbox.exported':
+      return about(target, (t) => `${who} downloaded all mail of ${t}`, `${who} downloaded all mail of a mailbox`)
+    case 'mail.mailbox.import-finished':
+      return about(target, (t) => `Importing mail into ${t} finished`, 'Importing mail finished')
+    case 'mail.mailbox.import-failed':
+      return about(target, (t) => `Importing mail into ${t} failed`, 'Importing mail failed')
+    case 'mail.mailbox.import-paused':
+      return about(
+        target,
+        (t) => `Importing mail into ${t} paused until the other server allows more downloads`,
+        'Importing mail paused until the other server allows more downloads',
+      )
+    case 'mail.mailbox.import-interrupted':
+      return about(
+        target,
+        (t) => `Importing mail into ${t} was interrupted by a restart`,
+        'Importing mail was interrupted by a restart',
+      )
     case 'mail.alias.create':
       return about(target, (t) => `${who} added forwarding for ${mailAddress(t)}`, `${who} added forwarding`)
     case 'mail.alias.update':
