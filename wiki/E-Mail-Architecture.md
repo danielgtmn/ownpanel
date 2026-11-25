@@ -667,7 +667,8 @@ in the service. The same is said in [[Security|Security]].
 - **Zip files** (untrusted): at most 100 000 entries, 1000 folders; at most
   the message size limit per message entry and 4× the declared size unpacked in
   total, entries with a compression ratio over 100 refused; nested zips not
-  opened; names in UTF-8 when the zip flag says so, else CP437; no `..`,
+  opened; names in UTF-8 when the zip flag says so (or when they are valid
+  UTF-8, as macOS writes them without the flag), else CP437; no `..`,
   absolute paths, NUL or backslash; duplicate or case-colliding names
   merged into one folder. Other entries are skipped and counted.
 
@@ -694,7 +695,9 @@ link-local, CGNAT, NAT64 of private, …), and the service dials **that
 address** itself, then speaks TLS with `ServerName` = host name (no second
 lookup, so no DNS rebinding). IPv6 is allowed here. Only ports 993 and 143;
 certificates are verified (no opt-out); on 143 authentication only after
-STARTTLS. Timeouts per command; the job may run for hours. Remote error
+STARTTLS. Timeouts per command; the job may run for hours. When the
+connection breaks during a job, it connects again (at most three times)
+and goes on from the watermarks. Remote error
 texts are shortened to one line of at most 200 characters.
 `-allow-private-mx` allows private addresses here too (test networks).
 
@@ -718,7 +721,7 @@ PUT    /mailboxes/{sid}/uploads/{id}?offset=  part                  → {receive
 POST   /mailboxes/{sid}/imports/{id}/start  choices (file jobs; IMAP: + password to continue) → ImportJob
 GET    /mailboxes/{sid}/imports           → []ImportJob, newest first
 GET    /mailboxes/{sid}/imports/{id}      → ImportJob with failures
-DELETE /mailboxes/{sid}/imports/{id}      cancel → 204
+DELETE /mailboxes/{sid}/imports/{id}      cancel (a finished job: remove) → 204
 GET    /mailboxes/{sid}/export            → application/zip stream
 ```
 
