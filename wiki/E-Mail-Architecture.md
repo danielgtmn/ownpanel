@@ -353,7 +353,9 @@ How it is built (phase 1c):
 - Only public addresses are connected to: mail servers on loopback, private
   (RFC 1918, ULA), link-local, CGNAT, multicast or other special addresses
   are skipped, and a domain whose mail servers have only such addresses
-  bounces at once (`5.4.4`). Otherwise anyone who can send mail could make
+  bounces at once (`5.4.4`). NAT64 addresses (`64:ff9b::/96`, and
+  `64:ff9b:1::/48` in its /96 form only) count by the IPv4 address they
+  carry. Otherwise anyone who can send mail could make
   the server open port 25 inside its own network. `-allow-private-mx` lifts
   this for test setups.
 - On shutdown, an attempt that does not finish within the grace time is
@@ -507,7 +509,8 @@ Receiving and showing DMARC reports: *later*.
   an hour (IPv6 counted per /64, so phones are not mistaken for attackers);
   receiving goes on. The block is an event: activity log, a mark in
   the panel. Only admins unblock.
-- Free disk below 1 GB: incoming mail and APPEND answer temporary failures.
+- Free disk below 1 GB: incoming mail, APPEND, COPY and MOVE answer temporary
+  failures (`NO [UNAVAILABLE]` in IMAP).
 
 ## Webmail — [#30](https://github.com/danielgtmn/ownpanel/issues/30)
 

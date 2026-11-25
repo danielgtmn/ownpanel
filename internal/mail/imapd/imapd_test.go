@@ -463,6 +463,21 @@ func TestTwoSessions(t *testing.T) {
 		t.Fatalf("exists %v", ex)
 	}
 
+	// Low disk: COPY and MOVE are refused for now, nothing changes.
+	e.free.Store(1 << 20)
+	if _, err := c1.Move(imap.SeqSetNum(1), "Archive").Wait(); code(err) != imap.ResponseCodeUnavailable {
+		t.Errorf("move on low disk: %v", err)
+	}
+	if _, err := c1.Copy(imap.UIDSetNum(3), "Trash").Wait(); code(err) != imap.ResponseCodeUnavailable {
+		t.Errorf("copy on low disk: %v", err)
+	}
+	for _, f := range []string{"Archive", "Trash"} {
+		if st, err := e.store.FolderStatus(context.Background(), idAlice, f); err != nil || st.Messages != 0 {
+			t.Errorf("%s changed on low disk: %+v %v", f, st, err)
+		}
+	}
+	e.free.Store(10 << 30)
+
 	// Session 1 moves message 1 (UID 1) to Archive; copies UID 3.
 	md, err := c1.Move(imap.SeqSetNum(1), "Archive").Wait()
 	if err != nil {

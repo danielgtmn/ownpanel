@@ -597,7 +597,36 @@ func public(ip net.IP) bool {
 			return false
 		}
 	}
-	return true
+	// NAT64: a translator connects to the IPv4 address embedded in the
+	// IPv6 one, which must be public too.
+	return nat64Public(a)
+}
+
+var (
+	nat64WellKnown = netip.MustParsePrefix("64:ff9b::/96")   // RFC 6052
+	nat64Local     = netip.MustParsePrefix("64:ff9b:1::/48") // RFC 8215
+)
+
+// nat64Public tells whether a NAT64 address embeds a public IPv4 address
+// (true for every other address). The well-known prefix is a /96. The
+// local-use /48 may be used with any prefix length of RFC 6052, which this
+// server cannot know; only the common /96 form (the 48 bits after the
+// prefix zero) is accepted and every other one refused, rather than
+// guessing where a translator would connect.
+func nat64Public(a netip.Addr) bool {
+	b := a.As16()
+	switch {
+	case nat64WellKnown.Contains(a):
+	case nat64Local.Contains(a):
+		for _, x := range b[6:12] {
+			if x != 0 {
+				return false
+			}
+		}
+	default:
+		return true
+	}
+	return public(net.IP(b[12:16]))
 }
 
 func humanDur(d time.Duration) string {
