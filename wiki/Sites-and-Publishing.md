@@ -44,6 +44,7 @@ A version is created from an archive:
 | Unpacked size | 1 GiB |
 | Entries (files and folders) | 100,000 |
 | Versions kept per site | 5 |
+| Upload time | 1 h; cut off earlier only if no data arrives for 1 min (see [[Security|Security]]) |
 
 The limits are enforced on the bytes actually read, not on sizes the archive declares.
 

@@ -28,6 +28,7 @@ internal/dns/         provider-neutral DNS + hetzner/ (Cloud API only)
 internal/secrets/     encryption at rest for provider tokens
 internal/backup/      the backup command
 internal/webui/       serves the embedded web app
+internal/timeouts/    time limits of the HTTP server (Caddy has its own in caddy/)
 web/                  React app (see web/AGENTS.md)
 deploy/               systemd units, Caddy bootstrap, the root update worker
 install.sh update.sh  install, upgrade, update and uninstall on a server
