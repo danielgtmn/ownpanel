@@ -27,43 +27,51 @@ func rfc3339(t *time.Time) string {
 }
 
 type mailDomainInfo struct {
-	Domain       string `json:"domain" jsonschema:"the mail domain"`
-	Owner        string `json:"owner" jsonschema:"user the mail domain belongs to"`
-	Active       bool   `json:"active" jsonschema:"whether mail is received for the domain; it becomes active once its MX record points to the mail server"`
-	Problem      string `json:"problem" jsonschema:"why the domain is not active yet; empty when active"`
-	CheckedAt    string `json:"checked_at" jsonschema:"when the MX record was last looked at, RFC 3339 (UTC); empty if never"`
-	Mailboxes    int    `json:"mailboxes" jsonschema:"number of mailboxes"`
-	Aliases      int    `json:"aliases" jsonschema:"number of aliases"`
-	DKIMSelector string `json:"dkim_selector" jsonschema:"DKIM selector; publish dkim_record as a TXT record at <selector>._domainkey.<domain>"`
-	DKIMRecord   string `json:"dkim_record" jsonschema:"value of the DKIM TXT record"`
-	CreatedAt    string `json:"created_at" jsonschema:"when e-mail was enabled, RFC 3339 (UTC)"`
+	Domain         string `json:"domain" jsonschema:"the mail domain"`
+	Owner          string `json:"owner" jsonschema:"user the mail domain belongs to"`
+	Active         bool   `json:"active" jsonschema:"whether mail is received for the domain; it becomes active once its MX record points to the mail server"`
+	Problem        string `json:"problem" jsonschema:"why the domain is not active yet; empty when active"`
+	CheckedAt      string `json:"checked_at" jsonschema:"when the MX record was last looked at, RFC 3339 (UTC); empty if never"`
+	Mailboxes      int    `json:"mailboxes" jsonschema:"number of mailboxes"`
+	Aliases        int    `json:"aliases" jsonschema:"number of aliases"`
+	DKIMSelector   string `json:"dkim_selector" jsonschema:"DKIM selector; publish dkim_record as a TXT record at <selector>._domainkey.<domain>"`
+	DKIMRecord     string `json:"dkim_record" jsonschema:"value of the DKIM TXT record"`
+	CreatedAt      string `json:"created_at" jsonschema:"when e-mail was enabled, RFC 3339 (UTC)"`
+	Organisation   string `json:"organisation,omitempty" jsonschema:"name of the organisation the domain belongs to; empty when it stands alone"`
+	OrganisationID string `json:"organisation_id,omitempty" jsonschema:"id of that organisation"`
 }
 
 func mailDomainInfoOf(d panel.MailDomain) mailDomainInfo {
-	return mailDomainInfo{
+	v := mailDomainInfo{
 		Domain: d.Domain, Owner: d.Owner, Active: d.Active, Problem: d.Problem, CheckedAt: rfc3339(d.CheckedAt),
 		Mailboxes: d.Mailboxes, Aliases: d.Aliases, DKIMSelector: d.DKIMSelector, DKIMRecord: d.DKIMRecord,
 		CreatedAt: d.CreatedAt.UTC().Format(time.RFC3339),
 	}
+	if o := d.Organisation; o != nil {
+		v.Organisation, v.OrganisationID = o.Name, o.ID
+	}
+	return v
 }
 
 type mailboxInfo struct {
-	ID          int64  `json:"id" jsonschema:"mailbox id; pass it to set_mailbox_limits, unblock_mailbox, delete_mailbox or list_mail_imports"`
-	Address     string `json:"address" jsonschema:"the mailbox's e-mail address, also its user name in mail programs"`
-	Owner       string `json:"owner" jsonschema:"user the mail domain belongs to"`
-	QuotaBytes  int64  `json:"quota_bytes" jsonschema:"most mail the mailbox may store, in bytes; 0 means no limit"`
-	SendPerHour int    `json:"send_per_hour" jsonschema:"most messages it may send per hour"`
-	SendPerDay  int    `json:"send_per_day" jsonschema:"most messages it may send per day"`
-	UsedBytes   *int64 `json:"used_bytes,omitempty" jsonschema:"mail stored now, in bytes; missing if the mail server could not be asked"`
-	Messages    *int   `json:"messages,omitempty" jsonschema:"number of stored messages; missing if the mail server could not be asked"`
-	Blocked     bool   `json:"blocked" jsonschema:"whether the mail server stopped the mailbox from sending; only admins can lift it"`
-	BlockReason string `json:"block_reason,omitempty" jsonschema:"why it was blocked"`
-	CreatedAt   string `json:"created_at" jsonschema:"when the mailbox was created, RFC 3339 (UTC)"`
+	ID               int64  `json:"id" jsonschema:"mailbox id; pass it to set_mailbox_limits, unblock_mailbox, delete_mailbox or list_mail_imports"`
+	Address          string `json:"address" jsonschema:"the mailbox's e-mail address, also its user name in mail programs"`
+	DisplayName      string `json:"display_name" jsonschema:"name shown as sender and in address books; may be empty"`
+	AppPasswordsOnly bool   `json:"app_passwords_only" jsonschema:"whether mail programs can sign in only with app passwords (set in the web interface)"`
+	Owner            string `json:"owner" jsonschema:"user the mail domain belongs to"`
+	QuotaBytes       int64  `json:"quota_bytes" jsonschema:"most mail the mailbox may store, in bytes; 0 means no limit"`
+	SendPerHour      int    `json:"send_per_hour" jsonschema:"most messages it may send per hour"`
+	SendPerDay       int    `json:"send_per_day" jsonschema:"most messages it may send per day"`
+	UsedBytes        *int64 `json:"used_bytes,omitempty" jsonschema:"mail stored now, in bytes; missing if the mail server could not be asked"`
+	Messages         *int   `json:"messages,omitempty" jsonschema:"number of stored messages; missing if the mail server could not be asked"`
+	Blocked          bool   `json:"blocked" jsonschema:"whether the mail server stopped the mailbox from sending; only admins can lift it"`
+	BlockReason      string `json:"block_reason,omitempty" jsonschema:"why it was blocked"`
+	CreatedAt        string `json:"created_at" jsonschema:"when the mailbox was created, RFC 3339 (UTC)"`
 }
 
 func mailboxInfoOf(m panel.Mailbox) mailboxInfo {
 	v := mailboxInfo{
-		ID: m.ID, Address: m.Address, Owner: m.Owner, QuotaBytes: m.QuotaBytes, SendPerHour: m.SendPerHour,
+		ID: m.ID, Address: m.Address, DisplayName: m.DisplayName, AppPasswordsOnly: m.AppPasswordsOnly, Owner: m.Owner, QuotaBytes: m.QuotaBytes, SendPerHour: m.SendPerHour,
 		SendPerDay: m.SendPerDay, CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	if u := m.Usage; u != nil {

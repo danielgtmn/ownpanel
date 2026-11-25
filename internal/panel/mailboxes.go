@@ -25,6 +25,10 @@ type Mailbox struct {
 	SendPerHour int       `json:"send_per_hour"`
 	SendPerDay  int       `json:"send_per_day"`
 	CreatedAt   time.Time `json:"created_at"`
+	// DisplayName is shown as the sender's name; may be empty.
+	DisplayName string `json:"display_name"`
+	// AppPasswordsOnly: mail programs sign in only with app passwords.
+	AppPasswordsOnly bool `json:"app_passwords_only"`
 	// Usage is what the mail service reports; nil when it could not be
 	// asked (or is not set up).
 	Usage *MailboxUsage `json:"usage"`
@@ -44,6 +48,7 @@ type MailboxUsage struct {
 type MailboxInput struct {
 	LocalPart   string
 	Password    string
+	DisplayName string
 	QuotaBytes  *int64
 	SendPerHour *int
 	SendPerDay  *int
@@ -72,6 +77,7 @@ func mailboxView(m store.Mailbox, usage map[string]config.MailboxStatus) Mailbox
 	v := Mailbox{
 		ID: m.ID, Address: m.LocalPart + "@" + m.Domain, Domain: m.Domain, LocalPart: m.LocalPart, Owner: m.Owner,
 		QuotaBytes: m.QuotaBytes, SendPerHour: m.SendPerHour, SendPerDay: m.SendPerDay, CreatedAt: m.CreatedAt,
+		DisplayName: m.DisplayName, AppPasswordsOnly: m.AppPasswordsOnly,
 	}
 	if usage != nil {
 		u := MailboxUsage{}
@@ -269,6 +275,10 @@ func (s *Service) CreateMailbox(ctx context.Context, a Actor, domain string, in 
 	if err := validatePassword(in.Password); err != nil {
 		return Mailbox{}, err
 	}
+	dn, err := displayName(in.DisplayName)
+	if err != nil {
+		return Mailbox{}, err
+	}
 	m, err := checkLimits(a, store.Mailbox{
 		QuotaBytes: DefaultQuotaBytes, SendPerHour: config.DefaultSendPerHour, SendPerDay: config.DefaultSendPerDay,
 	}, in.QuotaBytes, in.SendPerHour, in.SendPerDay)
@@ -278,7 +288,7 @@ func (s *Service) CreateMailbox(ctx context.Context, a Actor, domain string, in 
 	if m.PasswordHash, err = hashPassword(in.Password); err != nil {
 		return Mailbox{}, newError(Internal, err)
 	}
-	m.StorageID, m.Domain, m.LocalPart = newStorageID(), md.Domain, l
+	m.StorageID, m.Domain, m.LocalPart, m.DisplayName = newStorageID(), md.Domain, l, dn
 	limit := MaxMailboxesPerUser
 	if a.Admin {
 		limit = 0

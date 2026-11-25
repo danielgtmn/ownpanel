@@ -144,6 +144,10 @@ type Service struct {
 	setupHosts setupHostsState
 	// importRate limits imports per person (mailtransfer.go).
 	importRate importRate
+	// appKeyMu guards appKey, the app password key once read or made
+	// (mailaccounts.go).
+	appKeyMu sync.Mutex
+	appKey   string
 }
 
 // New returns a Service. It rejects invalid web server options up front, and
