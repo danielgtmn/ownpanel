@@ -42,6 +42,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
@@ -92,6 +93,10 @@ type Handler struct {
 
 	rmu   sync.Mutex
 	rates map[string]*rateWindow
+
+	// lastExpansions is how many recurrences the last calendar query
+	// expanded (tests).
+	lastExpansions atomic.Int64
 
 	dirMu    sync.Mutex
 	dirFor   *directory.Directory

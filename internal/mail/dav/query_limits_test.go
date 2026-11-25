@@ -28,13 +28,13 @@ func TestQueryLimits(t *testing.T) {
 		uid := fmt.Sprintf("h%d", i)
 		expect(t, e.as("PUT", calPath+uid+".ics", nil, calObj(uid, "DTSTART:20260101T000000Z\r\nDTEND:20260101T003000Z\r\nRRULE:FREQ=HOURLY\r\n")), http.StatusCreated)
 	}
-	start := time.Now()
 	ms := parseMS(t, e.as("REPORT", calPath, map[string]string{"Depth": "1"}, rangesQuery(30)))
 	if len(ms.Responses) != 40 {
 		t.Fatalf("%d responses", len(ms.Responses))
 	}
-	if d := time.Since(start); d > 2*time.Second {
-		t.Fatalf("query took %s", d)
+	// One expansion per object, not one per object and time range.
+	if n := e.h.lastExpansions.Load(); n != 40 {
+		t.Fatalf("%d expansions", n)
 	}
 	e.h.opts.QueryBudget = time.Nanosecond
 	r := e.as("REPORT", calPath, map[string]string{"Depth": "1"}, rangesQuery(1))

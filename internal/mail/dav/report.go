@@ -163,6 +163,7 @@ func (h *Handler) query(w http.ResponseWriter, r *http.Request, pc *propCtx, res
 	ms := newMS(w)
 	matched := 0
 	matcher := davobj.NewMatcher(rq.ctx, h.opts.QueryBudget)
+	defer func() { h.lastExpansions.Store(int64(matcher.Expansions())) }()
 	for _, c := range candidates {
 		if rq.ctx.Err() != nil {
 			return // the client is gone
