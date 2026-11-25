@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -173,6 +174,55 @@ func (a *Authoritative) lookup(ctx context.Context, host string, depth int) ([]n
 	return nil, notFound(host)
 }
 
+// MXResolver looks up the mail exchangers of a domain. *net.Resolver and
+// *Authoritative satisfy it.
+type MXResolver interface {
+	LookupMX(ctx context.Context, name string) ([]*net.MX, error)
+}
+
+// LookupMX implements MXResolver: it asks the authoritative nameservers of
+// name's zone for its MX records, sorted by preference. Host names end in a
+// dot like those of net.Resolver; a null MX ("0 .") has the host ".". A name
+// without MX records gives a not-found *net.DNSError. If no nameserver can
+// be reached, the system resolver is asked when it can look up MX records.
+func (a *Authoritative) LookupMX(ctx context.Context, name string) ([]*net.MX, error) {
+	host := normalizeName(name)
+	actx, cancel := context.WithTimeout(ctx, authBudget)
+	mx, err := a.lookupMX(actx, host)
+	cancel()
+	if err == nil || isNotFound(err) {
+		return mx, err
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if sys, ok := a.System.(MXResolver); ok {
+		return sys.LookupMX(ctx, host)
+	}
+	return nil, err
+}
+
+func (a *Authoritative) lookupMX(ctx context.Context, host string) ([]*net.MX, error) {
+	_, servers, err := a.zoneFor(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	r, err := a.query(ctx, servers, host, dnsmessage.TypeMX)
+	if err != nil {
+		return nil, err
+	}
+	if len(r.mx) == 0 {
+		if r.cname != "" {
+			// An MX owner name should not be an alias; one without its
+			// records in the answer is not followed.
+			return nil, errCNAMEOutside{target: r.cname}
+		}
+		return nil, notFound(host)
+	}
+	slices.SortStableFunc(r.mx, func(x, y *net.MX) int { return int(x.Pref) - int(y.Pref) })
+	return r.mx, nil
+}
+
 // zoneFor finds the zone that holds host by walking up its labels with NS
 // lookups, and the addresses of that zone's nameservers.
 func (a *Authoritative) zoneFor(ctx context.Context, host string) (string, []netip.Addr, error) {
@@ -256,6 +306,9 @@ func (a *Authoritative) nameserverAddrs(ctx context.Context, nss []*net.NS) []ne
 
 type answer struct {
 	addrs    []netip.Addr
+	mx       []*net.MX
+	txt      []string
+	srv      []*net.SRV
 	cname    string // set if the name is an alias without addresses in the answer
 	nxdomain bool
 }
@@ -348,11 +401,25 @@ func readAnswer(rrs []dnsmessage.Resource, host string, qt dnsmessage.Type) answ
 				if qt == dnsmessage.TypeAAAA {
 					out.addrs = append(out.addrs, netip.AddrFrom16(b.AAAA))
 				}
+			case *dnsmessage.MXResource:
+				if qt == dnsmessage.TypeMX {
+					out.mx = append(out.mx, &net.MX{Host: b.MX.String(), Pref: b.Pref})
+				}
+			case *dnsmessage.TXTResource:
+				if qt == dnsmessage.TypeTXT {
+					// One record may be split into several strings; like
+					// net.Resolver, they are joined.
+					out.txt = append(out.txt, strings.Join(b.TXT, ""))
+				}
+			case *dnsmessage.SRVResource:
+				if qt == dnsmessage.TypeSRV {
+					out.srv = append(out.srv, &net.SRV{Target: b.Target.String(), Port: b.Port, Priority: b.Priority, Weight: b.Weight})
+				}
 			case *dnsmessage.CNAMEResource:
 				next = normalizeName(b.CNAME.String())
 			}
 		}
-		if len(out.addrs) > 0 {
+		if len(out.addrs) > 0 || len(out.mx) > 0 || len(out.txt) > 0 || len(out.srv) > 0 {
 			return out
 		}
 		if next == "" {

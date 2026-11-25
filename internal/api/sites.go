@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+
+	"github.com/danielgtmn/ownpanel/internal/timeouts"
 )
 
 func (s *Server) siteRoutes(mux *http.ServeMux) {
@@ -59,6 +61,7 @@ func (s *Server) deleteSite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deploy(w http.ResponseWriter, r *http.Request) {
+	timeouts.Extend(w) // large archives on slow links
 	site, err := s.Panel.Publish(r.Context(), actorOf(r), r.PathValue("name"), http.MaxBytesReader(w, r.Body, MaxUploadBytes))
 	if err != nil {
 		writeFailure(w, err)

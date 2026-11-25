@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  checkResult,
+  lastCheckedText,
+  latestBeforeInstall,
   needsReload,
   progressText,
   resultNotice,
@@ -19,6 +22,8 @@ function info(over: Partial<UpdateInfo> = {}): UpdateInfo {
       nightly: { version: 'nightly-20261124-878136d', published_at: '2026-11-24T10:00:00Z', notes_url: 'https://y', older: false },
     },
     check_failed: false,
+    check_error: '',
+    checked_at: '2026-11-25T12:00:00Z',
     update_available: true,
     auto: { mode: 'off', window: '03:00-05:00' },
     status: idle,
@@ -48,6 +53,25 @@ describe('updateQuestion', () => {
     const q = updateQuestion(info(), 'nightly')
     expect(q.title).toBe('Switch to nightly builds?')
     expect(q.description).not.toMatch(/older/)
+  })
+})
+
+describe('latestBeforeInstall', () => {
+  it('asks about the build that is newest now, not the one the page loaded with', async () => {
+    const newer = info({
+      available: {
+        ...info().available,
+        nightly: { version: 'nightly-20261125-bd26838', published_at: '2026-11-25T05:50:00Z', notes_url: 'https://y', older: false },
+      },
+    })
+    const current = await latestBeforeInstall(info({ installed: { version: 'v1.2.0', channel: 'stable' } }), async () => newer)
+    expect(updateQuestion(current, 'nightly').confirmLabel).toBe('Switch and install nightly-20261125-bd26838')
+  })
+
+  it('keeps what it had when the panel cannot look right now', async () => {
+    const before = info()
+    const current = await latestBeforeInstall(before, () => Promise.reject(new Error('offline')))
+    expect(current).toBe(before)
   })
 })
 
@@ -84,5 +108,36 @@ describe('time window', () => {
     expect(windowProblem('03:00', '03:00')).toMatch(/differ/)
     expect(windowProblem(null, '03:00')).toMatch(/both/)
     expect(windowProblem('22:00', '02:00')).toBeNull()
+  })
+})
+
+describe('checking for updates', () => {
+  const at = '2026-11-25T12:00:00Z'
+  const after = (seconds: number) => new Date(Date.parse(at) + seconds * 1000)
+
+  it('tells when the panel last looked', () => {
+    expect(lastCheckedText(at, after(5))).toBe('Last checked just now')
+    expect(lastCheckedText(at, after(-3))).toBe('Last checked just now')
+    expect(lastCheckedText(at, after(60))).toBe('Last checked 1 minute ago')
+    expect(lastCheckedText(at, after(12 * 60 + 30))).toBe('Last checked 12 minutes ago')
+    expect(lastCheckedText(at, after(3 * 3600))).toBe('Last checked 3 hours ago')
+    expect(lastCheckedText(at, after(2 * 86400))).toBe('Last checked 2 days ago')
+    expect(lastCheckedText('', after(0))).toBeNull()
+    expect(lastCheckedText('garbage', after(0))).toBeNull()
+  })
+
+  it('finds a newer version of the installed channel', () => {
+    expect(checkResult(info())).toEqual({ kind: 'update', version: 'v1.2.0' })
+  })
+
+  it('is up to date when the newest version is installed, or only an older one exists', () => {
+    expect(checkResult(info({ installed: { version: 'v1.2.0', channel: 'stable' }, update_available: false }))).toEqual({ kind: 'current' })
+    const older = info({ available: { ...info().available, stable: { ...info().available.stable!, older: true } } })
+    expect(checkResult(older)).toEqual({ kind: 'current' })
+    expect(checkResult(info({ available: { stable: null, nightly: null } }))).toEqual({ kind: 'current' })
+  })
+
+  it('reports a failed check', () => {
+    expect(checkResult(info({ check_failed: true, check_error: 'GitHub answered 403' }))).toEqual({ kind: 'failed' })
   })
 })

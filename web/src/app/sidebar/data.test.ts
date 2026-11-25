@@ -36,6 +36,21 @@ describe('loading the addresses of a domain', () => {
     expect(sources.pathRedirectHosts).toEqual(['docs.example.com'])
   })
 
+  it('loads the mail domains, and none when e-mail may not be seen', async () => {
+    const base = {
+      '/api/sites': () => json([]),
+      '/api/dns/zones': () => json({ zones: [] }),
+      '/api/redirects': () => json([]),
+    }
+    mockRoutes({
+      ...base,
+      '/api/mail/domains': () => json([{ domain: 'example.org', active: false, owner: 'anna', mailboxes: 1 }]),
+    })
+    expect((await loadSources()).mailDomains).toEqual([{ domain: 'example.org', active: false }])
+    mockRoutes({ ...base, '/api/mail/domains': () => json({ error: 'limited to sites' }, 403) })
+    expect((await loadSources()).mailDomains).toBeUndefined()
+  })
+
   it('reads the record names of each DNS account and reports the ones that failed', async () => {
     const fetchMock = mockRoutes({
       '/api/dns/connections/1/zones/example.com/records': () =>

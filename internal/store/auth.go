@@ -7,32 +7,6 @@ import (
 	"time"
 )
 
-// CreateSession stores a session. id is the hash of the cookie value.
-func (s *Store) CreateSession(ctx context.Context, id string, userID int64, expires time.Time) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
-		id, userID, s.now(), expires.Unix())
-	return err
-}
-
-// SessionUser returns the user of a session that has not expired at now.
-func (s *Store) SessionUser(ctx context.Context, id string, now time.Time) (User, error) {
-	return scanUser(s.db.QueryRowContext(ctx, `SELECT u.id, u.name, u.password_hash, u.role, u.created_at
-		FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.id = ? AND s.expires_at > ?`, id, now.Unix()))
-}
-
-// DeleteSession removes one session; a missing one is not an error.
-func (s *Store) DeleteSession(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id)
-	return err
-}
-
-// DeleteExpiredSessions removes sessions that expired before now.
-func (s *Store) DeleteExpiredSessions(ctx context.Context, now time.Time) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at <= ?`, now.Unix())
-	return err
-}
-
 // Token is a personal access token. Only the hash of its secret is kept.
 type Token struct {
 	ID     int64
@@ -45,16 +19,18 @@ type Token struct {
 	Sites      []string
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
+	// ExpiresAt is when the token stops working; nil means never.
+	ExpiresAt *time.Time
 }
 
-const tokenCols = `id, user_id, name, hash, access, sites, created_at, last_used_at`
+const tokenCols = `id, user_id, name, hash, access, sites, created_at, last_used_at, expires_at`
 
 func scanToken(row interface{ Scan(...any) error }) (Token, error) {
 	var t Token
 	var sites sql.NullString
 	var created int64
-	var used sql.NullInt64
-	if err := row.Scan(&t.ID, &t.UserID, &t.Name, &t.Hash, &t.Access, &sites, &created, &used); err != nil {
+	var used, expires sql.NullInt64
+	if err := row.Scan(&t.ID, &t.UserID, &t.Name, &t.Hash, &t.Access, &sites, &created, &used, &expires); err != nil {
 		if noRows(err) {
 			return Token{}, notFoundf("access token not found")
 		}
@@ -70,6 +46,10 @@ func scanToken(row interface{ Scan(...any) error }) (Token, error) {
 	if used.Valid {
 		at := unix(used.Int64)
 		t.LastUsedAt = &at
+	}
+	if expires.Valid {
+		at := unix(expires.Int64)
+		t.ExpiresAt = &at
 	}
 	return t, nil
 }
@@ -89,8 +69,14 @@ func (s *Store) CreateToken(ctx context.Context, t Token) (Token, error) {
 		return Token{}, err
 	}
 	created := s.now()
-	res, err := s.db.ExecContext(ctx, `INSERT INTO tokens (user_id, name, hash, access, sites, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		t.UserID, t.Name, t.Hash, t.Access, sites, created)
+	var expires sql.NullInt64
+	if t.ExpiresAt != nil {
+		expires = sql.NullInt64{Int64: t.ExpiresAt.Unix(), Valid: true}
+		at := unix(expires.Int64)
+		t.ExpiresAt = &at
+	}
+	res, err := s.db.ExecContext(ctx, `INSERT INTO tokens (user_id, name, hash, access, sites, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		t.UserID, t.Name, t.Hash, t.Access, sites, created, expires)
 	if err != nil {
 		return Token{}, err
 	}

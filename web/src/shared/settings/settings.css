@@ -168,3 +168,19 @@
     flex: 1 1 auto;
   }
 }
+
+.address-private [data-slot='collapsible-trigger'] {
+  width: fit-content;
+}
+
+.address-private [data-slot='collapsible-panel'] {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.address-private p {
+  margin: 0;
+  font-size: 0.875rem;
+}

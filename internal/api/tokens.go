@@ -22,11 +22,17 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
 		Name   string   `json:"name"`
 		Access string   `json:"access"`
 		Sites  []string `json:"sites"`
+		// ExpiresInDays: null or 0 means never.
+		ExpiresInDays *int `json:"expires_in_days"`
 	}
-	if !decodeJSON(w, r, &body, `{"name": "…", "access": "read", "sites": null}`) {
+	if !decodeJSON(w, r, &body, `{"name": "…", "access": "read", "sites": null, "expires_in_days": 90}`) {
 		return
 	}
-	t, err := s.Panel.CreateToken(r.Context(), actorOf(r), body.Name, body.Access, body.Sites)
+	days := 0
+	if body.ExpiresInDays != nil {
+		days = *body.ExpiresInDays
+	}
+	t, err := s.Panel.CreateToken(r.Context(), actorOf(r), body.Name, body.Access, body.Sites, days)
 	if err != nil {
 		writeFailure(w, err)
 		return

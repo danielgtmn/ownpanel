@@ -119,10 +119,11 @@ export function RedirectsPage() {
           <ErrorState title="Couldn't load the redirects" message={errorMessage(redirects.error)} onRetry={redirects.retry} />
         ) : null}
         {redirects.status === 'ready' && family && all.length > 0 && list.length === 0 ? (
-          <EmptyState title={`No redirects on ${family}`} description="None of its domains redirects yet." action={addButton} />
+          <EmptyState inSection title={`No redirects on ${family}`} description="None of its domains redirects yet." action={addButton} />
         ) : null}
         {redirects.status === 'ready' && all.length === 0 ? (
           <EmptyState
+            inSection
             title="No redirects yet"
             description="Have an old domain or a short one? Send its visitors to where your content lives now."
             action={addButton}

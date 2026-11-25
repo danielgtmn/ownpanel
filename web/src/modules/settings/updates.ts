@@ -74,6 +74,17 @@ export function channelRelease(info: UpdateInfo, channel: Channel): AvailableRel
   return info.available[channel]
 }
 
+// Looks again before asking, so the question names the version that gets installed: the newest release may have
+// changed since the page loaded (the nightly build does with every change). If the panel can't look right now, the
+// question is about the last result.
+export async function latestBeforeInstall(info: UpdateInfo, check: () => Promise<UpdateInfo>): Promise<UpdateInfo> {
+  try {
+    return await check()
+  } catch {
+    return info
+  }
+}
+
 // The question asked before installing; switching to an older version says so plainly.
 export function updateQuestion(info: UpdateInfo, channel: Channel): { title: string; description: string; confirmLabel: string } {
   const release = channelRelease(info, channel)
@@ -115,4 +126,32 @@ export function windowProblem(from: string | null, to: string | null): string | 
 // The web app comes with the panel: a different installed version means this page is outdated.
 export function needsReload(loadedVersion: string | null, info: UpdateInfo): boolean {
   return loadedVersion !== null && info.installed.version !== loadedVersion && !isBusy(info.status)
+}
+
+const relative = new Intl.RelativeTimeFormat('en', { numeric: 'always' })
+
+// "Last checked 12 minutes ago"; null before the panel ever looked.
+export function lastCheckedText(checkedAt: string, now: Date): string | null {
+  const at = new Date(checkedAt)
+  if (!checkedAt || Number.isNaN(at.getTime())) return null
+  const seconds = Math.max(0, Math.round((now.getTime() - at.getTime()) / 1000))
+  if (seconds < 60) return 'Last checked just now'
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `Last checked ${relative.format(-minutes, 'minute')}`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `Last checked ${relative.format(-hours, 'hour')}`
+  return `Last checked ${relative.format(-Math.floor(hours / 24), 'day')}`
+}
+
+export type CheckResult = { kind: 'failed' } | { kind: 'update'; version: string } | { kind: 'current' }
+
+// What a check found for the installed channel.
+export function checkResult(info: UpdateInfo): CheckResult {
+  if (info.check_failed) return { kind: 'failed' }
+  const channel = info.installed.channel
+  const release = channel ? info.available[channel] : null
+  if (release && release.version !== info.installed.version && !release.older) {
+    return { kind: 'update', version: release.version }
+  }
+  return { kind: 'current' }
 }

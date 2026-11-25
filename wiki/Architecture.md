@@ -6,7 +6,8 @@
 |---|---|
 | **Caddy** | Serves the sites and obtains certificates. Runs as its own process. Its admin API is a Unix socket that only ownpaneld can reach. |
 | **ownpaneld** | The panel daemon (Go). Keeps the panel's data in SQLite, builds a complete Caddy config from it and loads it through Caddy's admin API. Serves the API, MCP and the web interface. |
-| **SQLite** | `ownpanel.db` in the data directory: users, sessions, access tokens, sites and domains, DNS connections, activity log. |
+| **SQLite** | `ownpanel.db` in the data directory: users, sessions, access tokens, sites and domains, DNS connections, activity log. Sign-in accounts, password hashes, sessions, attempt counts and reset links live in the `auth_*` tables of the same file, managed by the [sesam](https://github.com/danielgtmn/sesam) library; `users.auth_user_id` links a panel user (id and role) to its sign-in account. Stored secrets (DNS tokens, DKIM keys) are encrypted with the [panzerschrank](https://github.com/danielgtmn/panzerschrank) library and the key in `secret.key` next to the database. |
+| **ownpanel-mail** | The mail server (`ownpaneld mail`), its own service and user. Receives, stores and sends mail; ownpaneld pushes its full configuration over a local socket, like Caddy's. See [[E-Mail architecture|E-Mail-Architecture]]. |
 | **Web app** | React app built with Vite into `internal/webui/dist`. Embedded into the binary with the `webui` build tag (`make build`, `make build-linux`). A plain `go build` leaves it out and serves only the API. |
 
 Site files are not served by ownpaneld: Caddy reads them from the data directory.
@@ -51,12 +52,11 @@ If a change is saved but the sync fails, the API answers `502` with "saved, but 
 | Package | Responsibility |
 |---|---|
 | `cmd/ownpaneld` | Entry point: the `serve` and `backup` commands, flags, wiring, routing of `/api/`, `/mcp` and the web app |
-| `internal/panel` | All operations and **all permission checks**; actors, tokens, sessions, upload links, DNS rules, sign-in throttle. Every front door calls this |
+| `internal/panel` | All operations and **all permission checks**; actors, tokens, sign-in (through sesam's Go API), password reset by e-mail, upload links, DNS rules. Every front door calls this |
 | `internal/store` | SQLite database, migrations (`internal/store/migrations`), validation of names and domains |
 | `internal/caddy` | Caddy config builder and admin API client |
 | `internal/deploy` | Versions ("releases"): unpacking archives, activation, going back, pruning |
 | `internal/dns` | Provider interface, zone lookup, "does this domain point here?", lookups at authoritative nameservers; `dns/hetzner` is the Hetzner Cloud client |
-| `internal/secrets` | Encryption of stored secrets (DNS tokens) with the key in `<data>/secret.key` |
 | `internal/api` | HTTP API: authentication, then a thin adapter over `internal/panel` |
 | `internal/mcp` | MCP server at `/mcp`: the same operations as tools |
 | `internal/backup` | Backup archives |
@@ -75,8 +75,10 @@ New API routes: add a file with a method that registers them and list it in `rou
 
 ## Adding a module to the web app
 
-1. Create `web/src/modules/<name>/` with an `index.ts` that exports a `PanelModule`: `id`, `label`, `basePath`, `component` (receives the remaining path `segments`) and optionally `visible: (user) => boolean` to hide it (and its address) from some people.
+1. Create `web/src/modules/<name>/` with an `index.ts` that exports a `PanelModule`: `id`, `label`, `basePath`, `page` (loads the page component on demand, `() => import('./MyPage.tsx').then((page) => page.MyPage)`; the component receives the remaining path `segments`) and optionally `visible: (user) => boolean` to hide it (and its address) from some people.
 2. Add one line to `web/src/modules/registry.ts`.
+
+Only a module's page is loaded when it is first opened; the rest of its `index.ts` (label, sidebar rows, counts, `visible`) is part of the first download, so keep it light and don't import page components there.
 
 Modules never import from each other; shared code goes into `shared/`. Text shown to people follows the rules in [[Development|Development]].
 

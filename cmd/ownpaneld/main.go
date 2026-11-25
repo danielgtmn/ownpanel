@@ -2,7 +2,8 @@
 // reconciles a separately running Caddy to it through Caddy's admin API.
 //
 //	ownpaneld [serve] [flags]                    run the daemon
-//	ownpaneld backup -data <dir> -out <file>     write a backup archive
+//	ownpaneld backup -data <dir> -out <file>     write a backup archive (with -mail-data, -no-mail)
+//	ownpaneld mail [flags]                       run the mail service
 //	ownpaneld version                            print the version
 package main
 
@@ -25,11 +26,13 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/backup"
 	"github.com/danielgtmn/ownpanel/internal/caddy"
 	"github.com/danielgtmn/ownpanel/internal/deploy"
+	mailconfig "github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/mcp"
 	"github.com/danielgtmn/ownpanel/internal/panel"
-	"github.com/danielgtmn/ownpanel/internal/secrets"
 	"github.com/danielgtmn/ownpanel/internal/store"
+	"github.com/danielgtmn/ownpanel/internal/timeouts"
 	"github.com/danielgtmn/ownpanel/internal/webui"
+	"github.com/danielgtmn/panzerschrank"
 )
 
 // version is reported to MCP clients and by the version command; release
@@ -56,6 +59,10 @@ func main() {
 		err = serve(args)
 	case "backup":
 		err = runBackup(args)
+	case backupMailCommand:
+		err = runBackupMail(args)
+	case "mail":
+		err = runMail(args)
 	case "version":
 		fmt.Println(version)
 	default:
@@ -70,12 +77,21 @@ func main() {
 func runBackup(args []string) error {
 	fs := flag.NewFlagSet("backup", flag.ExitOnError)
 	dataDir := fs.String("data", "./data", "data directory of the daemon")
+	mailData := fs.String("mail-data", "/var/lib/ownpanel-mail", "data directory of the mail service (skipped if it does not exist)")
+	noMail := fs.Bool("no-mail", false, "leave the stored mail out of the archive")
 	out := fs.String("out", "", "archive to write (.tar.gz); must not exist")
 	fs.Parse(args)
 	if *out == "" {
 		return errors.New("backup needs -out <file.tar.gz>")
 	}
-	if err := backup.Create(*dataDir, *out); err != nil {
+	var mail backup.MailSource
+	if !*noMail {
+		var err error
+		if mail, err = mailSource(*mailData); err != nil {
+			return err
+		}
+	}
+	if err := backup.CreateWithMail(*dataDir, *out, mail); err != nil {
 		return err
 	}
 	slog.Info("backup written", "file", *out)
@@ -95,6 +111,8 @@ func serve(args []string) error {
 		panelDomain = fs.String("panel-domain", "", "serve the panel itself through Caddy on this domain (optional; overrides the panel settings)")
 		interval    = fs.Duration("reconcile-interval", 30*time.Second, "how often the web server is re-synced in the background")
 		releasesAPI = fs.String("releases-api", "https://api.github.com", "GitHub API address used to look for new releases (change it only for testing)")
+		mailAdmin   = fs.String("mail-admin", "", "admin socket of the mail service as unix:///absolute/path.sock (optional; without it e-mail is only stored, not served)")
+		mailHost    = fs.String("mail-host", "", "name of the mail server, e.g. mail.example.com (optional; overrides the panel settings)")
 	)
 	var serverIPFlags listFlag
 	fs.Var(&serverIPFlags, "server-ip", "public IPv4/IPv6 address of this server that domains should point at (repeatable or comma-separated; overrides the panel settings)")
@@ -127,6 +145,20 @@ func serve(args []string) error {
 		opts.PanelDomain = d
 	}
 
+	var mailService panel.MailService
+	if *mailAdmin != "" {
+		path, ok := strings.CutPrefix(*mailAdmin, "unix://")
+		if !ok || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+			return fmt.Errorf("-mail-admin: %q must be unix:///absolute/path/to.sock", *mailAdmin)
+		}
+		mailService = mailconfig.NewClient(path)
+	}
+	if *mailHost != "" {
+		if _, err := store.NormalizeDomain(*mailHost); err != nil {
+			return fmt.Errorf("-mail-host: %w", err)
+		}
+	}
+
 	serverIPs, err := panel.ParseServerIPs(serverIPFlags, *tlsMode == caddy.TLSInternal || *tlsMode == caddy.TLSOff)
 	if err != nil {
 		return fmt.Errorf("-server-ip: %w", err)
@@ -135,7 +167,7 @@ func serve(args []string) error {
 	if err := os.MkdirAll(data, 0o755); err != nil {
 		return err
 	}
-	secretBox, err := secrets.Open(filepath.Join(data, secrets.KeyFile))
+	secretBox, err := panzerschrank.OpenKeyFile(filepath.Join(data, panzerschrank.KeyFile))
 	if err != nil {
 		return err
 	}
@@ -168,6 +200,9 @@ func serve(args []string) error {
 			ReleaseFile: releaseFile,
 			Dir:         filepath.Join(data, "update"),
 		},
+		Mail:       mailService,
+		MailHost:   *mailHost,
+		MailTLSDir: filepath.Join(data, "mail-tls"),
 	})
 	if err != nil {
 		return err
@@ -184,11 +219,9 @@ func serve(args []string) error {
 	// Initial sync, then heal drift (e.g. Caddy restarted).
 	go svc.Run(ctx, *interval)
 
-	srv := &http.Server{
-		Addr:              *listen,
-		Handler:           compose((&api.Server{Panel: svc}).Handler(), webui.Handler(webui.FS()), mcp.Handler(svc, version, mcp.WithPanelDomainFunc(svc.PanelDomain))),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	app := webui.FS()
+	apiServer := &api.Server{Panel: svc, Build: webui.Build(app)}
+	srv := timeouts.Server(*listen, svc.MailChallengeHandler(apiServer.MailSetupHandler(compose(apiServer.Handler(), webui.Handler(app), mcp.Handler(svc, version, mcp.WithPanelDomainFunc(svc.PanelDomain))))))
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -196,7 +229,8 @@ func serve(args []string) error {
 		_ = srv.Shutdown(shutdown)
 	}()
 
-	slog.Info("ownpaneld started", "listen", *listen, "data", data, "tls", *tlsMode, "panel_domain", svc.PanelDomain())
+	slog.Info("ownpaneld started", "listen", *listen, "data", data, "tls", *tlsMode, "panel_domain", svc.PanelDomain(),
+		"mail_service", *mailAdmin != "", "mail_host", svc.MailHost())
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

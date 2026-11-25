@@ -14,23 +14,39 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/danielgtmn/ownpanel/internal/secrets"
 	"github.com/danielgtmn/ownpanel/internal/store"
+	"github.com/danielgtmn/panzerschrank"
 )
 
 // DBFile is the database's name inside the data directory.
 const DBFile = "ownpanel.db"
 
-// dirs are copied as they are (site releases and Caddy's certificates).
-var dirs = []string{"sites", "caddy"}
+// dirs are copied as they are (site releases, Caddy's certificates, the
+// mail host's certificate and ACME account).
+var dirs = []string{"sites", "caddy", "mail-tls"}
+
+// MailDir is the folder of the archive that holds the mail service's data.
+const MailDir = "mail"
+
+// mailDB is the mail service's index inside its data directory.
+const mailDB = "mail.db"
+
+// RestoredMarker is the file the mail service looks for at start to learn
+// that its data was restored (see internal/mail/storage).
+const RestoredMarker = "restored"
 
 // files are copied as they are if they exist: the key for the secrets in
 // the database (without it, DNS connections cannot be used after a restore).
-var files = []string{secrets.KeyFile}
+var files = []string{panzerschrank.KeyFile}
 
 // Create writes a tar.gz of dataDir to out (mode 0600, must not exist). It
 // is safe while the daemon runs: the database is copied with VACUUM INTO.
-func Create(dataDir, out string) (err error) {
+func Create(dataDir, out string) error { return CreateWithMail(dataDir, out, nil) }
+
+// CreateWithMail is Create plus the mail service's data: mail writes it as
+// a tar stream (WriteMail), which is checked and stored under MailDir. nil
+// means no mail.
+func CreateWithMail(dataDir, out string, mail MailSource) (err error) {
 	tmp, err := os.MkdirTemp("", "ownpanel-backup-")
 	if err != nil {
 		return err
@@ -67,6 +83,11 @@ func Create(dataDir, out string) (err error) {
 	for _, dir := range dirs {
 		if err := addTree(tw, dataDir, dir); err != nil {
 			return err
+		}
+	}
+	if mail != nil {
+		if err := embedMail(tw, mail); err != nil {
+			return fmt.Errorf("mail: %w", err)
 		}
 	}
 	if err := tw.Close(); err != nil {

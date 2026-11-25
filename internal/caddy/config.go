@@ -44,7 +44,38 @@ type Options struct {
 	// IPRedirect makes the PanelIPs routes redirect to https://PanelDomain
 	// instead of serving the panel (once set up with a domain).
 	IPRedirect bool
+
+	// MailHost, when set, is the mail server's name: plain HTTP requests
+	// for it below /.well-known/acme-challenge/ are passed to the panel,
+	// which obtains the mail server's certificate itself. The route goes
+	// into the server on the HTTP port only, never into a host matcher on
+	// the HTTPS port, so Caddy does not request a certificate for it.
+	MailHost string
+
+	// MailSetupHosts are names like autoconfig.<domain> and
+	// autodiscover.<domain> that point to this server: the paths where
+	// mail programs look for their settings (MailSetupPaths) are passed to
+	// the panel, everything else answers 404. They get certificates like
+	// sites, so only names known to point here belong in it.
+	MailSetupHosts []string
+	// MailAutoconfigDomains are the active mail domains: when one of them
+	// is a site's domain, MailAutoconfigWellKnown is passed to the panel
+	// before the site's files.
+	MailAutoconfigDomains []string
 }
+
+// acmeChallengePath is where ACME HTTP-01 challenges are answered.
+const acmeChallengePath = "/.well-known/acme-challenge/*"
+
+// Where mail programs look for their settings.
+const (
+	MailAutoconfigPath      = "/mail/config-v1.1.xml"
+	MailAutoconfigWellKnown = "/.well-known/autoconfig/mail/config-v1.1.xml"
+	MailAutodiscoverPath    = "/autodiscover/autodiscover.xml"
+)
+
+// MailSetupPaths are the paths of MailSetupHosts passed to the panel.
+var MailSetupPaths = []string{MailAutoconfigPath, MailAutoconfigWellKnown, MailAutodiscoverPath}
 
 // Site is what the web server needs to know about one site.
 type Site struct {
@@ -108,9 +139,45 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 		})
 	}
 	routes = append(routes, domainRedirects...)
+	if len(opts.MailSetupHosts) > 0 {
+		if opts.PanelUpstream == "" {
+			return nil, fmt.Errorf("names for setting up mail programs need the panel's address")
+		}
+		hosts := append([]string(nil), opts.MailSetupHosts...)
+		sort.Strings(hosts)
+		routes = append(routes, obj{
+			"match": []obj{{"host": hosts}},
+			"handle": []obj{{"handler": "subroute", "routes": []obj{
+				{"match": []obj{{"path": MailSetupPaths}}, "handle": []obj{proxyTo(opts.PanelUpstream)}},
+				{"handle": []obj{{"handler": "static_response", "status_code": 404, "body": "Not found.\n"}}},
+			}}},
+			"terminal": true,
+		})
+	}
+	mailDomains := map[string]bool{}
+	for _, d := range opts.MailAutoconfigDomains {
+		mailDomains[d] = true
+	}
 	for _, s := range sorted {
 		if len(s.Domains) == 0 {
 			continue
+		}
+		var siteRoutes []obj
+		var autoconfig []string
+		for _, d := range s.Domains {
+			if mailDomains[d] {
+				autoconfig = append(autoconfig, d)
+			}
+		}
+		if len(autoconfig) > 0 {
+			if opts.PanelUpstream == "" {
+				return nil, fmt.Errorf("settings for mail programs need the panel's address")
+			}
+			siteRoutes = append(siteRoutes, obj{
+				"match":    []obj{{"host": autoconfig, "path": []string{MailAutoconfigWellKnown}}},
+				"handle":   []obj{proxyTo(opts.PanelUpstream)},
+				"terminal": true,
+			})
 		}
 		var handlers []obj
 		if s.Live {
@@ -128,7 +195,7 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 		}
 		routes = append(routes, obj{
 			"match":    []obj{{"host": s.Domains}},
-			"handle":   []obj{{"handler": "subroute", "routes": append(sitePathRedirects(pathRedirects, s.Domains), obj{"handle": handlers})}},
+			"handle":   []obj{{"handler": "subroute", "routes": append(append(siteRoutes, sitePathRedirects(pathRedirects, s.Domains)...), obj{"handle": handlers})}},
 			"terminal": true,
 		})
 	}
@@ -137,11 +204,26 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 		"handle": []obj{{"handler": "static_response", "status_code": 404, "body": "Unknown site.\n"}},
 	})
 
-	server := obj{"routes": routes}
+	var mailRoute obj
+	if opts.MailHost != "" {
+		if opts.PanelUpstream == "" {
+			return nil, fmt.Errorf("mail host %s needs the panel's address", opts.MailHost)
+		}
+		mailRoute = obj{
+			"match":    []obj{{"host": []string{opts.MailHost}, "path": []string{acmeChallengePath}}},
+			"handle":   []obj{proxyTo(opts.PanelUpstream)},
+			"terminal": true,
+		}
+	}
+
+	server := withTimeouts(obj{"routes": routes})
 	servers := obj{"sites": server}
 	if opts.TLSMode == TLSOff {
 		server["listen"] = []string{fmt.Sprintf(":%d", opts.HTTPPort)}
 		server["automatic_https"] = obj{"disable": true}
+		if mailRoute != nil {
+			server["routes"] = append([]obj{mailRoute}, routes...)
+		}
 	} else {
 		server["listen"] = []string{fmt.Sprintf(":%d", opts.HTTPSPort)}
 		if len(ips) > 0 {
@@ -162,7 +244,17 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 					"terminal": true,
 				})
 			}
-			servers["ip_http"] = obj{"listen": []string{fmt.Sprintf(":%d", opts.HTTPPort)}, "routes": redirects}
+			servers["ip_http"] = withTimeouts(obj{"listen": []string{fmt.Sprintf(":%d", opts.HTTPPort)}, "routes": redirects})
+		}
+		// One server on the HTTP port: the mail host's challenges go first
+		// into the existing one, or into one of their own. Caddy adds its
+		// HTTP->HTTPS redirects (and answers its own challenges) there too.
+		if mailRoute != nil {
+			if httpServer, ok := servers["ip_http"].(obj); ok {
+				httpServer["routes"] = append([]obj{mailRoute}, httpServer["routes"].([]obj)...)
+			} else {
+				servers["mail_http"] = withTimeouts(obj{"listen": []string{fmt.Sprintf(":%d", opts.HTTPPort)}, "routes": []obj{mailRoute}})
+			}
 		}
 	}
 
@@ -202,8 +294,49 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 	}, nil
 }
 
+// Timeouts of the HTTP servers. Sites and the panel share a server, so the
+// values must suit both: downloads of large files and uploads of archives
+// (up to 512 MB) on slow links. The idle timeouts are reset on every read
+// or write that makes progress, so only a stalled connection is cut; the
+// overall read limit bounds a client that trickles just enough to never
+// stall. There is deliberately no overall write limit: it would cut off
+// slow downloads of large files.
+const (
+	ServerReadHeaderTimeout = "10s" // all request headers
+	ServerReadIdleTimeout   = "1m"  // a request body that stops arriving
+	ServerReadTimeout       = "1h"  // a whole request (512 MB at ~1.2 Mbit/s)
+	ServerWriteIdleTimeout  = "1m"  // a client that stops reading the response
+	ServerIdleTimeout       = "2m"  // a kept-alive connection between requests
+)
+
+// Timeouts between Caddy and the panel.
+const (
+	ProxyDialTimeout = "5s"
+	// ProxyResponseHeaderTimeout counts from the moment the request,
+	// including its body, has been passed on: the panel needs it to unpack
+	// and publish an archive.
+	ProxyResponseHeaderTimeout = "10m"
+)
+
+func withTimeouts(server obj) obj {
+	server["read_header_timeout"] = ServerReadHeaderTimeout
+	server["read_idle_timeout"] = ServerReadIdleTimeout
+	server["read_timeout"] = ServerReadTimeout
+	server["write_idle_timeout"] = ServerWriteIdleTimeout
+	server["idle_timeout"] = ServerIdleTimeout
+	return server
+}
+
 func proxyTo(upstream string) obj {
-	return obj{"handler": "reverse_proxy", "upstreams": []obj{{"dial": upstream}}}
+	return obj{
+		"handler":   "reverse_proxy",
+		"upstreams": []obj{{"dial": upstream}},
+		"transport": obj{
+			"protocol":                "http",
+			"dial_timeout":            ProxyDialTimeout,
+			"response_header_timeout": ProxyResponseHeaderTimeout,
+		},
+	}
 }
 
 func redirectTo(location string) obj {

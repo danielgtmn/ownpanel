@@ -30,9 +30,7 @@ func newWorld(t *testing.T) world {
 	t.Helper()
 	svc, _, _ := newService(t)
 	ctx := context.Background()
-	if _, err := svc.store.CreateUser(ctx, "bob", "unused", store.RoleMember, false); err != nil {
-		t.Fatal(err)
-	}
+	addUser(t, svc, "bob", store.RoleMember)
 	for _, c := range []struct {
 		a    Actor
 		name string
@@ -97,7 +95,7 @@ func TestPermissionMatrix(t *testing.T) {
 		{"list users", func(w world, a Actor) error { _, err := w.svc.Users(ctx, a); return err },
 			[]Kind{ok, ok, Forbidden, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
 		{"create user", func(w world, a Actor) error {
-			_, err := w.svc.CreateUser(ctx, a, "newbie", "", "member")
+			_, err := w.svc.CreateUser(ctx, a, NewUser{Name: "newbie", Role: "member"})
 			if KindOf(err) == Invalid { // permitted; empty password refused
 				return nil
 			}
@@ -109,15 +107,22 @@ func TestPermissionMatrix(t *testing.T) {
 			[]Kind{ok, ok, Forbidden, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
 		{"list own tokens", func(w world, a Actor) error { _, err := w.svc.Tokens(ctx, a); return err },
 			[]Kind{ok, Forbidden, ok, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
-		{"create token", func(w world, a Actor) error { _, err := w.svc.CreateToken(ctx, a, "t", "read", nil); return err },
+		{"create token", func(w world, a Actor) error { _, err := w.svc.CreateToken(ctx, a, "t", "read", nil, 0); return err },
 			[]Kind{ok, Forbidden, ok, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
 		{"change password", func(w world, a Actor) error {
-			err := w.svc.ChangePassword(ctx, a, "wrong", "irrelevant-password", "")
+			err := w.svc.ChangePassword(ctx, a, "wrong", "irrelevant-password")
 			if KindOf(err) == Invalid { // permitted; the current password is wrong
 				return nil
 			}
 			return err
 		}, []Kind{ok, Forbidden, ok, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
+		{"set own e-mail address", func(w world, a Actor) error { _, err := w.svc.SetOwnEmail(ctx, a, "me@example.org"); return err },
+			[]Kind{ok, Forbidden, ok, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
+		{"set another person's e-mail address", func(w world, a Actor) error {
+			e := "bob@example.org"
+			_, err := w.svc.UpdateUser(ctx, a, 2, UserUpdate{Email: &e})
+			return err
+		}, []Kind{ok, ok, Forbidden, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
 		{"sync", func(w world, a Actor) error { return w.svc.Sync(ctx, a) },
 			[]Kind{ok, ok, Forbidden, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
 	}
@@ -213,13 +218,13 @@ func TestPanelDomainIsReserved(t *testing.T) {
 func TestTokenSitesMustBeVisible(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
-	_, err := w.svc.CreateToken(ctx, bob, "t", "write", []string{"bobsite", "rootsite"})
+	_, err := w.svc.CreateToken(ctx, bob, "t", "write", []string{"bobsite", "rootsite"}, 0)
 	wantKind(t, err, Invalid)
-	_, err = w.svc.CreateToken(ctx, bob, "t", "write", []string{})
+	_, err = w.svc.CreateToken(ctx, bob, "t", "write", []string{}, 0)
 	wantKind(t, err, Invalid)
-	_, err = w.svc.CreateToken(ctx, bob, "t", "admin", nil)
+	_, err = w.svc.CreateToken(ctx, bob, "t", "admin", nil, 0)
 	wantKind(t, err, Invalid)
-	nt, err := w.svc.CreateToken(ctx, bob, " deploy ", "write", []string{"bobsite", "bobsite"})
+	nt, err := w.svc.CreateToken(ctx, bob, " deploy ", "write", []string{"bobsite", "bobsite"}, 0)
 	if err != nil || nt.Name != "deploy" || !reflect.DeepEqual(nt.Sites, []string{"bobsite"}) {
 		t.Fatalf("%+v %v", nt, err)
 	}

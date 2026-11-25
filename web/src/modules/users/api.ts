@@ -5,11 +5,11 @@ export function listUsers(): Promise<User[]> {
   return request<User[]>('/users')
 }
 
-export function createUser(user: { name: string; password: string; role: Role }): Promise<User> {
+export function createUser(user: { name: string; email: string; password: string; role: Role }): Promise<User> {
   return request<User>('/users', { method: 'POST', body: user })
 }
 
-export function updateUser(id: number, changes: { role?: Role; password?: string }): Promise<User> {
+export function updateUser(id: number, changes: { role?: Role; password?: string; email?: string }): Promise<User> {
   return request<User>(`/users/${id}`, { method: 'PUT', body: changes })
 }
 

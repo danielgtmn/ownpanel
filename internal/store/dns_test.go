@@ -9,11 +9,11 @@ import (
 func TestDNSConnectionsCRUD(t *testing.T) {
 	s, _ := open(t)
 	s.Now = func() time.Time { return time.Unix(1_800_000_000, 0) }
-	alice, err := s.CreateUser(ctx, "alice", "h", RoleAdmin, false)
+	alice, err := s.CreateUser(ctx, "alice", "", RoleAdmin, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bob, err := s.CreateUser(ctx, "bob", "h", RoleMember, false)
+	bob, err := s.CreateUser(ctx, "bob", "", RoleMember, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,5 +108,57 @@ func TestDNSConnectionsCRUD(t *testing.T) {
 	}
 	if _, err := s.DNSConnection(ctx, b1.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("connection of a deleted user: %v", err)
+	}
+}
+
+func TestAdoptedDNSZones(t *testing.T) {
+	s, _ := open(t)
+	s.Now = func() time.Time { return time.Unix(1_800_000_000, 0) }
+	alice, err := s.CreateUser(ctx, "alice", "", RoleAdmin, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := s.CreateUser(ctx, "bob", "", RoleMember, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := s.CreateDNSConnection(ctx, DNSConnection{UserID: alice.ID, Provider: "hetzner", Name: "main", Secret: []byte{1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.CreateDNSConnection(ctx, DNSConnection{UserID: bob.ID, Provider: "hetzner", Name: "main", Secret: []byte{2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []struct {
+		conn int64
+		zone string
+		new  bool
+	}{{a.ID, "example.com", true}, {a.ID, "example.com", false}, {a.ID, "alpha.org", true}, {b.ID, "example.com", true}} {
+		created, err := s.AdoptDNSZone(ctx, step.conn, step.zone)
+		if err != nil || created != step.new {
+			t.Fatalf("adopt %d %s: %v %v", step.conn, step.zone, created, err)
+		}
+	}
+	list, err := s.AdoptedDNSZones(ctx, alice.ID)
+	if err != nil || len(list) != 2 || list[0].Zone != "alpha.org" || list[1].Zone != "example.com" ||
+		list[0].ConnectionID != a.ID || !list[0].CreatedAt.Equal(time.Unix(1_800_000_000, 0)) {
+		t.Fatalf("alice's zones: %+v %v", list, err)
+	}
+	if err := s.ReleaseDNSZone(ctx, a.ID, "alpha.org"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReleaseDNSZone(ctx, a.ID, "alpha.org"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("released twice: %v", err)
+	}
+	// Removing a connection forgets its zones.
+	if err := s.DeleteDNSConnection(ctx, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if list, err := s.AdoptedDNSZones(ctx, bob.ID); err != nil || len(list) != 0 {
+		t.Fatalf("bob's zones after removing the connection: %+v %v", list, err)
+	}
+	if list, _ := s.AdoptedDNSZones(ctx, alice.ID); len(list) != 1 || list[0].Zone != "example.com" {
+		t.Fatalf("alice's zones: %+v", list)
 	}
 }

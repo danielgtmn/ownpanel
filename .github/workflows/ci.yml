@@ -1,6 +1,7 @@
 # Checks every change. The job names (go, web, lint, build) are used as
 # required status checks in the branch protection rules; renaming one
-# means updating the rules as well.
+# means updating the rules as well. The action job (the publish GitHub
+# Action against a real ownpaneld) is not required.
 #
 # On pull requests, jobs run only when files they check changed (a skipped
 # job counts as passed for the branch rules). Pushes to main and release,
@@ -32,6 +33,7 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       lint: ${{ steps.filter.outputs.lint }}
       build: ${{ steps.filter.outputs.build }}
+      action: ${{ steps.filter.outputs.action }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,7 +48,7 @@ jobs:
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.sha }}
         run: |
-          all() { for k in go web lint build; do echo "$k=true" >> "$GITHUB_OUTPUT"; done; }
+          all() { for k in go web lint build action; do echo "$k=true" >> "$GITHUB_OUTPUT"; done; }
           if [ "$EVENT" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
             files="$(git diff --name-only "$BEFORE" "$AFTER")"
           elif [ "$EVENT" != "pull_request" ]; then
@@ -67,6 +69,8 @@ jobs:
           go="$(has '(\.go$|^go\.(mod|sum)$)')"
           web="$(has '^web/')"
           lint="$(has '(\.sh$|^deploy/|^\.github/workflows/)')"
+          # The action talks to the API, so API changes test it as well.
+          action="$(has '(^actions/|^internal/(api|panel|deploy)/.*\.go$)')"
           build=false
           if [ "$go" = true ] || [ "$web" = true ] || [ "$(has '^(Makefile|scripts/package\.sh)$')" = true ]; then
             build=true
@@ -76,6 +80,7 @@ jobs:
             echo "web=$web"
             echo "lint=$lint"
             echo "build=$build"
+            echo "action=$action"
           } | tee -a "$GITHUB_OUTPUT"
 
   go:
@@ -203,3 +208,19 @@ jobs:
             ls -l "${RUNNER_TEMP}/ownpaneld-linux-${arch}"
             echo "::endgroup::"
           done
+
+  action:
+    needs: changes
+    if: needs.changes.outputs.action == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Publish action against a real ownpaneld
+        run: actions/publish/publish_test.sh

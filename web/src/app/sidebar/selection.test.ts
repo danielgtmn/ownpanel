@@ -7,8 +7,8 @@ import { visibleModules } from '../modules.ts'
 import { loadPointStates, loadSources } from './data.ts'
 import { ALL, currentRow, familyRows, overviewRows, railEntries, selectTile } from './selection.ts'
 
-const admin: User = { id: 1, name: 'anna', role: 'admin', created_at: '2026-01-01T00:00:00Z' }
-const member: User = { id: 2, name: 'max', role: 'member', created_at: '2026-01-01T00:00:00Z' }
+const admin: User = { id: 1, name: 'anna', email: '', role: 'admin', created_at: '2026-01-01T00:00:00Z' }
+const member: User = { id: 2, name: 'max', email: '', role: 'member', created_at: '2026-01-01T00:00:00Z' }
 
 const sources: DomainSources = {
   sites: [
@@ -86,6 +86,7 @@ describe('route to selection', () => {
       ['Sites', '3'],
       ['DNS', '1'],
       ['Redirects', '1'],
+      ['E-mail', '0'],
     ])
   })
 })
@@ -93,7 +94,7 @@ describe('route to selection', () => {
 describe('rail entries', () => {
   it('shows administrators every entry', () => {
     expect(railEntries(visibleModules(modules, admin), null, null).map((entry) => entry.label)).toEqual([
-      'DNS connections',
+      'DNS domains',
       'Settings',
       'People',
       'Activity',
@@ -103,7 +104,8 @@ describe('rail entries', () => {
 
   it('hides administrator-only entries from members', () => {
     expect(railEntries(visibleModules(modules, member), null, null).map((entry) => entry.label)).toEqual([
-      'DNS connections',
+      'DNS domains',
+      'Settings',
       'Access tokens',
     ])
   })

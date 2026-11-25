@@ -32,7 +32,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 
 func TestFreshInstallIsNotSetUp(t *testing.T) {
 	s, _ := open(t)
-	if _, err := s.CreateUser(ctx, "root", "x", RoleAdmin, true); err != nil {
+	if _, err := s.CreateUser(ctx, "root", "", RoleAdmin, true); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.Settings(ctx)

@@ -52,7 +52,7 @@ func newSettingsEnv(t *testing.T, opts caddy.Options, ips ...netip.Addr) *settin
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	if _, err := st.CreateUser(context.Background(), admin.Name, "unused", store.RoleAdmin, true); err != nil {
+	if _, err := st.CreateUser(context.Background(), admin.Name, "", store.RoleAdmin, true); err != nil {
 		t.Fatal(err)
 	}
 	e := &settingsEnv{web: &fakeWeb{}, st: st, dir: dir, ips: ips}
@@ -99,6 +99,7 @@ func TestSettingsDefaultsAndDetectedAddresses(t *testing.T) {
 			{"8.8.4.4", true}, {"192.168.1.10", false}, {"198.51.100.20", false}, {"2a01:4f8::20", true},
 		},
 		TLSMode: "acme", IPAccess: true,
+		MailBlocklists: []string{"zen.spamhaus.org"}, MailBlocklistsDefault: true, MailJunkScore: 5,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("settings\n got %+v\nwant %+v", got, want)
@@ -126,9 +127,9 @@ func TestSettingsUpdateAppliesLiveAndPersists(t *testing.T) {
 
 	cfg := e.web.last()
 	for _, want := range []string{
-		`{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8600"}]}],"match":[{"host":["panel.example.com"]}],"terminal":true}`,
+		`{"handle":[{"handler":"reverse_proxy","transport":{"dial_timeout":"5s","protocol":"http","response_header_timeout":"10m"},"upstreams":[{"dial":"127.0.0.1:8600"}]}],"match":[{"host":["panel.example.com"]}],"terminal":true}`,
 		// Configured, detected public and loopback addresses serve the panel.
-		`{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8600"}]}],"match":[{"host":["8.8.4.4","8.8.8.8","127.0.0.1","::1","2a01:4f8::1","2a01:4f8::20"]}],"terminal":true}`,
+		`{"handle":[{"handler":"reverse_proxy","transport":{"dial_timeout":"5s","protocol":"http","response_header_timeout":"10m"},"upstreams":[{"dial":"127.0.0.1:8600"}]}],"match":[{"host":["8.8.4.4","8.8.8.8","127.0.0.1","::1","2a01:4f8::1","2a01:4f8::20"]}],"terminal":true}`,
 		`{"email":"ops@example.com","module":"acme"}`,
 		`"subjects":["8.8.4.4","8.8.8.8","127.0.0.1","::1","2a01:4f8::1","2a01:4f8::20"]`,
 	} {
@@ -192,7 +193,7 @@ func TestCompleteSetupRedirectsAddresses(t *testing.T) {
 	if done, _ := e.svc.SetupComplete(ctx); !done {
 		t.Fatal("setup must be complete")
 	}
-	if !strings.Contains(e.web.last(), `{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8600"}]}],"match":[{"host":["8.8.4.4","127.0.0.1","::1","2a01:4f8::20"]}]`) {
+	if !strings.Contains(e.web.last(), `{"handle":[{"handler":"reverse_proxy","transport":{"dial_timeout":"5s","protocol":"http","response_header_timeout":"10m"},"upstreams":[{"dial":"127.0.0.1:8600"}]}],"match":[{"host":["8.8.4.4","127.0.0.1","::1","2a01:4f8::20"]}]`) {
 		t.Fatalf("without a domain the addresses serve the panel: %s", e.web.last())
 	}
 

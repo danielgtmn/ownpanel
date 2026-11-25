@@ -76,6 +76,7 @@ export function PathRedirectsSection({ site, redirects, onChanged }: Props) {
       {redirects.status === 'ready' && redirects.data.length === 0 ? (
         hasDomains ? (
           <EmptyState
+            inSection
             title="No redirects yet"
             description="Moved a page? Add a redirect so old links keep working."
             action={addButton}

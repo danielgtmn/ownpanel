@@ -1,14 +1,21 @@
 import { errorMessage } from '../../shared/api/index.ts'
 import type { Resource } from '../../shared/hooks/index.ts'
 import { hrefFor } from '../../shared/routing/index.ts'
+import { Button } from '@ui-sdk/react/button'
+import { connectAccountHref } from '../../shared/routing/index.ts'
 import { EmptyState, ErrorState, LoadingState, Section } from '../../shared/ui/index.ts'
 import type { ZoneList } from './types.ts'
 import { describeZones } from './zones.ts'
 
-export function ZonesSection({ zones, hasConnections }: { zones: Resource<ZoneList>; hasConnections: boolean }) {
+type Props = { zones: Resource<ZoneList>; hasAccounts: boolean; onAdd: () => void }
+
+export function ZonesSection({ zones, hasAccounts, onAdd }: Props) {
   const view = zones.status === 'ready' ? describeZones(zones.data) : null
   return (
-    <Section title="Domains" description="Pick a domain to see and change its DNS records.">
+    <Section
+      title="Domains"
+      description="The domains you manage here, and those your sites, redirects or e-mail use. Pick one to see and change its DNS records."
+    >
       {zones.status === 'loading' ? <LoadingState label="Loading your domains…" /> : null}
       {zones.status === 'error' ? (
         <ErrorState title="Couldn't load your domains" message={errorMessage(zones.error)} onRetry={zones.retry} />
@@ -22,11 +29,19 @@ export function ZonesSection({ zones, hasConnections }: { zones: Resource<ZoneLi
         : null}
       {view && view.rows.length === 0 && view.notices.length === 0 ? (
         <EmptyState
+          inSection
           title="No domains yet"
           description={
-            hasConnections
-              ? 'The connected accounts don\'t have any domains yet.'
-              : 'Connect Hetzner above to see your domains here.'
+            hasAccounts
+              ? 'Add a domain from your connected accounts, or create a new one.'
+              : 'Connect the account at the company that manages your domains first.'
+          }
+          action={
+            hasAccounts ? (
+              <Button onClick={onAdd}>Add domain</Button>
+            ) : (
+              <Button onClick={() => (window.location.hash = connectAccountHref())}>Connect an account</Button>
+            )
           }
         />
       ) : null}
@@ -41,6 +56,7 @@ export function ZonesSection({ zones, hasConnections }: { zones: Resource<ZoneLi
                 <ul className="record-facts">
                   <li>{row.connectionName}</li>
                   {row.readOnly ? <li>Read only</li> : null}
+                  {row.usedBy.length > 0 ? <li>In use</li> : null}
                 </ul>
               </div>
             </li>

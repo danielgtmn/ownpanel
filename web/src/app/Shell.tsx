@@ -13,8 +13,10 @@ import { hrefFor, navigate, useRoute } from '../shared/routing/index.ts'
 import { useSession } from '../shared/session/index.ts'
 import { EmptyState, MenuIcon } from '../shared/ui/index.ts'
 import { ChangePasswordDialog } from './ChangePasswordDialog.tsx'
+import { EmailAddressDialog } from './EmailAddressDialog.tsx'
 import { defaultModule, moduleFor, visibleModules } from './modules.ts'
-import { FamilyPage } from './sidebar/FamilyPage.tsx'
+import { lazyPage } from './lazyPage.ts'
+import { ModulePage, PageFrame } from './ModulePage.tsx'
 import {
   ALL,
   currentRow,
@@ -26,7 +28,12 @@ import {
 } from './sidebar/selection.ts'
 import { Sidebar, type SidebarProps } from './sidebar/Sidebar.tsx'
 import './sidebar/sidebar.css'
-import { useDomainData } from './sidebar/useDomainData.ts'
+import { useDomainData, type DomainData } from './sidebar/useDomainData.ts'
+
+// The overview of one domain family is a page of its own, loaded when it's opened.
+const FamilyPage = lazyPage<{ domain: string; data: DomainData; allHref: string }>(() =>
+  import('./sidebar/FamilyPage.tsx').then((page) => page.FamilyPage),
+)
 
 export function Shell() {
   const route = useRoute()
@@ -37,6 +44,7 @@ export function Shell() {
   const phone = useMediaQuery('(max-width: 760px)')
   const [menuOpen, setMenuOpen] = useState(false)
   const [changingPassword, setChangingPassword] = useState(false)
+  const [changingEmail, setChangingEmail] = useState(false)
   const [lastTile, setLastTile] = useState(ALL)
   const mainRef = useRef<HTMLElement>(null)
   const firstRender = useRef(true)
@@ -98,12 +106,15 @@ export function Shell() {
       placeholders: tile !== ALL && selected !== undefined,
     },
     onChangePassword: () => setChangingPassword(true),
+    onChangeEmail: () => setChangingEmail(true),
   }
 
   const content = familyDomain ? (
-    <FamilyPage key={familyDomain} domain={familyDomain} data={data} allHref={allHref} />
+    <PageFrame key={familyDomain}>
+      <FamilyPage domain={familyDomain} data={data} allHref={allHref} />
+    </PageFrame>
   ) : match ? (
-    <match.module.component key={match.module.id} segments={match.rest} />
+    <ModulePage key={match.module.id} module={match.module} segments={match.rest} />
   ) : segments.length > 0 ? (
     <EmptyState
       title="Page not found"
@@ -140,6 +151,7 @@ export function Shell() {
         <div className="shell-content">{content}</div>
       </main>
       <ChangePasswordDialog open={changingPassword} onOpenChange={setChangingPassword} />
+      <EmailAddressDialog open={changingEmail} onOpenChange={setChangingEmail} />
     </div>
   )
 }

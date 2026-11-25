@@ -1,6 +1,8 @@
 package panel
 
 import (
+	"github.com/danielgtmn/sesam"
+
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
@@ -77,10 +79,46 @@ func newService(t *testing.T) (*Service, *fakeWeb, string) {
 	t.Helper()
 	svc, web, sites := newEmptyService(t)
 	// The first user gets id 1, which the admin actor refers to.
-	if _, err := svc.store.CreateUser(context.Background(), admin.Name, "unused", store.RoleAdmin, true); err != nil {
+	addUser(t, svc, admin.Name, store.RoleAdmin)
+	return svc, web, sites
+}
+
+// addUser adds a user with a sign-in (password "<name>-password") straight
+// to the store, without an actor.
+func addUser(t *testing.T, svc *Service, name, role string) store.User {
+	t.Helper()
+	ctx := context.Background()
+	au, err := svc.auth.CreateUser(ctx, sesam.NewUser{Username: name})
+	if err != nil {
 		t.Fatal(err)
 	}
-	return svc, web, sites
+	if err := svc.pw.SetPasswordHash(ctx, au.ID, userHash(t, name+"-password")); err != nil {
+		t.Fatal(err)
+	}
+	u, err := svc.store.CreateUser(ctx, name, au.ID, role, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+// userHashes keeps one hash per password for the whole test run: hashing
+// is slow on purpose, and the permission matrices build hundreds of
+// services. The hash has the format the panel used before sesam, which
+// sesam accepts.
+var userHashes sync.Map
+
+func userHash(t *testing.T, pw string) string {
+	t.Helper()
+	if h, ok := userHashes.Load(pw); ok {
+		return h.(string)
+	}
+	h, err := mailboxHashSlots.Hash(pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userHashes.Store(pw, h)
+	return h
 }
 
 // newEmptyService has no users yet, like a fresh install.
@@ -447,6 +485,96 @@ func TestRunRetriesQuicklyWhileUnhealthy(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not stop after cancel")
+	}
+}
+
+// syncLog captures the log lines of Run for one test.
+type syncLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *syncLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *syncLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+func captureLog(t *testing.T) *syncLog {
+	t.Helper()
+	l := &syncLog{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(l, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return l
+}
+
+func TestRunWaitsQuietlyForWebServerAtStartup(t *testing.T) {
+	logs := captureLog(t)
+	svc, web, _ := newService(t)
+	svc.startupGrace = time.Minute
+	svc.startupRetry = time.Millisecond
+	web.calls = make(chan struct{}, 64)
+	web.setFail(errors.New("dial unix caddy-admin.sock: no such file or directory"))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		svc.Run(ctx, time.Hour)
+		close(done)
+	}()
+	for i := 0; i < 3; i++ {
+		select {
+		case <-web.calls:
+		case <-time.After(5 * time.Second):
+			t.Fatal("no quick retry at startup")
+		}
+	}
+	web.setFail(nil)
+	// Once a sync succeeds, the next one is an hour away: the calls stop.
+	for quiet := false; !quiet; {
+		select {
+		case <-web.calls:
+		case <-time.After(200 * time.Millisecond):
+			quiet = true
+		}
+	}
+	cancel()
+	<-done
+	if out := logs.String(); strings.Contains(out, "not in sync") || strings.Contains(out, "back in sync") {
+		t.Fatalf("startup wait was not quiet:\n%s", out)
+	}
+}
+
+func TestRunWarnsWhenWebServerStaysDown(t *testing.T) {
+	logs := captureLog(t)
+	svc, web, _ := newService(t)
+	svc.startupGrace = 0
+	svc.unhealthyRetry = time.Millisecond
+	web.calls = make(chan struct{}, 64)
+	web.setFail(errors.New("down"))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		svc.Run(ctx, time.Hour)
+		close(done)
+	}()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-web.calls:
+		case <-time.After(5 * time.Second):
+			t.Fatal("no retry while unhealthy")
+		}
+	}
+	cancel()
+	<-done
+	if out := logs.String(); !strings.Contains(out, "web server not in sync") {
+		t.Fatalf("no warning once the startup wait is over:\n%s", out)
 	}
 }
 

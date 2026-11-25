@@ -103,11 +103,31 @@ func TestUpdatesOverview(t *testing.T) {
 	if !info.UpdateAvailable || info.Status.State != "idle" || info.Auto.Mode != "off" {
 		t.Fatalf("%s", rec.Body)
 	}
-	for _, key := range []string{`"installed":`, `"available":`, `"update_available":`, `"auto":`, `"status":`, `"supported":`,
+	for _, key := range []string{`"checked_at":`, `"check_error":`, `"installed":`, `"available":`, `"update_available":`, `"auto":`, `"status":`, `"supported":`,
 		`"published_at":`, `"notes_url":`, `"started_at":`, `"finished_at":`, `"from":`, `"to":`, `"step":`, `"message":`, `"window":`} {
 		if !strings.Contains(rec.Body.String(), key) {
 			t.Errorf("answer lacks %s: %s", key, rec.Body)
 		}
+	}
+}
+
+func TestCheckForUpdatesEndpoint(t *testing.T) {
+	u := newUpdatesEnv(t, "v1.1.0", "stable", true)
+	rec := u.as("POST", "/api/updates/check", "")
+	if rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	info := decode[panel.UpdateInfo](t, rec)
+	if !info.UpdateAvailable || info.Available.Stable == nil || info.Available.Stable.Version != "v1.2.0" || info.CheckFailed {
+		t.Fatalf("%s", rec.Body)
+	}
+	checked, err := time.Parse(time.RFC3339, info.CheckedAt)
+	if err != nil || time.Since(checked) > time.Minute {
+		t.Fatalf("checked_at %q: %v", info.CheckedAt, err)
+	}
+	// GET tells the same time.
+	if got := decode[panel.UpdateInfo](t, u.as("GET", "/api/updates", "")); got.CheckedAt != info.CheckedAt {
+		t.Fatalf("GET checked_at %q, check %q", got.CheckedAt, info.CheckedAt)
 	}
 }
 
@@ -140,12 +160,18 @@ func TestUpdatesPermissions(t *testing.T) {
 	if rec := u.do(req{method: "GET", path: "/api/updates"}); rec.Code != 401 {
 		t.Fatalf("anonymous: %d", rec.Code)
 	}
+	if rec := u.do(req{method: "POST", path: "/api/updates/check"}); rec.Code != 401 {
+		t.Fatalf("anonymous check: %d", rec.Code)
+	}
 	for name, r := range map[string]req{
-		"member":          {method: "POST", path: "/api/updates", body: `{"channel":"stable"}`, cookie: bob, csrf: true},
-		"read token":      {method: "POST", path: "/api/updates", body: `{"channel":"stable"}`, token: readTok},
-		"site token":      {method: "POST", path: "/api/updates", body: `{"channel":"stable"}`, token: siteTok},
-		"member get":      {method: "GET", path: "/api/updates", cookie: bob},
-		"read token auto": {method: "PUT", path: "/api/updates/auto", body: `{"mode":"off","window":"03:00-05:00"}`, token: readTok},
+		"member":           {method: "POST", path: "/api/updates", body: `{"channel":"stable"}`, cookie: bob, csrf: true},
+		"read token":       {method: "POST", path: "/api/updates", body: `{"channel":"stable"}`, token: readTok},
+		"site token":       {method: "POST", path: "/api/updates", body: `{"channel":"stable"}`, token: siteTok},
+		"member get":       {method: "GET", path: "/api/updates", cookie: bob},
+		"read token auto":  {method: "PUT", path: "/api/updates/auto", body: `{"mode":"off","window":"03:00-05:00"}`, token: readTok},
+		"member check":     {method: "POST", path: "/api/updates/check", cookie: bob, csrf: true},
+		"read token check": {method: "POST", path: "/api/updates/check", token: readTok},
+		"site token check": {method: "POST", path: "/api/updates/check", token: siteTok},
 	} {
 		if rec := u.do(r); rec.Code != 403 {
 			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
@@ -157,6 +183,12 @@ func TestUpdatesPermissions(t *testing.T) {
 	// Without the CSRF header a session cannot ask for an update.
 	if rec := u.do(req{method: "POST", path: "/api/updates", body: `{"channel":"stable"}`, cookie: u.cookie}); rec.Code != 403 {
 		t.Fatalf("no csrf: %d", rec.Code)
+	}
+	if rec := u.do(req{method: "POST", path: "/api/updates/check", cookie: u.cookie}); rec.Code != 403 {
+		t.Fatalf("check without csrf: %d", rec.Code)
+	}
+	if rec := u.do(req{method: "POST", path: "/api/updates/check", token: writeTok}); rec.Code != 200 {
+		t.Fatalf("check with write token: %d %s", rec.Code, rec.Body)
 	}
 	// An unrestricted write token of an admin can.
 	if rec := u.do(req{method: "POST", path: "/api/updates", body: `{"channel":"stable"}`, token: writeTok}); rec.Code != 202 {

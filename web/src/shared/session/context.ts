@@ -6,6 +6,7 @@ export type Session = {
   isAdmin: boolean
   refresh: () => Promise<void>
   signOut: () => Promise<void>
+  signOutEverywhere: () => Promise<void>
 }
 
 export const SessionContext = createContext<Session | null>(null)

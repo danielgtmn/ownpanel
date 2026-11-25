@@ -7,14 +7,19 @@ import {
   getSessionState,
   loadSession,
   markSetupComplete,
+  PASSWORD_RESET_NOTICE,
+  requestPasswordReset,
+  resetPassword,
+  setOwnEmail,
   signIn,
+  signOutEverywhereNow,
   signOutNow,
   SIGNED_OUT_NOTICE,
   toSessionState,
 } from './store.ts'
 import type { User } from './types.ts'
 
-const anna: User = { id: 1, name: 'anna', role: 'admin', created_at: '2026-01-01T00:00:00Z' }
+const anna: User = { id: 1, name: 'anna', email: '', role: 'admin', created_at: '2026-01-01T00:00:00Z' }
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -42,6 +47,12 @@ describe('toSessionState', () => {
     expect(toSessionState({ setup_required: false, user: null, via: null })).toEqual({
       status: 'signedOut',
       notice: null,
+      passwordReset: false,
+    })
+    expect(toSessionState({ setup_required: false, user: null, via: null, password_reset: true })).toEqual({
+      status: 'signedOut',
+      notice: null,
+      passwordReset: true,
     })
     expect(toSessionState({ setup_required: false, user: anna, via: 'session' })).toEqual({
       status: 'signedIn',
@@ -67,7 +78,7 @@ describe('session bootstrap', () => {
   it('shows the sign-in screen when nobody is signed in', async () => {
     mockFetch(json({ setup_required: false, user: null, via: null }))
     await loadSession()
-    expect(getSessionState()).toEqual({ status: 'signedOut', notice: null })
+    expect(getSessionState()).toEqual({ status: 'signedOut', notice: null, passwordReset: false })
   })
 
   it('signs in when the server knows the person', async () => {
@@ -79,7 +90,7 @@ describe('session bootstrap', () => {
   it('keeps a notice for the sign-in screen', async () => {
     mockFetch(json({ setup_required: false, user: null, via: null }))
     await loadSession('Please sign in.')
-    expect(getSessionState()).toEqual({ status: 'signedOut', notice: 'Please sign in.' })
+    expect(getSessionState()).toEqual({ status: 'signedOut', notice: 'Please sign in.', passwordReset: false })
   })
 })
 
@@ -121,7 +132,17 @@ describe('signing in and out', () => {
     const fetchMock = mockFetch(new Response(null, { status: 204 }))
     await signOutNow()
     expect(call(fetchMock, 0)[0]).toBe('/api/logout')
-    expect(getSessionState()).toEqual({ status: 'signedOut', notice: null })
+    expect(getSessionState()).toEqual({ status: 'signedOut', notice: null, passwordReset: false })
+  })
+
+  it('signs out everywhere', async () => {
+    mockFetch(json(anna))
+    await signIn('anna', 'correct horse battery')
+    const fetchMock = mockFetch(new Response(null, { status: 204 }))
+    await signOutEverywhereNow()
+    expect(call(fetchMock, 0)[0]).toBe('/api/account/logout-everywhere')
+    expect(call(fetchMock, 0)[1].method).toBe('POST')
+    expect(getSessionState()).toEqual({ status: 'signedOut', notice: null, passwordReset: false })
   })
 })
 
@@ -131,7 +152,7 @@ describe('an ended login', () => {
     await signIn('anna', 'correct horse battery')
     mockFetch(json({ error: 'sign in first' }, 401))
     await request('/sites').catch(() => undefined)
-    expect(getSessionState()).toEqual({ status: 'signedOut', notice: SIGNED_OUT_NOTICE })
+    expect(getSessionState()).toEqual({ status: 'signedOut', notice: SIGNED_OUT_NOTICE, passwordReset: false })
   })
 
   it('ignores a 401 when nobody is signed in', async () => {
@@ -166,7 +187,7 @@ describe('changePassword', () => {
     await signIn('anna', 'correct horse battery')
     mockFetch(json({ error: 'sign in first' }, 401), json({ setup_required: false, user: null, via: null }))
     await expect(changePassword('x', 'new password 2')).rejects.toThrow()
-    expect(getSessionState()).toEqual({ status: 'signedOut', notice: SIGNED_OUT_NOTICE })
+    expect(getSessionState()).toEqual({ status: 'signedOut', notice: SIGNED_OUT_NOTICE, passwordReset: false })
   })
 })
 
@@ -194,5 +215,34 @@ describe('setup progress', () => {
     await completeSetup('abc-123', 'anna', 'correct horse battery')
     markSetupComplete()
     expect(getSessionState()).toEqual({ status: 'signedIn', user: anna, setupComplete: true })
+  })
+})
+
+describe('forgotten passwords and e-mail addresses', () => {
+  it('asks for a link with the address', async () => {
+    const fn = mockFetch(new Response(null, { status: 204 }))
+    await requestPasswordReset('anna@example.com')
+    const [url, init] = call(fn, 0)
+    expect(url).toMatch(/\/api\/password-reset$/)
+    expect(JSON.parse(String(init.body))).toEqual({ email: 'anna@example.com' })
+  })
+
+  it('shows the sign-in screen with a notice after a new password', async () => {
+    const fn = mockFetch(
+      new Response(null, { status: 204 }),
+      json({ setup_required: false, user: null, via: null, password_reset: true }),
+    )
+    await resetPassword('token-1', 'new-password-1')
+    expect(JSON.parse(String(call(fn, 0)[1].body))).toEqual({ token: 'token-1', password: 'new-password-1' })
+    expect(getSessionState()).toEqual({ status: 'signedOut', notice: PASSWORD_RESET_NOTICE, passwordReset: true })
+  })
+
+  it('keeps the signed-in person up to date after changing their address', async () => {
+    mockFetch(json({ setup_required: false, setup_complete: true, user: anna, via: 'session' }))
+    await loadSession()
+    const changed = { ...anna, email: 'anna@example.com' }
+    mockFetch(json(changed))
+    await setOwnEmail('anna@example.com')
+    expect(getSessionState()).toMatchObject({ status: 'signedIn', user: changed })
   })
 })

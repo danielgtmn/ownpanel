@@ -3,3 +3,8 @@
   max-width: 44ch;
   font-size: 0.875rem;
 }
+
+/* Long addresses wrap instead of widening the row on a phone. */
+.record-email {
+  overflow-wrap: anywhere;
+}

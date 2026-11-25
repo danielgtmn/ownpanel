@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildFamilies, familyStatus, familySummary, initialsOf, type DomainSources } from './families.ts'
+import { attentionText, buildFamilies, familyStatus, familySummary, initialsOf, type DomainSources } from './families.ts'
 import { registrableDomain } from './suffix.ts'
 
 const empty: DomainSources = { sites: [], zones: [], redirects: [] }
@@ -143,12 +143,63 @@ describe('labels', () => {
       ],
       zones: [{ connectionId: 1, connectionName: 'H', name: 'example.com' }],
     })
-    expect(familySummary(family)).toBe('1 site · 2 redirects · DNS connected')
+    expect(familySummary(family)).toBe('1 site · 2 redirects · DNS managed here')
   })
 
   it('uses two letters of the name for a tile', () => {
     expect(initialsOf('example.com')).toBe('Ex')
     expect(initialsOf('shop.co.uk')).toBe('Sh')
     expect(initialsOf('4u.de')).toBe('4u')
+  })
+})
+
+describe('attentionText', () => {
+  const [family] = buildFamilies({
+    ...empty,
+    sites: [
+      { name: 'blog', domains: ['example.com', 'www.example.com'], live: false },
+      { name: 'shop', domains: ['shop.example.com'], live: true },
+    ],
+  })
+
+  it('names what needs to be done', () => {
+    expect(attentionText(family, { 'example.com': 'no_record', 'www.example.com': 'points_here' })).toBe(
+      "The site blog has no content yet, and example.com doesn't point to this server yet.",
+    )
+    expect(
+      attentionText(family, { 'example.com': 'no_record', 'www.example.com': 'points_elsewhere', 'shop.example.com': 'points_here' }),
+    ).toBe("The site blog has no content yet, and 2 addresses don't point to this server yet.")
+  })
+
+  it('names a mail domain that waits for its records', () => {
+    const [mail] = buildFamilies({ ...empty, mailDomains: [{ domain: 'example.org', active: false }] })
+    expect(attentionText(mail, {})).toBe('e-mail for example.org waits for its mail records.')
+  })
+
+  it('is empty when nothing needs attention', () => {
+    const [live] = buildFamilies({ ...empty, sites: [{ name: 'blog', domains: ['example.com'], live: true }] })
+    expect(attentionText(live, { 'example.com': 'points_here' })).toBe('')
+  })
+})
+
+describe('families with e-mail', () => {
+  it('makes a family for a mail domain without a site', () => {
+    const families = buildFamilies({ ...empty, mailDomains: [{ domain: 'Shop.Example.org.', active: false }] })
+    expect(families.map((family) => family.domain)).toEqual(['example.org'])
+    expect(families[0].mailDomains).toEqual([{ domain: 'shop.example.org', active: false }])
+    expect(familySummary(families[0])).toBe('E-mail · DNS managed elsewhere')
+  })
+
+  it('needs attention while a mail domain waits for its records, and is fine once it receives mail', () => {
+    const [waiting] = buildFamilies({ ...empty, mailDomains: [{ domain: 'example.org', active: false }] })
+    const [active] = buildFamilies({ ...empty, mailDomains: [{ domain: 'example.org', active: true }] })
+    expect(familyStatus(waiting, {})).toBe('attention')
+    expect(familyStatus(active, {})).toBe('ok')
+  })
+
+  it('works without mail data', () => {
+    const [family] = buildFamilies({ ...empty, zones: [{ connectionId: 1, connectionName: 'x', name: 'example.org' }] })
+    expect(family.mailDomains).toEqual([])
+    expect(familyStatus(family, {})).toBe('idle')
   })
 })

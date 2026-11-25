@@ -18,11 +18,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/danielgtmn/sesam"
+	"github.com/danielgtmn/sesam/plugins/password"
+
 	"github.com/danielgtmn/ownpanel/internal/caddy"
 	"github.com/danielgtmn/ownpanel/internal/deploy"
 	"github.com/danielgtmn/ownpanel/internal/dns"
-	"github.com/danielgtmn/ownpanel/internal/secrets"
 	"github.com/danielgtmn/ownpanel/internal/store"
+	"github.com/danielgtmn/panzerschrank"
 )
 
 // WebServer is what the service needs from the web server.
@@ -45,7 +48,7 @@ type Config struct {
 
 	// Secrets encrypts the tokens of DNS connections. Without it no DNS
 	// connection can be added or used.
-	Secrets *secrets.Box
+	Secrets *panzerschrank.Box
 	// ServerIPs are the server's public addresses from -server-ip, which
 	// domains should point at (see ParseServerIPs). Set, they override (and
 	// lock) the addresses from the settings.
@@ -70,6 +73,21 @@ type Config struct {
 	// Updates says where new releases come from and where the root-side
 	// updater picks up requests. Without Dir, updates are not offered.
 	Updates UpdatesConfig
+
+	// Mail is the mail service's admin socket (-mail-admin); nil means no
+	// mail service is set up: mail domains, mailboxes and aliases are still
+	// stored, but nothing is pushed. *config.Client satisfies it.
+	Mail MailService
+	// MailHost, when set, comes from -mail-host: it overrides (and locks)
+	// the setting.
+	MailHost string
+	// MailTLSDir keeps the ACME account and the certificates of the mail
+	// host; "" means none are obtained (tests).
+	MailTLSDir string
+	// MXResolver looks up MX records to activate mail domains; nil means
+	// Resolver if it can, else (only when Resolver is nil too) asking the
+	// authoritative nameservers.
+	MXResolver dns.MXResolver
 }
 
 // Service owns every use case of the panel.
@@ -80,9 +98,14 @@ type Service struct {
 	opts          caddy.Options
 	setupCodeFile string
 
-	now     func() time.Time
-	limiter *limiter
-	uploads uploads
+	now func() time.Time
+	// auth signs people in (users, passwords, sessions, reset links; see
+	// signin.go), pw is its password plugin. passwordChecks bounds the
+	// password checks in flight.
+	auth           *sesam.Auth
+	pw             *password.Plugin
+	passwordChecks chan struct{}
+	uploads        uploads
 
 	// syncMu serializes Sync so concurrent changes cannot load configs out
 	// of order.
@@ -90,8 +113,12 @@ type Service struct {
 	// unhealthyRetry is how soon Run retries while the web server is out of
 	// sync. A field so tests can lower it.
 	unhealthyRetry time.Duration
+	// startupGrace is how long Run waits quietly at startup for the web
+	// server, retrying every startupRetry. Fields so tests can lower them.
+	startupGrace time.Duration
+	startupRetry time.Duration
 
-	secrets     *secrets.Box
+	secrets     *panzerschrank.Box
 	serverIPs   []netip.Addr
 	newProvider func(provider, token string) (dns.Provider, error)
 	resolver    dns.Resolver
@@ -106,6 +133,20 @@ type Service struct {
 	certAddr      string
 
 	updates *updater
+
+	mail         MailService
+	mailHostFlag string
+	mx           dns.MXResolver
+	certs        *mailCerts
+	// mailSyncMu serializes mailSync, independent of syncMu.
+	mailSyncMu sync.Mutex
+	// mailHealth caches the outbound port check of MailHealth.
+	mailHealth mailHealthState
+	// setupHosts knows which names for setting up mail programs point
+	// here (mailsetup.go).
+	setupHosts setupHostsState
+	// importRate limits imports per person (mailtransfer.go).
+	importRate importRate
 }
 
 // New returns a Service. It rejects invalid web server options up front, and
@@ -121,8 +162,10 @@ func New(cfg Config) (*Service, error) {
 		opts:           cfg.Caddy,
 		setupCodeFile:  cfg.SetupCodeFile,
 		now:            time.Now,
-		limiter:        newLimiter(5, 15*time.Minute),
+		passwordChecks: make(chan struct{}, maxPasswordChecks),
 		unhealthyRetry: 2 * time.Second,
+		startupGrace:   15 * time.Second,
+		startupRetry:   250 * time.Millisecond,
 		secrets:        cfg.Secrets,
 		serverIPs:      slices.Clone(cfg.ServerIPs),
 		newProvider:    cfg.NewDNSProvider,
@@ -132,16 +175,32 @@ func New(cfg Config) (*Service, error) {
 		certRoots:      cfg.CertRoots,
 		certAddr:       cfg.CertCheckAddr,
 		updates:        newUpdater(cfg.Updates),
+		mail:           cfg.Mail,
+		mx:             cfg.MXResolver,
+		certs:          newMailCerts(cfg.MailTLSDir, cfg.Caddy.TLSMode),
+	}
+	if cfg.MailHost != "" {
+		d, err := store.NormalizeDomain(cfg.MailHost)
+		if err != nil {
+			return nil, fmt.Errorf("mail host: %w", err)
+		}
+		s.mailHostFlag = d
 	}
 	if s.interfaces == nil {
 		s.interfaces = DetectAddresses
 	}
-	s.limiter.now = func() time.Time { return s.now() }
 	if s.newProvider == nil {
 		s.newProvider = DefaultDNSProvider
 	}
 	if s.resolver == nil {
 		s.resolver = dns.NewAuthoritative(net.DefaultResolver)
+	}
+	if s.mx == nil {
+		if mx, ok := s.resolver.(dns.MXResolver); ok {
+			s.mx = mx
+		} else {
+			s.mx = noMX{}
+		}
 	}
 	if d := cfg.Caddy.PanelDomain; d != "" && s.store != nil {
 		sites, err := s.store.Sites(context.Background())
@@ -154,9 +213,23 @@ func New(cfg Config) (*Service, error) {
 			}
 		}
 	}
+	if d := s.mailHostFlag; d != "" && s.store != nil {
+		sites, err := s.store.Sites(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		for _, site := range sites {
+			if slices.Contains(site.Domains, d) {
+				return nil, fmt.Errorf("mail host %s is already used by site %q", d, site.Name)
+			}
+		}
+	}
 	if s.store != nil {
 		if err := s.loadSettings(context.Background()); err != nil {
 			return nil, err
+		}
+		if err := s.initAuth(context.Background()); err != nil {
+			return nil, fmt.Errorf("sign-in: %w", err)
 		}
 	}
 	return s, nil
@@ -244,6 +317,9 @@ func (s *Service) SaveSite(ctx context.Context, a Actor, name string, domains []
 	}
 	if d := s.PanelDomain(); d != "" && slices.Contains(clean, d) {
 		return Site{}, errorf(Invalid, "domain %q is the address of the panel itself", d)
+	}
+	if d := s.MailHost(); d != "" && slices.Contains(clean, d) {
+		return Site{}, errorf(Invalid, "domain %q is the name of the mail server", d)
 	}
 
 	existing, err := s.store.Site(ctx, name)
@@ -400,7 +476,11 @@ func (s *Service) sync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	cfg, err := caddy.Build(s.caddyOptions(), sites, redirects...)
+	opts := s.caddyOptions()
+	if err := s.mailSetupCaddy(ctx, &opts, all, redirects); err != nil {
+		return err
+	}
+	cfg, err := caddy.Build(opts, sites, redirects...)
 	if err != nil {
 		return err
 	}
@@ -424,11 +504,25 @@ func (s *Service) syncSaved(ctx context.Context) error {
 
 // Run syncs once, then every interval until ctx is done, so drift (e.g. a
 // restarted Caddy) heals by itself. While out of sync it retries sooner.
+// The mail service is kept in sync next to it, independently (runMail).
+//
+// At startup the web server may not be listening yet: systemd starts Caddy
+// first, but Caddy opens its admin socket a moment after it counts as
+// started. Until the first successful sync, for up to startupGrace, Run
+// retries often and quietly; only then does it warn.
 func (s *Service) Run(ctx context.Context, interval time.Duration) {
+	go s.runMail(ctx, interval)
 	healthy := true
+	starting := true
+	graceEnd := time.Now().Add(s.startupGrace)
 	for {
 		err := s.Sync(ctx, System)
+		if err == nil || !time.Now().Before(graceEnd) {
+			starting = false
+		}
 		switch {
+		case err != nil && ctx.Err() == nil && starting:
+			slog.Debug("web server not ready yet", "err", err)
 		case err != nil && ctx.Err() == nil:
 			slog.Warn("web server not in sync", "err", err)
 			healthy = false
@@ -437,7 +531,10 @@ func (s *Service) Run(ctx context.Context, interval time.Duration) {
 			healthy = true
 		}
 		wait := interval
-		if !healthy {
+		switch {
+		case starting:
+			wait = s.startupRetry
+		case !healthy:
 			wait = s.unhealthyRetry
 		}
 		select {

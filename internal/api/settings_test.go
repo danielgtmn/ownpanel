@@ -74,7 +74,9 @@ func newSettingsEnv(t *testing.T, flagDomain string) (*env, *failingWeb) {
 }
 
 var settingsKeys = []string{"panel_domain", "panel_domain_locked", "server_ips", "server_ips_locked", "detected_ips",
-	"acme_email", "acme_email_locked", "tls_mode", "setup_complete", "ip_access"}
+	"acme_email", "acme_email_locked", "tls_mode", "setup_complete", "ip_access",
+	"mail_host", "mail_host_locked", "postmaster_address",
+	"mail_blocklists", "mail_blocklists_default", "mail_junk_score", "mail_greylisting"}
 
 type settingsBody struct {
 	PanelDomain       string   `json:"panel_domain"`
@@ -98,7 +100,7 @@ func TestSettingsRoutesJSONShapes(t *testing.T) {
 		return json.RawMessage(rec.Body.Bytes())
 	}
 	before := session()
-	wantKeys(t, before, "setup_required", "setup_complete", "user", "via")
+	wantKeys(t, before, "setup_required", "setup_complete", "user", "via", "password_reset")
 	if !strings.Contains(string(before), `"setup_required":true,"setup_complete":false`) {
 		t.Fatalf("fresh install: %s", before)
 	}
@@ -260,5 +262,52 @@ func TestIPAccessThroughProxy(t *testing.T) {
 				t.Fatalf("missing CSRF header: %d", rec.Code)
 			}
 		})
+	}
+}
+
+func TestSettingsRoutesSpamChecks(t *testing.T) {
+	e, _ := newSettingsEnv(t, "")
+	e.cookie = e.setup("root", "root-password-1")
+	type spam struct {
+		Blocklists []string `json:"mail_blocklists"`
+		Default    bool     `json:"mail_blocklists_default"`
+		JunkScore  float64  `json:"mail_junk_score"`
+		Grey       bool     `json:"mail_greylisting"`
+	}
+	rec := e.as("GET", "/api/settings", "")
+	if s := decode[spam](t, rec); !s.Default || len(s.Blocklists) != 1 || s.Blocklists[0] != "zen.spamhaus.org" || s.JunkScore != 5 || s.Grey {
+		t.Fatalf("defaults: %s", rec.Body)
+	}
+	rec = e.as("PUT", "/api/settings", `{"mail_blocklists":["Bl.Example.org.","zen.spamhaus.org"],"mail_junk_score":7.5,"mail_greylisting":true}`)
+	if s := decode[spam](t, rec); rec.Code != 200 || s.Default || strings.Join(s.Blocklists, ",") != "bl.example.org,zen.spamhaus.org" || s.JunkScore != 7.5 || !s.Grey {
+		t.Fatalf("own list: %d %s", rec.Code, rec.Body)
+	}
+	// null keeps, [] turns off.
+	rec = e.as("PUT", "/api/settings", `{"mail_blocklists":null}`)
+	if s := decode[spam](t, rec); len(s.Blocklists) != 2 {
+		t.Fatalf("null: %s", rec.Body)
+	}
+	rec = e.as("PUT", "/api/settings", `{"mail_blocklists":[]}`)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"mail_blocklists":[],"mail_blocklists_default":false`) {
+		t.Fatalf("off: %s", rec.Body)
+	}
+	rec = e.as("PUT", "/api/settings", `{"mail_blocklists_default":true}`)
+	if s := decode[spam](t, rec); !s.Default || len(s.Blocklists) != 1 {
+		t.Fatalf("default: %s", rec.Body)
+	}
+	for _, body := range []string{
+		`{"mail_blocklists":["not a zone"]}`,
+		`{"mail_blocklists":["a.example","a.example"]}`,
+		`{"mail_blocklists":["1.example","2.example","3.example","4.example","5.example","6.example","7.example","8.example","9.example","10.example","11.example"]}`,
+		`{"mail_blocklists_default":true,"mail_blocklists":["a.example"]}`,
+		`{"mail_junk_score":0.5}`,
+		`{"mail_junk_score":51}`,
+	} {
+		if rec := e.as("PUT", "/api/settings", body); rec.Code != 400 {
+			t.Errorf("%s: %d %s", body, rec.Code, rec.Body)
+		}
+	}
+	if rec := e.as("PUT", "/api/settings", `{"mail_blocklists":"zen.spamhaus.org"}`); rec.Code != 400 {
+		t.Fatalf("not a list: %d", rec.Code)
 	}
 }

@@ -52,10 +52,16 @@ const (
 	// a failed one is retried after releasesRetryTTL.
 	releasesCacheTTL = 30 * time.Minute
 	releasesRetryTTL = 2 * time.Minute
+	// releasesCheckGap is how soon after the last lookup someone may ask
+	// for another one (POST /api/updates/check). GitHub allows 60
+	// unauthenticated requests an hour per address.
+	releasesCheckGap = time.Minute
 	releasesTimeout  = 5 * time.Second
 	// updateStaleAfter: a "running" status older than this is an update
-	// that died without reporting.
-	updateStaleAfter  = 45 * time.Minute
+	// that died without reporting. systemd stops ownpanel-update.service
+	// after 30 minutes (TimeoutStartSec) and update.sh then reports
+	// "failed" itself; this only covers a run killed without that chance.
+	updateStaleAfter  = 35 * time.Minute
 	defaultAutoWindow = "03:00-05:00"
 	// keyUpdateRecorded remembers which finished update is in the activity log.
 	keyUpdateRecorded = "update_recorded"
@@ -136,12 +142,18 @@ type UpdateStatus struct {
 
 // UpdateInfo is everything the update page shows.
 type UpdateInfo struct {
-	Installed       InstalledRelease  `json:"installed"`
-	Available       AvailableReleases `json:"available"`
-	CheckFailed     bool              `json:"check_failed"`
-	UpdateAvailable bool              `json:"update_available"`
-	Auto            AutoUpdate        `json:"auto"`
-	Status          UpdateStatus      `json:"status"`
+	Installed   InstalledRelease  `json:"installed"`
+	Available   AvailableReleases `json:"available"`
+	CheckFailed bool              `json:"check_failed"`
+	// CheckError says why the last lookup failed; Available then still
+	// holds the result of the last one that worked.
+	CheckError string `json:"check_error"`
+	// CheckedAt is when the releases were last looked up (RFC3339), "" if
+	// never.
+	CheckedAt       string       `json:"checked_at"`
+	UpdateAvailable bool         `json:"update_available"`
+	Auto            AutoUpdate   `json:"auto"`
+	Status          UpdateStatus `json:"status"`
 	// Supported is false when ownpanel was not installed by install.sh
 	// (e.g. in development): then it cannot update itself.
 	Supported bool `json:"supported"`
@@ -159,11 +171,11 @@ type updater struct {
 	cfg UpdatesConfig
 
 	mu      sync.Mutex // guards the cache
-	fetched time.Time
+	fetched time.Time  // when the releases were last looked up
 	ttl     time.Duration
-	latest  AvailableReleases
-	dates   map[string]time.Time // publication dates by version
-	err     error
+	latest  AvailableReleases    // the last lookup that worked
+	dates   map[string]time.Time // publication dates by version; nil before the first that worked
+	err     error                // of the last lookup
 
 	writeMu  sync.Mutex // serializes requests and settings
 	recordMu sync.Mutex
@@ -228,28 +240,56 @@ type githubRelease struct {
 	Draft       bool      `json:"draft"`
 	Prerelease  bool      `json:"prerelease"`
 	PublishedAt time.Time `json:"published_at"`
-	HTMLURL     string    `json:"html_url"`
-	Assets      []struct {
+	// CreatedAt is the date of the release's commit (GitHub's definition).
+	// The nightly is one release that every build replaces: its
+	// published_at stays at the first publication, created_at moves with
+	// each build.
+	CreatedAt time.Time `json:"created_at"`
+	HTMLURL   string    `json:"html_url"`
+	Assets    []struct {
 		Name string `json:"name"`
 	} `json:"assets"`
 }
 
+// releaseLookup is the newest release per channel as last looked up.
+type releaseLookup struct {
+	latest  AvailableReleases
+	dates   map[string]time.Time
+	err     error     // of the last lookup; latest is then the one before
+	checked time.Time // when the last lookup was made
+}
+
 // releases returns the newest release per channel, looked up at most every
-// 30 minutes.
+// 30 minutes. After a failed lookup it returns the error together with the
+// result of the last one that worked.
 func (u *updater) releases(ctx context.Context, now time.Time) (AvailableReleases, map[string]time.Time, error) {
+	r := u.lookup(ctx, now, false)
+	return r.latest, r.dates, r.err
+}
+
+// lookup returns the cached releases, looked up again once the cache is
+// stale or, with force, unless the last lookup was less than a minute ago.
+// A failed lookup keeps the previous result.
+func (u *updater) lookup(ctx context.Context, now time.Time, force bool) releaseLookup {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	if !u.fetched.IsZero() && now.Sub(u.fetched) < u.ttl {
-		return u.latest, u.dates, u.err
+	age := now.Sub(u.fetched)
+	fresh := !u.fetched.IsZero() && age < u.ttl
+	if force {
+		fresh = !u.fetched.IsZero() && age < releasesCheckGap
 	}
-	latest, dates, err := u.fetch(ctx)
-	u.fetched, u.latest, u.dates, u.err = now, latest, dates, err
-	u.ttl = releasesCacheTTL
-	if err != nil {
-		u.ttl = releasesRetryTTL
-		slog.Warn("could not look up ownpanel releases", "err", err)
+	if !fresh {
+		latest, dates, err := u.fetch(ctx)
+		u.fetched, u.err = now, err
+		u.ttl = releasesCacheTTL
+		if err != nil {
+			u.ttl = releasesRetryTTL
+			slog.Warn("could not look up ownpanel releases", "err", err)
+		} else {
+			u.latest, u.dates = latest, dates
+		}
 	}
-	return latest, dates, err
+	return releaseLookup{latest: u.latest, dates: u.dates, err: u.err, checked: u.fetched}
 }
 
 func (u *updater) fetch(ctx context.Context) (AvailableReleases, map[string]time.Time, error) {
@@ -301,8 +341,9 @@ func pickReleases(list []githubRelease, arch string) (AvailableReleases, map[str
 			if v == "" || !complete(r, v) {
 				continue
 			}
-			dates[v] = r.PublishedAt
-			out.Nightly = &AvailableRelease{Version: v, PublishedAt: r.PublishedAt, NotesURL: r.HTMLURL}
+			built := nightlyBuilt(r)
+			dates[v] = built
+			out.Nightly = &AvailableRelease{Version: v, PublishedAt: built, NotesURL: r.HTMLURL}
 			continue
 		}
 		if r.Prerelease || !stableVersionRe.MatchString(r.TagName) {
@@ -317,6 +358,21 @@ func pickReleases(list []githubRelease, arch string) (AvailableReleases, map[str
 		}
 	}
 	return out, dates, nil
+}
+
+// nightlyBuilt is when the current nightly build was made: created_at, as
+// published_at is still the day the rolling release first appeared. Without
+// created_at, the day in the build's name, else published_at.
+func nightlyBuilt(r githubRelease) time.Time {
+	if !r.CreatedAt.IsZero() {
+		return r.CreatedAt
+	}
+	if m := nightlyVersionRe.FindStringSubmatch(nightlyInTitleRe.FindString(r.Name)); m != nil {
+		if t, err := time.Parse("20060102", m[1]); err == nil {
+			return t
+		}
+	}
+	return r.PublishedAt
 }
 
 // compareStable compares two stable versions like v1.2.3.
@@ -486,8 +542,14 @@ func (u *updater) writeFile(name string, data []byte) error {
 	return os.Rename(tmp, u.path(name))
 }
 
-// info puts together what GET /api/updates shows.
+// updateInfo puts together what GET /api/updates shows.
 func (s *Service) updateInfo(ctx context.Context) UpdateInfo {
+	return s.lookUpUpdates(ctx, false)
+}
+
+// lookUpUpdates is updateInfo; check asks GitHub again unless it was asked
+// less than a minute ago.
+func (s *Service) lookUpUpdates(ctx context.Context, check bool) UpdateInfo {
 	u := s.updates
 	now := s.now()
 	channel := u.installedChannel()
@@ -497,10 +559,17 @@ func (s *Service) updateInfo(ctx context.Context) UpdateInfo {
 		Status:    u.readStatus(now),
 		Supported: u.supported(),
 	}
-	latest, dates, err := u.releases(ctx, now)
-	if err != nil {
+	r := u.lookup(ctx, now, check)
+	latest, dates := r.latest, r.dates
+	if !r.checked.IsZero() {
+		info.CheckedAt = r.checked.UTC().Format(time.RFC3339)
+	}
+	if r.err != nil {
 		info.CheckFailed = true
-		return info
+		info.CheckError = r.err.Error()
+		if dates == nil {
+			return info
+		}
 	}
 	mark := func(r *AvailableRelease) *AvailableRelease {
 		if r == nil {
@@ -546,6 +615,18 @@ func (s *Service) Updates(ctx context.Context, a Actor) (UpdateInfo, error) {
 	return s.updateInfo(ctx), nil
 }
 
+// CheckUpdates is Updates, but looks for new releases now instead of
+// relying on the last lookup. To spare GitHub's limit it looks at most once
+// a minute; a check within that minute answers with the last result, and
+// checked_at tells when that was.
+func (s *Service) CheckUpdates(ctx context.Context, a Actor) (UpdateInfo, error) {
+	if err := s.needUpdates(a); err != nil {
+		return UpdateInfo{}, err
+	}
+	s.RecordUpdateResult(ctx)
+	return s.lookUpUpdates(ctx, true), nil
+}
+
 // RequestUpdate asks the updater to install the newest release of a channel
 // or one version. It refuses while an update is under way, and going back to
 // an older version unless AllowDowngrade is set.
@@ -572,7 +653,13 @@ func (s *Service) RequestUpdate(ctx context.Context, a Actor, r UpdateRequest) (
 		return UpdateInfo{}, errorf(Conflict, "an update is already under way")
 	}
 	installedChannel := u.installedChannel()
-	latest, dates, err := u.releases(ctx, now)
+	// A channel request installs whatever is newest when the updater runs;
+	// look again (unless that was less than a minute ago) so the version
+	// shown, recorded and checked for going back is that one, not one up
+	// to 30 minutes old. The nightly in particular is replaced by every
+	// build.
+	fresh := u.lookup(ctx, now, r.Channel != "")
+	latest, dates, err := fresh.latest, fresh.dates, fresh.err
 	target, channel := r.Version, r.Channel
 	if r.Channel != "" {
 		if err != nil {

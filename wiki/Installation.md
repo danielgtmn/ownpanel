@@ -2,7 +2,7 @@
 
 This page installs ownpanel on a Linux server with systemd: one command downloads a release, checks it, installs `ownpaneld` and Caddy as services and prints how to open the panel.
 
-> The installer has been tested in systemd containers (Ubuntu 24.04, arm64), not yet on a real server. Try it on a throwaway machine first.
+> The installer, the setup steps, publishing, updates and backup/restore have been tested on a real server (Ubuntu 24.04, amd64) and in systemd containers (arm64). ownpanel is still early: try it on a throwaway machine first.
 
 ## What you need
 
@@ -23,6 +23,8 @@ When it is done, the installer prints:
 - the one-time **setup code**. Enter it in the panel, create the first administrator, then follow the setup steps: they ask for the panel's domain, the server's public addresses and the e-mail address for certificates.
 
 The setup code is only valid until the first administrator exists. Show it again with `sudo cat /var/lib/ownpanel/setup-code`.
+
+On an upgrade or a second run, once an administrator exists, the installer just tells you to open the panel at its usual address: the domain set in the panel (or with `--panel-domain`, which it then names), and `https://<server address>/`, which leads there.
 
 To set everything up front without the browser, pass the options (all optional):
 
@@ -85,10 +87,13 @@ Values given as installer options (`--panel-domain`, `--server-ip`, `--acme-emai
 | Item | Details |
 |---|---|
 | User `caddy` | system user, home `/var/lib/ownpanel/caddy-home`, shell `/usr/sbin/nologin` |
-| User `ownpanel` | system user, home `/var/lib/ownpanel`, shell `/usr/sbin/nologin`; added to the group `caddy` |
+| User `ownpanel` | system user, home `/var/lib/ownpanel`, shell `/usr/sbin/nologin`; added to the groups `caddy` and `ownpanel-mail` |
+| User `ownpanel-mail` | system user with its own group, home `/var/lib/ownpanel-mail`, shell `/usr/sbin/nologin` |
 | `/usr/local/bin/ownpaneld`, `/usr/local/bin/caddy` | the binaries (mode 0755); an existing `/usr/local/bin/caddy` is replaced |
 | `/etc/systemd/system/ownpaneld.service` | the panel daemon, runs as `ownpanel` |
 | `/etc/systemd/system/ownpanel-caddy.service` | Caddy, runs as `caddy` |
+| `/etc/systemd/system/ownpanel-mail.service` | the mail service, runs as `ownpanel-mail` |
+| `/var/lib/ownpanel-mail` | the mail service's data (created by systemd), owned by `ownpanel-mail`, mode 0700 |
 | `/var/lib/ownpanel` | data directory, owned by `ownpanel` (0755) |
 | `/var/lib/ownpanel/caddy`, `/var/lib/ownpanel/caddy-home` | Caddy's certificate storage and home, owned by `caddy`, mode 0700 |
 | `/etc/ownpanel/caddy-bootstrap.json` | Caddy's start configuration (only the admin socket) |
@@ -99,7 +104,7 @@ Values given as installer options (`--panel-domain`, `--server-ip`, `--acme-emai
 | `/var/lib/ownpanel/update` | `root:ownpanel`, mode 1770: update requests from the panel and the update status |
 | `/var/lib/ownpanel/backups` | root only: the backups made before each update (the last three) |
 
-Both services are enabled and started. The installer waits until the panel answers on `127.0.0.1:8600`; if it does not within 60 seconds, it shows the daemon's log and fails.
+The services are enabled and started. The installer waits until the panel answers on `127.0.0.1:8600`; if it does not within 60 seconds, it shows the daemon's log and fails.
 
 ### The Caddy admin socket
 
@@ -110,15 +115,19 @@ Caddy's admin API is a Unix socket, never a TCP port, because on TCP every local
 - The user `ownpanel` is a member of the group `caddy`, so ownpaneld can connect. Other local users can neither enter the directory nor open the socket.
 - Caddy's own data directories are 0700, so the group membership gives `ownpanel` nothing else.
 
-The units also set `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=full` and `ProtectHome=true`; Caddy gets `CAP_NET_BIND_SERVICE` to bind ports 80 and 443. Caddy is started with `--resume`, so after a restart it serves the last config until ownpaneld pushes the current one.
+The mail service's admin socket works the same way: `/run/ownpanel-mail/admin.sock` in a directory of the group `ownpanel-mail` (0750), socket mode 0660, and `ownpanel` is a member of that group.
+
+Both units set `PrivateTmp`, `ProtectSystem=full` and `ProtectHome=true`; `ownpaneld.service` also sets `NoNewPrivileges`. Caddy gets `CAP_NET_BIND_SERVICE` to bind ports 80 and 443. Caddy is started with `--resume`, so after a restart it serves the last config until ownpaneld pushes the current one. `ownpanel-mail.service` is hardened further (see the unit file).
 
 ## Flags
 
 ownpaneld reads its flags from `/etc/ownpanel/ownpaneld.env`, the variable `OWNPANELD_ARGS`. A fresh install writes:
 
 ```
-OWNPANELD_ARGS=-tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock
+OWNPANELD_ARGS=-tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock -mail-admin unix:///run/ownpanel-mail/admin.sock
 ```
+
+(Upgrades of installs from before e-mail get `-mail-admin` added.)
 
 plus `-panel-domain`, `-server-ip` and `-acme-email` if you gave the matching options. The service starts `/usr/local/bin/ownpaneld -data /var/lib/ownpanel $OWNPANELD_ARGS`. See [[Configuration|Configuration]] for all flags.
 
@@ -126,12 +135,15 @@ You can edit the file; apply a change with `systemctl restart ownpaneld`. The in
 
 ## Firewall
 
-If `ufw` is active, the installer allows 80/tcp and 443/tcp and says so. Otherwise it only reminds you; open them in your provider's firewall if it has one.
+If `ufw` is active, the installer allows 80, 443, 25, 465, 587 and 993 over TCP and says so. Otherwise it only reminds you; open them in your provider's firewall if it has one.
 
 | Port | Used for |
 |---|---|
 | 80/tcp | HTTP: redirects to HTTPS, and certificate validation |
 | 443/tcp | HTTPS for your sites, the panel domain, and the panel on the server's address during setup |
+| 25/tcp | mail from other mail servers; also outgoing, which many providers block until asked ([[E-Mail|E-Mail]]) |
+| 465/tcp, 587/tcp | mail programs sending mail |
+| 993/tcp | mail programs reading mail |
 
 Do not open port 8600; the panel listens on the loopback address only and Caddy reaches it from the same machine.
 
@@ -162,9 +174,9 @@ There are three ways, all ending in the same steps: look up the release, downloa
 
 ### In the panel
 
-**Settings → Updates** shows the installed version and channel, the newest version of each channel with a link to its release notes, and a button **Update to vX.Y.Z**. After you confirm, the page shows the progress; the panel restarts in the middle, the page waits for it and reloads itself with the new version. Switching to the other channel works the same way; if that would install an older version (e.g. from a nightly build back to the last stable release), the panel says so and asks again.
+**Settings → Updates** shows the installed version and channel, the newest version of each channel with a link to its release notes, and a button **Update to vX.Y.Z**. For nightly builds the date is when the build was made. Before asking you to confirm, the panel looks for the newest version again, so it names the build that will be installed. After you confirm, the page shows the progress; the panel restarts in the middle, the page waits for it and reloads itself with the new version. Other open tabs of the panel reload themselves too as soon as they hear from it, before asking you to sign in again. Switching to the other channel works the same way; if that would install an older version (e.g. from a nightly build back to the last stable release), the panel says so and asks again.
 
-The panel looks for new versions on GitHub at most every 30 minutes. If GitHub cannot be reached it says so, and nothing else is affected.
+The panel looks for new versions on GitHub at most every 30 minutes. If GitHub cannot be reached it says so, and nothing else is affected. **Check for updates** looks right away (at most once a minute) and the page shows when it last looked.
 
 Updating from the panel only works for installations made with `install.sh`. In development (no `/etc/ownpanel/release`) the page explains that.
 
@@ -196,7 +208,7 @@ Installations made before the updater existed have no local `update.sh` and no u
 It refuses to run where ownpanel is not installed and never asks setup questions. The steps:
 
 1. Look up the release through GitHub's API (`/releases/latest` for stable, `/releases/tags/nightly` or `/releases/tags/vX.Y.Z`) and print the version it holds. Nothing to do if that is the installed version.
-2. Download `checksums.txt` and the archive for this machine **by asset id** from that same answer, and check the archive against `checksums.txt` and its `VERSION` against what GitHub reported. A release that is still being published (the nightly is replaced in place) is refused with "try again in a few minutes" instead of mixing two builds.
+2. Download `checksums.txt` and the archive for this machine **by asset id** from that same answer, and check the archive against `checksums.txt` and its `VERSION` against what GitHub reported. Two builds are never mixed. The nightly is replaced in place by every new build: if its files disappear during the download, the nightly is looked up again and the build it holds now is downloaded instead (for a few minutes at most, then "try again in a few minutes"). With `--version nightly-…` the update fails instead and says that this build is no longer available. A connection that does not open within 15 seconds, or a download slower than 1 KB/s for 30 seconds, is given up after two retries instead of hanging.
 3. `ownpaneld backup` into `/var/lib/ownpanel/backups/` (root only; the last three are kept).
 4. Keep the current binaries, unit files, `caddy-bootstrap.json`, `ownpaneld.env` and `release` as `*.previous`.
 5. Run the **new release's** `install.sh --from-dir <unpacked> --yes`, so the file layout is only ever defined by `install.sh`.
@@ -210,6 +222,8 @@ The database is not restored on a rollback: a new version may have migrated it. 
 The panel runs as the unprivileged user `ownpanel` and never gets root. It only writes a small request into `/var/lib/ownpanel/update/request.json`. `ownpanel-update.path` notices it and starts `ownpanel-update.service` (root), which runs `/usr/local/lib/ownpanel/ownpanel-update`: it moves the request out of the panel's reach, accepts exactly `{"id": <32 hex digits>, "channel": "stable"|"nightly"}` or `{"id", "version": "vX.Y.Z"}` and nothing else, and runs `update.sh --yes --status-file /var/lib/ownpanel/update/status.json` with those values. `ownpanel-update.timer` starts the same service every 15 minutes for automatic updates, which reads `auto.json` (written by the panel) through the same strict checks. See [[Security|Security#updates]].
 
 On the server, `journalctl -u ownpanel-update` shows what the updater did.
+
+An update may take at most 30 minutes; then systemd stops it. Whenever `update.sh` ends without a result (stopped, or an unexpected error) it reports the update as failed, so the panel never keeps showing it as running. Should even that not happen (the process was killed outright), the panel shows an update that has been running for more than 35 minutes as failed.
 
 ### Running the installer again
 

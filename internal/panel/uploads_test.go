@@ -11,7 +11,7 @@ import (
 func tokenActor(t *testing.T, svc *Service, name string) (Actor, int64) {
 	t.Helper()
 	ctx := context.Background()
-	nt, err := svc.CreateToken(ctx, admin, name, "write", nil)
+	nt, err := svc.CreateToken(ctx, admin, name, "write", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,15 +1,16 @@
 import { confirm } from '@ui-sdk/react/alert-dialog'
 import { Button } from '@ui-sdk/react/button'
 import { toast } from '@ui-sdk/react/toast'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { errorMessage } from '../../shared/api/index.ts'
 import { formatDate, isoTimestamp } from '../../shared/format/index.ts'
 import { usePageTitle, useResource } from '../../shared/hooks/index.ts'
-import { ROLE_LABEL, useSession, type Role, type User } from '../../shared/session/index.ts'
+import { loadSession, ROLE_LABEL, useSession, type Role, type User } from '../../shared/session/index.ts'
 import { ErrorState, LoadingState, PageHeader } from '../../shared/ui/index.ts'
 import { createUser, deleteUser, listUsers, updateUser } from './api.ts'
 import { AddPersonDialog } from './AddPersonDialog.tsx'
 import { NewPasswordDialog } from './NewPasswordDialog.tsx'
+import { PersonEmailDialog } from './PersonEmailDialog.tsx'
 import { isSelf, otherRole, roleChangeQuestion } from './rules.ts'
 
 type PersonRowProps = {
@@ -17,11 +18,11 @@ type PersonRowProps = {
   self: boolean
   onChangeRole: (person: User) => Promise<void>
   onNewPassword: (person: User) => void
+  onEmail: (person: User) => void
   onRemove: (person: User) => Promise<void>
 }
 
-function PersonRow({ person, self, onChangeRole, onNewPassword, onRemove }: PersonRowProps) {
-  const noteId = `person-note-${person.id}`
+function PersonRow({ person, self, onChangeRole, onNewPassword, onEmail, onRemove }: PersonRowProps) {
   return (
     <li className="record-row">
       <div className="record-main">
@@ -31,38 +32,34 @@ function PersonRow({ person, self, onChangeRole, onNewPassword, onRemove }: Pers
         </h2>
         <ul className="record-facts">
           <li>{ROLE_LABEL[person.role]}</li>
+          <li>{person.email ? <span className="record-email">{person.email}</span> : <span className="muted">No e-mail address</span>}</li>
           <li>
             Since <time dateTime={isoTimestamp(person.created_at)}>{formatDate(person.created_at)}</time>
           </li>
         </ul>
         {self ? (
-          <p className="muted record-note" id={noteId}>
-            This is your own account. Another administrator can change your role or remove you.
-          </p>
+          <p className="muted record-note">Another administrator can change your role or remove you.</p>
         ) : null}
       </div>
       <div className="record-actions">
-        <Button
-          disabled={self}
-          aria-describedby={self ? noteId : undefined}
-          pendingAnnouncement="Saving"
-          onClick={() => onChangeRole(person)}
-        >
-          {person.role === 'admin' ? 'Make member' : 'Make administrator'}
+        {self ? null : (
+          <Button pendingAnnouncement="Saving" onClick={() => onChangeRole(person)}>
+            {person.role === 'admin' ? 'Make member' : 'Make administrator'}
+            <span className="visually-hidden"> ({person.name})</span>
+          </Button>
+        )}
+        <Button onClick={() => onEmail(person)}>
+          {person.email ? 'Change e-mail address' : 'Add e-mail address'}
           <span className="visually-hidden"> ({person.name})</span>
         </Button>
         <Button onClick={() => onNewPassword(person)}>
           Set new password<span className="visually-hidden"> ({person.name})</span>
         </Button>
-        <Button
-          data-variant="destructive"
-          disabled={self}
-          aria-describedby={self ? noteId : undefined}
-          pendingAnnouncement="Removing"
-          onClick={() => onRemove(person)}
-        >
-          Remove<span className="visually-hidden"> {person.name}</span>
-        </Button>
+        {self ? null : (
+          <Button data-variant="destructive" pendingAnnouncement="Removing" onClick={() => onRemove(person)}>
+            Remove<span className="visually-hidden"> {person.name}</span>
+          </Button>
+        )}
       </div>
     </li>
   )
@@ -73,9 +70,20 @@ export function UsersPage() {
   const people = useResource(listUsers, 'users')
   const [adding, setAdding] = useState(false)
   const [passwordFor, setPasswordFor] = useState<User | null>(null)
+  const [emailFor, setEmailFor] = useState<User | null>(null)
   usePageTitle('People')
 
-  async function add(person: { name: string; password: string; role: Role }) {
+  // The own address can also change from the account menu; show it here too.
+  const { reload } = people
+  const myEmail = me.email
+  const firstEmail = useRef(myEmail)
+  useEffect(() => {
+    if (firstEmail.current === myEmail) return
+    firstEmail.current = myEmail
+    void reload()
+  }, [myEmail, reload])
+
+  async function add(person: { name: string; email: string; password: string; role: Role }) {
     await createUser(person)
     setAdding(false)
     toast.success(`${person.name} was added.`)
@@ -100,6 +108,18 @@ export function UsersPage() {
     await updateUser(passwordFor.id, { password })
     toast.success(`The password for ${passwordFor.name} was changed.`)
     setPasswordFor(null)
+  }
+
+  async function setEmail(email: string) {
+    if (!emailFor) return
+    await updateUser(emailFor.id, { email })
+    // The account menu shows the signed-in person's own address.
+    if (isSelf(me, emailFor)) await loadSession()
+    toast.success(
+      email ? `The e-mail address of ${emailFor.name} was saved.` : `The e-mail address of ${emailFor.name} was removed.`,
+    )
+    setEmailFor(null)
+    await people.reload()
   }
 
   async function remove(person: User) {
@@ -143,12 +163,14 @@ export function UsersPage() {
               self={isSelf(me, person)}
               onChangeRole={changeRole}
               onNewPassword={setPasswordFor}
+              onEmail={setEmailFor}
               onRemove={remove}
             />
           ))}
         </ul>
       ) : null}
       <AddPersonDialog open={adding} onOpenChange={setAdding} onSubmit={add} />
+      <PersonEmailDialog person={emailFor} onClose={() => setEmailFor(null)} onSubmit={setEmail} />
       <NewPasswordDialog name={passwordFor?.name ?? null} onClose={() => setPasswordFor(null)} onSubmit={setPassword} />
     </>
   )

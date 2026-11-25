@@ -108,7 +108,7 @@ func TestReopenKeepsData(t *testing.T) {
 
 func TestSites(t *testing.T) {
 	s, _ := open(t)
-	admin, err := s.CreateUser(ctx, "admin", "h", RoleAdmin, true)
+	admin, err := s.CreateUser(ctx, "admin", "", RoleAdmin, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,20 +166,20 @@ func TestUsers(t *testing.T) {
 	if _, err := s.CreateSite(ctx, "old", nil, 0); err != nil {
 		t.Fatal(err)
 	}
-	admin, err := s.CreateUser(ctx, "admin", "h", RoleAdmin, true)
+	admin, err := s.CreateUser(ctx, "admin", "", RoleAdmin, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if site, _ := s.Site(ctx, "old"); site.OwnerID != admin.ID {
 		t.Fatalf("first admin must own ownerless sites: %+v", site)
 	}
-	if _, err := s.CreateUser(ctx, "second", "h", RoleAdmin, true); !errors.Is(err, ErrConflict) {
+	if _, err := s.CreateUser(ctx, "second", "", RoleAdmin, true); !errors.Is(err, ErrConflict) {
 		t.Fatalf("firstOnly with users present: %v", err)
 	}
-	if _, err := s.CreateUser(ctx, "admin", "h", RoleMember, false); !errors.Is(err, ErrConflict) {
+	if _, err := s.CreateUser(ctx, "admin", "", RoleMember, false); !errors.Is(err, ErrConflict) {
 		t.Fatalf("duplicate name: %v", err)
 	}
-	member, err := s.CreateUser(ctx, "bob", "h", RoleMember, false)
+	member, err := s.CreateUser(ctx, "bob", "", RoleMember, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestUsers(t *testing.T) {
 	if _, err := s.CreateToken(ctx, Token{UserID: member.ID, Name: "t", Hash: "bobhash", Access: "read"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateSession(ctx, "sess", member.ID, time.Now().Add(time.Hour)); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES ('sess', ?, 0, 4000000000)`, member.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DeleteUser(ctx, member.ID); err != nil {
@@ -209,12 +209,12 @@ func TestUsers(t *testing.T) {
 	if _, _, err := s.TokenByHash(ctx, "bobhash"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("token of deleted user: %v", err)
 	}
-	if _, err := s.SessionUser(ctx, "sess", time.Now()); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("session of deleted user: %v", err)
+	if old, err := s.OldSessions(ctx, member.ID, time.Now()); err != nil || len(old) != 0 {
+		t.Fatalf("session of deleted user: %v %v", old, err)
 	}
 
 	// With a second admin the first can step down.
-	other, _ := s.CreateUser(ctx, "carol", "h", RoleAdmin, false)
+	other, _ := s.CreateUser(ctx, "carol", "", RoleAdmin, false)
 	if err := s.SetRole(ctx, admin.ID, RoleMember); err != nil {
 		t.Fatal(err)
 	}
@@ -223,38 +223,10 @@ func TestUsers(t *testing.T) {
 	}
 }
 
-func TestSessionsAndTokens(t *testing.T) {
+func TestTokens(t *testing.T) {
 	s, _ := open(t)
-	u, _ := s.CreateUser(ctx, "admin", "h", RoleAdmin, true)
+	u, _ := s.CreateUser(ctx, "admin", "", RoleAdmin, true)
 	now := time.Unix(1_800_000_000, 0)
-	s.CreateSession(ctx, "a", u.ID, now.Add(time.Hour))
-	s.CreateSession(ctx, "b", u.ID, now.Add(time.Hour))
-	s.CreateSession(ctx, "old", u.ID, now.Add(-time.Second))
-
-	if _, err := s.SessionUser(ctx, "a", now); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.SessionUser(ctx, "a", now.Add(time.Hour)); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("expired session: %v", err)
-	}
-	if err := s.DeleteExpiredSessions(ctx, now); err != nil {
-		t.Fatal(err)
-	}
-	var n int
-	s.db.QueryRow(`SELECT count(*) FROM sessions`).Scan(&n)
-	if n != 2 {
-		t.Fatalf("%d sessions left", n)
-	}
-	if err := s.SetPassword(ctx, u.ID, "h2", "a"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.SessionUser(ctx, "b", now); !errors.Is(err, ErrNotFound) {
-		t.Fatal("password change must end the other sessions")
-	}
-	if got, err := s.SessionUser(ctx, "a", now); err != nil || got.PasswordHash != "h2" {
-		t.Fatalf("kept session: %+v %v", got, err)
-	}
-
 	tok, _ := s.CreateToken(ctx, Token{UserID: u.ID, Name: "ci", Hash: "th", Access: "write"})
 	if tok.Sites != nil {
 		t.Fatal("nil sites must stay nil")
@@ -305,7 +277,7 @@ func TestImportStateFile(t *testing.T) {
 	if err != nil || site.OwnerID != 0 || site.Domains[0] != "blog.example.com" {
 		t.Fatalf("%+v %v", site, err)
 	}
-	admin, _ := s.CreateUser(ctx, "admin", "h", RoleAdmin, true)
+	admin, _ := s.CreateUser(ctx, "admin", "", RoleAdmin, true)
 	if site, _ := s.Site(ctx, "shop"); site.OwnerID != admin.ID {
 		t.Fatalf("first admin takes over imported sites: %+v", site)
 	}
@@ -322,7 +294,7 @@ func TestImportStateFile(t *testing.T) {
 
 func TestImportOwnedByExistingAdmin(t *testing.T) {
 	s, dir := open(t)
-	admin, _ := s.CreateUser(ctx, "admin", "h", RoleAdmin, true)
+	admin, _ := s.CreateUser(ctx, "admin", "", RoleAdmin, true)
 	file := filepath.Join(dir, "state.json")
 	os.WriteFile(file, []byte(`[{"name":"blog","domains":["blog.example.com"]}]`), 0o600)
 	if _, err := s.ImportStateFile(ctx, file); err != nil {
@@ -363,5 +335,63 @@ func TestActivities(t *testing.T) {
 	got, err := s.Activities(ctx, 2)
 	if err != nil || len(got) != 2 || got[0].Action != "three" || got[1].Action != "two" {
 		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+// TestMoveToAuth: users from before the auth tables are listed with their
+// hash and live sessions until they are linked; linking forgets both.
+func TestMoveToAuth(t *testing.T) {
+	s, _ := open(t)
+	now := time.Unix(1_800_000_000, 0)
+	res, err := s.db.Exec(`INSERT INTO users (name, password_hash, role, created_at) VALUES ('old', '$argon2id$x', 'admin', 1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+	for _, row := range []struct {
+		id      string
+		expires int64
+	}{{"live", now.Unix() + 60}, {"gone", now.Unix() - 1}} {
+		if _, err := s.db.Exec(`INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`, row.id, id, now.Unix()-100, row.expires); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.CreateUser(ctx, "new", "auth-new", RoleMember, false); err != nil {
+		t.Fatal(err)
+	}
+	un, err := s.UnmovedUsers(ctx)
+	if err != nil || len(un) != 1 || un[0].Name != "old" || un[0].PasswordHash != "$argon2id$x" {
+		t.Fatalf("unmoved %+v %v", un, err)
+	}
+	old, err := s.OldSessions(ctx, id, now)
+	if err != nil || len(old) != 1 || old[0].ID != "live" || !old[0].ExpiresAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("old sessions %+v %v", old, err)
+	}
+	if err := s.LinkAuthUser(ctx, id, "auth-old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LinkAuthUser(ctx, id, "auth-other"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("second link: %v", err)
+	}
+	if un, _ := s.UnmovedUsers(ctx); len(un) != 0 {
+		t.Fatalf("still unmoved: %+v", un)
+	}
+	var hash string
+	var sessions int
+	s.db.QueryRow(`SELECT password_hash FROM users WHERE id = ?`, id).Scan(&hash)
+	s.db.QueryRow(`SELECT count(*) FROM sessions`).Scan(&sessions)
+	if hash != "" || sessions != 0 {
+		t.Fatalf("hash %q, %d sessions left", hash, sessions)
+	}
+	u, err := s.UserByAuthID(ctx, "auth-old")
+	if err != nil || u.ID != id || u.AuthUserID != "auth-old" {
+		t.Fatalf("by auth id %+v %v", u, err)
+	}
+	if _, err := s.UserByAuthID(ctx, ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("empty auth id: %v", err)
+	}
+	ids, err := s.AuthUserIDs(ctx)
+	if err != nil || len(ids) != 2 || !ids["auth-old"] || !ids["auth-new"] {
+		t.Fatalf("auth ids %v %v", ids, err)
 	}
 }

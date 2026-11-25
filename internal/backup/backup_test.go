@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/danielgtmn/ownpanel/internal/secrets"
 	"github.com/danielgtmn/ownpanel/internal/store"
+	"github.com/danielgtmn/panzerschrank"
 )
 
 func TestCreate(t *testing.T) {
@@ -31,7 +31,7 @@ func TestCreate(t *testing.T) {
 	os.MkdirAll(filepath.Join(data, "caddy", "certificates"), 0o700)
 	os.WriteFile(filepath.Join(data, "caddy", "certificates", "x.crt"), []byte("cert"), 0o600)
 	os.WriteFile(filepath.Join(data, "setup-code"), []byte("secret"), 0o600)
-	key, err := secrets.LoadOrCreateKey(filepath.Join(data, secrets.KeyFile))
+	key, err := panzerschrank.LoadOrCreateKey(filepath.Join(data, panzerschrank.KeyFile))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestCreate(t *testing.T) {
 			os.WriteFile(dst, b, 0o600)
 		}
 	}
-	for _, want := range []string{DBFile, secrets.KeyFile, "sites/blog/current", "sites/blog/releases/r1/index.html", "caddy/certificates/x.crt"} {
+	for _, want := range []string{DBFile, panzerschrank.KeyFile, "sites/blog/current", "sites/blog/releases/r1/index.html", "caddy/certificates/x.crt"} {
 		if !seen[want] {
 			t.Errorf("archive misses %s (has %v)", want, seen)
 		}
@@ -87,7 +87,7 @@ func TestCreate(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(restore, "sites", "blog", "current", "index.html")); err != nil || string(b) != "hi" {
 		t.Fatalf("release link: %q %v", b, err)
 	}
-	if b, err := os.ReadFile(filepath.Join(restore, secrets.KeyFile)); err != nil || !bytes.Equal(b, key) {
+	if b, err := os.ReadFile(filepath.Join(restore, panzerschrank.KeyFile)); err != nil || !bytes.Equal(b, key) {
 		t.Fatalf("secret key not restored: %v", err)
 	}
 	restored, err := store.Open(filepath.Join(restore, DBFile))

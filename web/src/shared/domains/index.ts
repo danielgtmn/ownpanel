@@ -1,9 +1,10 @@
 import './domains.css'
 
 export { DomainCheck } from './DomainCheck.tsx'
+export { PointHelp } from './PointHelp.tsx'
 export { ServerAddresses } from './ServerAddresses.tsx'
 export {
-  needsServerAddresses,
+  foundText,
   pointedMessage,
   statusAction,
   statusText,

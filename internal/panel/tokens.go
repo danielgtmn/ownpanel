@@ -20,7 +20,14 @@ type Token struct {
 	Sites      []string   `json:"sites"`
 	CreatedAt  time.Time  `json:"created_at"`
 	LastUsedAt *time.Time `json:"last_used_at"`
+	// ExpiresAt is when the token stops working; null means never.
+	ExpiresAt *time.Time `json:"expires_at"`
+	Expired   bool       `json:"expired"`
 }
+
+// MaxTokenDays is the longest expiry that can be chosen for a token, short
+// of never.
+const MaxTokenDays = 3650
 
 // NewToken is a freshly created token with its secret.
 type NewToken struct {
@@ -28,8 +35,14 @@ type NewToken struct {
 	Secret string `json:"token"`
 }
 
-func tokenView(t store.Token) Token {
-	return Token{ID: t.ID, Name: t.Name, Access: t.Access, Sites: t.Sites, CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt}
+func (s *Service) tokenView(t store.Token) Token {
+	return Token{ID: t.ID, Name: t.Name, Access: t.Access, Sites: t.Sites, CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt,
+		ExpiresAt: t.ExpiresAt, Expired: tokenExpired(t, s.now())}
+}
+
+// tokenExpired reports whether t no longer works at now.
+func tokenExpired(t store.Token, now time.Time) bool {
+	return t.ExpiresAt != nil && !now.Before(*t.ExpiresAt)
 }
 
 // Tokens lists the actor's own tokens.
@@ -43,14 +56,15 @@ func (s *Service) Tokens(ctx context.Context, a Actor) ([]Token, error) {
 	}
 	out := make([]Token, 0, len(list))
 	for _, t := range list {
-		out = append(out, tokenView(t))
+		out = append(out, s.tokenView(t))
 	}
 	return out, nil
 }
 
 // CreateToken creates an access token for the actor. sites nil means every
 // site the user may use; otherwise only those (which the user must see).
-func (s *Service) CreateToken(ctx context.Context, a Actor, name, access string, sites []string) (NewToken, error) {
+// expiresInDays 0 means the token never expires.
+func (s *Service) CreateToken(ctx context.Context, a Actor, name, access string, sites []string, expiresInDays int) (NewToken, error) {
 	if err := needSession(a, "managing access tokens"); err != nil {
 		return NewToken{}, err
 	}
@@ -60,6 +74,14 @@ func (s *Service) CreateToken(ctx context.Context, a Actor, name, access string,
 	}
 	if access != "read" && access != "write" {
 		return NewToken{}, errorf(Invalid, "access must be \"read\" or \"write\"")
+	}
+	if expiresInDays < 0 || expiresInDays > MaxTokenDays {
+		return NewToken{}, errorf(Invalid, "a token can expire after 1 to %d days; leave the expiry out for one that never expires", MaxTokenDays)
+	}
+	var expires *time.Time
+	if expiresInDays > 0 {
+		at := s.now().Add(time.Duration(expiresInDays) * 24 * time.Hour)
+		expires = &at
 	}
 	var limited []string
 	if sites != nil {
@@ -82,7 +104,7 @@ func (s *Service) CreateToken(ctx context.Context, a Actor, name, access string,
 	}
 	secret := TokenPrefix + randomString(32)
 	t, err := s.store.CreateToken(ctx, store.Token{
-		UserID: a.UserID, Name: name, Hash: sha256Hex(secret), Access: access, Sites: limited,
+		UserID: a.UserID, Name: name, Hash: sha256Hex(secret), Access: access, Sites: limited, ExpiresAt: expires,
 	})
 	if err != nil {
 		return NewToken{}, storeError(err)
@@ -91,8 +113,12 @@ func (s *Service) CreateToken(ctx context.Context, a Actor, name, access string,
 	if limited != nil {
 		scope = "sites " + strings.Join(limited, ", ")
 	}
-	s.record(ctx, a, "token.create", name, fmt.Sprintf("%s access, %s", access, scope))
-	return NewToken{Token: tokenView(t), Secret: secret}, nil
+	lifetime := "never expires"
+	if expiresInDays > 0 {
+		lifetime = fmt.Sprintf("expires after %d days", expiresInDays)
+	}
+	s.record(ctx, a, "token.create", name, fmt.Sprintf("%s access, %s, %s", access, scope, lifetime))
+	return NewToken{Token: s.tokenView(t), Secret: secret}, nil
 }
 
 // DeleteToken removes one of the actor's own tokens.

@@ -1,5 +1,6 @@
 import { confirm } from '@ui-sdk/react/alert-dialog'
 import { Button } from '@ui-sdk/react/button'
+import { DialogClose } from '@ui-sdk/react/dialog'
 import { Field, FieldDescription, FieldError, FieldLabel } from '@ui-sdk/react/field'
 import { Input } from '@ui-sdk/react/input'
 import { useState, type FormEvent } from 'react'
@@ -121,9 +122,11 @@ type FormProps = {
   onDirtyChange?: (dirty: boolean) => void
   askBeforeChange?: boolean
   allowEmpty?: boolean
+  /** Shows the form for a dialog: Cancel and Save below the field, and onDone after saving. */
+  onDone?: () => void
 }
 
-export function PanelDomainForm({ settings, onSaved, onDirtyChange, askBeforeChange, allowEmpty }: FormProps) {
+export function PanelDomainForm({ settings, onSaved, onDirtyChange, askBeforeChange, allowEmpty, onDone }: FormProps) {
   const [draft, setDraft] = useState(settings.panel_domain)
   const [error, setError] = useState<string | null>(null)
 
@@ -145,6 +148,7 @@ export function PanelDomainForm({ settings, onSaved, onDirtyChange, askBeforeCha
     if (domain === settings.panel_domain) {
       setDraft(domain)
       onDirtyChange?.(false)
+      onDone?.()
       return
     }
     if (askBeforeChange && settings.panel_domain) {
@@ -157,34 +161,51 @@ export function PanelDomainForm({ settings, onSaved, onDirtyChange, askBeforeCha
       onDirtyChange?.(false)
       onSaved(result.settings)
       announceSaved(result, domain ? `The panel's address is now ${result.settings.panel_domain}.` : 'Removed the panel domain.')
+      onDone?.()
     } catch (caught) {
       setError(errorMessage(caught))
     }
   }
 
+  const input = (
+    <Input
+      value={draft}
+      placeholder="panel.example.com"
+      autoComplete="off"
+      autoCapitalize="none"
+      spellCheck={false}
+      onValueChange={edit}
+    />
+  )
+
   return (
-    <form className="inline-form" onSubmit={(event: FormEvent) => event.preventDefault()} noValidate>
+    <form className={onDone ? 'form' : 'inline-form'} onSubmit={(event: FormEvent) => event.preventDefault()} noValidate>
       <Field invalid={error ? true : undefined}>
         <FieldLabel>Panel domain</FieldLabel>
-        <div className="inline-control">
-          <Input
-            value={draft}
-            placeholder="panel.example.com"
-            autoComplete="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            onValueChange={edit}
-          />
-          <Button type="submit" pendingAnnouncement="Saving" onClick={save}>
-            Save domain
-          </Button>
-        </div>
+        {onDone ? (
+          input
+        ) : (
+          <div className="inline-control">
+            {input}
+            <Button type="submit" pendingAnnouncement="Saving" onClick={save}>
+              Save domain
+            </Button>
+          </div>
+        )}
         <FieldDescription>
           Use a subdomain of a domain you own, for example panel.example.com.
           {allowEmpty ? ' Leave it empty to reach the panel by IP address.' : ''}
         </FieldDescription>
         {error ? <FieldError match>{error}</FieldError> : null}
       </Field>
+      {onDone ? (
+        <div className="form-actions">
+          <DialogClose>Cancel</DialogClose>
+          <Button type="submit" data-variant="solid" pendingAnnouncement="Saving" onClick={save}>
+            Save domain
+          </Button>
+        </div>
+      ) : null}
     </form>
   )
 }

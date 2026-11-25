@@ -452,7 +452,8 @@ func TestDNSZoneCreateAndDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := DNSZone{ConnectionID: w.bobConn, ConnectionName: "bob-main", Name: "fresh.com",
-		Nameservers: []string{"hydrogen.ns.hetzner.com", "oxygen.ns.hetzner.com", "helium.ns.hetzner.de"}}
+		Nameservers: []string{"hydrogen.ns.hetzner.com", "oxygen.ns.hetzner.com", "helium.ns.hetzner.de"},
+		Adopted:     true, UsedBy: []string{}}
 	if !reflect.DeepEqual(z, want) {
 		t.Fatalf("created %+v", z)
 	}
