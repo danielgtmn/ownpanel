@@ -51,7 +51,7 @@ describe('locked fields', () => {
     expect(html).not.toContain('Set in the server configuration')
   })
 
-  it('marks private addresses and leaves them unchecked', () => {
+  it('puts private addresses into their own collapsed group', () => {
     const settings = settingsFixture()
     const html = renderToStaticMarkup(
       <AddressPicker
@@ -62,6 +62,6 @@ describe('locked fields', () => {
         onExtraChange={noop}
       />,
     )
-    expect(html).toContain('private, not reachable from the internet')
+    expect(html).toMatch(/Private addresses \(\d+\)/)
   })
 })
