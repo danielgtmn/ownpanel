@@ -46,6 +46,10 @@ func (h *Handler) report(w http.ResponseWriter, r *http.Request, rq *request, re
 		pr := propRequest{}
 		for _, p := range root.children(dn("property")) {
 			if name, ok := p.attrValue("name"); ok {
+				if !validXMLName(name) {
+					http.Error(w, "A property name is not a valid XML name.", http.StatusBadRequest)
+					return
+				}
 				ns, _ := p.attrValue("namespace")
 				if ns == "" {
 					ns = nsDAV

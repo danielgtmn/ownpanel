@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // Namespaces.
@@ -184,6 +185,24 @@ func escAttr(s string) string {
 	return r.Replace(s)
 }
 
+// validXMLName tells whether s can be the local name of an element we
+// write: an XML name without a colon (NCName). Names parsed by
+// encoding/xml are; names taken from attributes must be checked.
+func validXMLName(s string) bool {
+	if s == "" || len(s) > 256 {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r == '_' || unicode.IsLetter(r):
+		case i > 0 && (r == '-' || r == '.' || unicode.IsDigit(r) || unicode.Is(unicode.Mn, r)):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // elem writes an element with raw inner XML ("" makes it empty).
 func elem(name xml.Name, inner string) string {
 	open, closeTag := tagOf(name)
@@ -247,6 +266,9 @@ func (m *msWriter) response(w http.ResponseWriter, hrefPath string, props []prop
 	var order []int
 	groups := map[int][]propResult{}
 	for _, p := range props {
+		if !validXMLName(p.name.Local) {
+			continue // never written; only names we parsed get here
+		}
 		if _, ok := groups[p.status]; !ok {
 			order = append(order, p.status)
 		}
