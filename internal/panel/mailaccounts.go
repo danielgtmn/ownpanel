@@ -313,7 +313,17 @@ func (s *Service) SetMailboxAccount(ctx context.Context, a Actor, id int64, in M
 	if next.DisplayName == m.DisplayName && next.AppPasswordsOnly == m.AppPasswordsOnly {
 		return mailboxView(m, nil), nil
 	}
-	if err := s.store.SetMailboxAccount(ctx, id, next.DisplayName, next.AppPasswordsOnly); err != nil {
+	// Only the fields that change are written (and get the admin's time),
+	// so the mailbox's own change of the other one is not discarded.
+	var dn *string
+	var only *bool
+	if next.DisplayName != m.DisplayName {
+		dn = &next.DisplayName
+	}
+	if next.AppPasswordsOnly != m.AppPasswordsOnly {
+		only = &next.AppPasswordsOnly
+	}
+	if err := s.store.SetMailboxAccount(ctx, id, dn, only); err != nil {
 		return Mailbox{}, storeError(err)
 	}
 	addr := m.LocalPart + "@" + m.Domain

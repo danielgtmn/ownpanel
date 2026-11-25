@@ -19,13 +19,17 @@ ALTER TABLE mail_domains ADD COLUMN organisation_id TEXT REFERENCES organisation
 -- app_passwords_only: mail programs sign in only with app passwords.
 -- revision: the highest revision of the mailbox's own changes in the mail
 -- service that was recorded here (config.Mailbox.Revision).
--- admin_changed_at: when the panel last set the password, display name or
--- app_passwords_only itself; a change the mailbox made in the mail
--- service at or before that time does not override it.
+-- admin_password_at, admin_display_name_at, admin_app_passwords_only_at:
+-- when the panel last set that field itself (0: never); a change of the
+-- same field the mailbox made in the mail service at or before that time
+-- does not override it. One time per field, so a change of one field
+-- never discards the mailbox's own change of another.
 ALTER TABLE mailboxes ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE mailboxes ADD COLUMN app_passwords_only INTEGER NOT NULL DEFAULT 0 CHECK (app_passwords_only IN (0, 1));
 ALTER TABLE mailboxes ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE mailboxes ADD COLUMN admin_changed_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE mailboxes ADD COLUMN admin_password_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE mailboxes ADD COLUMN admin_display_name_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE mailboxes ADD COLUMN admin_app_passwords_only_at INTEGER NOT NULL DEFAULT 0;
 
 -- App passwords of a mailbox. id is the public part of the token
 -- ("op_<id>_<secret>"); mac is HMAC-SHA-256 of the secret under the app

@@ -226,10 +226,12 @@ service. How it is built, where it is more precise than the plan above:
   panel applies an event only if its revision is higher than the mailbox's,
   stores that revision and pushes it; the mail service drops every part of
   the overlay the pushed revision reaches. Changes the panel makes itself do
-  not touch the counter. If the panel changed the password, display name or
-  switch itself at or after the moment of the mailbox's change, the panel's
-  value wins (the activity log says so) and the overlay part is dropped by
-  the next push; app passwords added or revoked always count.
+  not touch the counter. If the panel changed the same field (password,
+  display name or switch) itself at or after the moment of the mailbox's
+  change, the panel's value wins (the activity log says so) and the overlay
+  part is dropped by the next push; the panel keeps one such time per
+  field, so an admin renaming a mailbox never undoes the mailbox's own
+  password change. App passwords added or revoked always count.
 - **Events:** `mailbox.password-changed`, `mailbox.display-name-changed`,
   `mailbox.app-passwords-only`, `mailbox.app-password-created`,
   `mailbox.app-password-revoked` (each with `Event.Account`: revision and the

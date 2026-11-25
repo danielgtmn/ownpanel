@@ -213,6 +213,7 @@ func newMailWorld(t *testing.T) *mailWorld {
 	}
 	svc.secrets, svc.mail, svc.mx = box, w.mail, w.mx
 	svc.now = func() time.Time { return w.now }
+	svc.store.Now = func() time.Time { return w.now }
 	ctx := context.Background()
 	if _, err := svc.UpdateSettings(ctx, admin, SettingsUpdate{MailHost: strp(testMailHost), PostmasterAddress: strp("Hostmaster@Example.org")}); err != nil {
 		t.Fatal(err)

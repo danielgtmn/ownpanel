@@ -61,10 +61,12 @@ type Mailbox struct {
 	DisplayName      string
 	AppPasswordsOnly bool
 	// Revision is the highest revision of the mailbox's own changes in the
-	// mail service recorded here; AdminChangedAt when the panel last set the
-	// password, display name or AppPasswordsOnly itself.
-	Revision       int64
-	AdminChangedAt time.Time
+	// mail service recorded here. Admin*At are when the panel last set the
+	// password, the display name or AppPasswordsOnly itself (zero: never).
+	Revision                int64
+	AdminPasswordAt         time.Time
+	AdminDisplayNameAt      time.Time
+	AdminAppPasswordsOnlyAt time.Time
 }
 
 // MailAlias delivers mail for LocalPart@Domain to Targets. LocalPart "*" is
@@ -251,15 +253,17 @@ func (s *Store) DKIMKeys(ctx context.Context, domain string) ([]DKIMKey, error) 
 // ---- mailboxes ----
 
 const mailboxCols = `m.id, m.storage_id, m.domain, m.local_part, m.password_hash, m.quota_bytes, m.send_per_hour, m.send_per_day,
-	m.created_at, d.owner_id, coalesce(u.name, ''), m.display_name, m.app_passwords_only, m.revision, m.admin_changed_at`
+	m.created_at, d.owner_id, coalesce(u.name, ''), m.display_name, m.app_passwords_only, m.revision,
+	m.admin_password_at, m.admin_display_name_at, m.admin_app_passwords_only_at`
 
 const mailboxFrom = ` FROM mailboxes m JOIN mail_domains d ON d.domain = m.domain LEFT JOIN users u ON u.id = d.owner_id`
 
 func scanMailbox(row interface{ Scan(...any) error }) (Mailbox, error) {
 	var m Mailbox
-	var created, adminChanged int64
+	var created, adminPassword, adminDisplayName, adminAppPasswordsOnly int64
 	err := row.Scan(&m.ID, &m.StorageID, &m.Domain, &m.LocalPart, &m.PasswordHash, &m.QuotaBytes, &m.SendPerHour, &m.SendPerDay,
-		&created, &m.OwnerID, &m.Owner, &m.DisplayName, &m.AppPasswordsOnly, &m.Revision, &adminChanged)
+		&created, &m.OwnerID, &m.Owner, &m.DisplayName, &m.AppPasswordsOnly, &m.Revision,
+		&adminPassword, &adminDisplayName, &adminAppPasswordsOnly)
 	if err != nil {
 		if noRows(err) {
 			return Mailbox{}, notFoundf("mailbox not found")
@@ -267,8 +271,13 @@ func scanMailbox(row interface{ Scan(...any) error }) (Mailbox, error) {
 		return Mailbox{}, err
 	}
 	m.CreatedAt = unix(created)
-	if adminChanged > 0 {
-		m.AdminChangedAt = unix(adminChanged)
+	for _, f := range []struct {
+		v   int64
+		dst *time.Time
+	}{{adminPassword, &m.AdminPasswordAt}, {adminDisplayName, &m.AdminDisplayNameAt}, {adminAppPasswordsOnly, &m.AdminAppPasswordsOnlyAt}} {
+		if f.v > 0 {
+			*f.dst = unix(f.v)
+		}
 	}
 	return m, nil
 }
@@ -351,16 +360,27 @@ func (s *Store) CreateMailbox(ctx context.Context, m Mailbox, limit int) (Mailbo
 }
 
 // SetMailboxPassword replaces a mailbox's password hash (a change by the
-// panel: it records AdminChangedAt).
+// panel: it records AdminPasswordAt).
 func (s *Store) SetMailboxPassword(ctx context.Context, id int64, hash string) error {
-	return s.updateMailbox(ctx, `UPDATE mailboxes SET password_hash = ?, admin_changed_at = ? WHERE id = ?`, hash, s.now(), id)
+	return s.updateMailbox(ctx, `UPDATE mailboxes SET password_hash = ?, admin_password_at = ? WHERE id = ?`, hash, s.now(), id)
 }
 
-// SetMailboxAccount replaces a mailbox's display name and AppPasswordsOnly
-// (a change by the panel: it records AdminChangedAt).
-func (s *Store) SetMailboxAccount(ctx context.Context, id int64, displayName string, appPasswordsOnly bool) error {
-	return s.updateMailbox(ctx, `UPDATE mailboxes SET display_name = ?, app_passwords_only = ?, admin_changed_at = ? WHERE id = ?`,
-		displayName, appPasswordsOnly, s.now(), id)
+// SetMailboxAccount replaces a mailbox's display name and AppPasswordsOnly;
+// nil fields stay as they are. A change by the panel: it records the
+// admin time of each field it writes, and only of those.
+func (s *Store) SetMailboxAccount(ctx context.Context, id int64, displayName *string, appPasswordsOnly *bool) error {
+	now := s.now()
+	q := `UPDATE mailboxes SET id = id`
+	var args []any
+	if displayName != nil {
+		q += `, display_name = ?, admin_display_name_at = ?`
+		args = append(args, *displayName, now)
+	}
+	if appPasswordsOnly != nil {
+		q += `, app_passwords_only = ?, admin_app_passwords_only_at = ?`
+		args = append(args, *appPasswordsOnly, now)
+	}
+	return s.updateMailbox(ctx, q+` WHERE id = ?`, append(args, id)...)
 }
 
 // SetMailboxLimits replaces a mailbox's quota and send limits.

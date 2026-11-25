@@ -284,10 +284,11 @@ type MailboxChangeResult struct {
 }
 
 // ApplyMailboxChange records a change of the mailbox with storageID if its
-// revision is newer than the mailbox's. An added app password is not
-// recorded when the mailbox has maxAppPasswords already (<= 0: no limit). The password, display name and
-// AppPasswordsOnly are taken only when the panel did not set them itself
-// at or after ch.At (seconds); app passwords are always added or removed.
+// revision is newer than the mailbox's. The password, display name and
+// AppPasswordsOnly are each taken only when the panel did not set that
+// field itself at or after ch.At (seconds); app passwords are always
+// added or removed, but an added one is not recorded when the mailbox has
+// maxAppPasswords already (<= 0: no limit).
 // The mailbox's revision becomes ch.Revision either way.
 func (s *Store) ApplyMailboxChange(ctx context.Context, storageID string, ch MailboxChange, maxAppPasswords int) (MailboxChangeResult, error) {
 	var r MailboxChangeResult
@@ -302,20 +303,23 @@ func (s *Store) ApplyMailboxChange(ctx context.Context, storageID string, ch Mai
 		if ch.Revision <= m.Revision {
 			return nil
 		}
-		if !m.AdminChangedAt.IsZero() && ch.At.Unix() <= m.AdminChangedAt.Unix() {
-			if ch.PasswordHash != nil || ch.DisplayName != nil || ch.AppPasswordsOnly != nil {
-				r.Overridden = true
+		// Each field on its own: the panel's change of one field never
+		// discards the mailbox's change of another.
+		taken := func(admin time.Time) bool {
+			if admin.IsZero() || ch.At.Unix() > admin.Unix() {
+				return true
 			}
-		} else {
-			if ch.PasswordHash != nil {
-				m.PasswordHash = *ch.PasswordHash
-			}
-			if ch.DisplayName != nil {
-				m.DisplayName = *ch.DisplayName
-			}
-			if ch.AppPasswordsOnly != nil {
-				m.AppPasswordsOnly = *ch.AppPasswordsOnly
-			}
+			r.Overridden = true
+			return false
+		}
+		if ch.PasswordHash != nil && taken(m.AdminPasswordAt) {
+			m.PasswordHash = *ch.PasswordHash
+		}
+		if ch.DisplayName != nil && taken(m.AdminDisplayNameAt) {
+			m.DisplayName = *ch.DisplayName
+		}
+		if ch.AppPasswordsOnly != nil && taken(m.AdminAppPasswordsOnlyAt) {
+			m.AppPasswordsOnly = *ch.AppPasswordsOnly
 		}
 		if _, err := tx.Exec(`UPDATE mailboxes SET password_hash = ?, display_name = ?, app_passwords_only = ?, revision = ? WHERE id = ?`,
 			m.PasswordHash, m.DisplayName, m.AppPasswordsOnly, ch.Revision, m.ID); err != nil {

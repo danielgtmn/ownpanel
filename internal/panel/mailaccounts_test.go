@@ -485,3 +485,47 @@ func TestBuildMailConfigSkipsBadMailbox(t *testing.T) {
 		t.Fatalf("status %+v %v", st, err)
 	}
 }
+
+// TestAdminChangeKeepsOtherFields: an admin change of one field does not
+// discard the mailbox's own change of another field reported later (a
+// leaked password the mailbox replaced must not work again because an
+// admin renamed the mailbox).
+func TestAdminChangeKeepsOtherFields(t *testing.T) {
+	ctx := context.Background()
+	w := newMailWorld(t)
+	svc := w.svc
+	box, _ := svc.store.Mailbox(ctx, w.bobBox)
+	selfAt := w.now
+	w.now = w.now.Add(time.Minute)
+	// The admin renames the mailbox and turns the switch on, after the
+	// mailbox changed its password and its display name.
+	if _, err := svc.SetMailboxAccount(ctx, bob, w.bobBox, MailboxAccount{DisplayName: strp("Team")}); err != nil {
+		t.Fatal(err)
+	}
+	on := true
+	if _, err := svc.SetMailboxAccount(ctx, bob, w.bobBox, MailboxAccount{AppPasswordsOnly: &on}); err != nil {
+		t.Fatal(err)
+	}
+	newHash, err := hashPassword("the-mailbox-replaced-it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.mail.set(func(f *fakeMail) {
+		f.events = []config.Event{
+			{ID: 1, At: selfAt, Kind: config.EventPasswordChanged, StorageID: box.StorageID,
+				Account: &config.AccountChange{Revision: 1, PasswordHash: newHash}},
+			{ID: 2, At: selfAt, Kind: config.EventDisplayNameChanged, StorageID: box.StorageID,
+				Account: &config.AccountChange{Revision: 2, DisplayName: strp("Mine")}},
+		}
+	})
+	if err := svc.recordMailEvents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := svc.store.Mailbox(ctx, w.bobBox)
+	if got.PasswordHash != newHash {
+		t.Fatal("the mailbox's own password change was discarded by an unrelated admin change")
+	}
+	if got.DisplayName != "Team" || !got.AppPasswordsOnly || got.Revision != 2 {
+		t.Fatalf("mailbox %+v", got)
+	}
+}
