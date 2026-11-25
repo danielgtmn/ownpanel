@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AccountError, changePassword, loadMe, onSessionEnded, signIn } from './api.ts'
+import {
+  AccountError,
+  changePassword,
+  loadFilters,
+  loadMe,
+  onSessionEnded,
+  setFilterRules,
+  setForwarding,
+  setOutOfOffice,
+  signIn,
+} from './api.ts'
 
 function respond(status: number, body: unknown) {
   return vi.fn(async (..._args: unknown[]) => new Response(body === undefined ? null : JSON.stringify(body), { status }))
@@ -38,6 +48,34 @@ describe('account API', () => {
     vi.stubGlobal('fetch', respond(401, { error: 'Your session has ended. Sign in again.' }))
     await expect(loadMe()).rejects.toBeInstanceOf(AccountError)
     expect(ended).toHaveBeenCalledTimes(1)
+  })
+
+  it('saves filters with only the fields the server knows, and replace only when asked', async () => {
+    const answer = {
+      rules: { managed: true, out_of_office: { enabled: false }, forwarding: { enabled: false }, filters: null, active_script: '' },
+      folders: null,
+      may_forward: true,
+    }
+    const fetch = respond(200, answer)
+    vi.stubGlobal('fetch', fetch)
+    const loaded = await loadFilters()
+    expect(loaded.folders).toEqual([])
+    expect(loaded.rules.filters).toEqual([])
+    const outOfOffice = { enabled: true, subject: '', text: 'Away', start: '', end: '', zone: '+0100', days: 7 }
+    await setOutOfOffice(outOfOffice, false)
+    await setForwarding({ enabled: true, to: 'b@example.com', keep_copy: true }, true)
+    await setFilterRules([], false)
+    const bodies = fetch.mock.calls.slice(1).map(([url, init]) => [url, JSON.parse((init as RequestInit).body as string)])
+    expect(bodies).toEqual([
+      ['/account/api/out-of-office', { out_of_office: outOfOffice }],
+      ['/account/api/forwarding', { forwarding: { enabled: true, to: 'b@example.com', keep_copy: true }, replace: true }],
+      ['/account/api/filters', { filters: [] }],
+    ])
+  })
+
+  it('explains a refusal because of filters from a mail program', async () => {
+    vi.stubGlobal('fetch', respond(409, { error: 'script is not managed' }))
+    await expect(setFilterRules([], false)).rejects.toThrow('Your filters were written in a mail program.')
   })
 
   it('falls back to a plain message', async () => {

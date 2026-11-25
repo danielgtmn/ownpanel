@@ -39,6 +39,8 @@ export type MailboxUsage = {
   blocked: boolean
   blocked_reason: string
   blocked_at: string | null
+  // An out-of-office reply answers mail now (never its text).
+  out_of_office?: boolean
 }
 
 export type Mailbox = {
@@ -56,6 +58,37 @@ export type Mailbox = {
   display_name: string
   // Mail programs can sign in only with app passwords, not with the mailbox's own password.
   app_passwords_only: boolean
+}
+
+// Out-of-office and forwarding of a mailbox for its domain owner (internal/panel/mailrules.go). Subject, text and
+// address only come when they were set from the panel (set_by); what the person set stays private.
+export type MailboxOutOfOffice = {
+  enabled: boolean
+  // Enabled and within its dates today.
+  on: boolean
+  start: string
+  end: string
+  set_by: string
+  set_at: string | null
+  subject: string
+  text: string
+  days: number
+}
+
+export type MailboxForwarding = {
+  enabled: boolean
+  to: string
+  keep_copy: boolean
+  set_by: string
+  set_at: string | null
+}
+
+export type MailboxRules = {
+  out_of_office: MailboxOutOfOffice
+  forwarding: MailboxForwarding
+  // The person's filters were written in a mail program; saving here replaces them (replace).
+  hand_written: boolean
+  may_forward: boolean
 }
 
 export type AppPassword = {

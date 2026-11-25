@@ -138,7 +138,7 @@ func rulesError(err error) error {
 	if errors.As(err, &e) {
 		switch e.Status {
 		case 409:
-			return &Error{Kind: Conflict, Msg: "the person's filters were written in a mail program; confirm to replace them", Err: err}
+			return &Error{Kind: Conflict, Code: CodeHandWrittenFilters, Msg: "the person's filters were written in a mail program; confirm to replace them", Err: err}
 		case 400:
 			return &Error{Kind: Invalid, Msg: strings.TrimSpace(e.Msg), Err: err}
 		}

@@ -137,7 +137,7 @@ func TestMailRules(t *testing.T) {
 	w.mail.set(func(f *fakeMail) { f.rules(sid).Managed = false })
 	_, err = w.svc.SetMailboxOutOfOffice(ctx, bob, w.bobBox, OutOfOfficeInput{Enabled: false})
 	var pe *Error
-	if !errors.As(err, &pe) || pe.Kind != Conflict {
+	if !errors.As(err, &pe) || pe.Kind != Conflict || CodeOf(err) != CodeHandWrittenFilters {
 		t.Fatalf("hand written: %v", err)
 	}
 	if _, err := w.svc.SetMailboxOutOfOffice(ctx, bob, w.bobBox, OutOfOfficeInput{Enabled: false, Replace: true}); err != nil {
