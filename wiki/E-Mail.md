@@ -147,15 +147,51 @@ else keeps working.
   lost. Up to 50 per mailbox.
 - **Revoke** ends it for good.
 - **Only allow mail programs with app passwords:** when on, the mailbox's
-  own password no longer works in mail programs (it will still work for
-  the mailbox's own settings area, once that exists). Create the app
+  own password no longer works in mail programs (it still works on the
+  mailbox's own page, see below). Create the app
   passwords first, or mail programs stop working. This is the setting to
   use if the mailbox password might be known to others, and it is the
   ground for a later second sign-in step.
 
-App passwords are created and revoked in the web interface or through the
-[[API|API]], never by an AI assistant through MCP. Changing the mailbox's
-password does not revoke them.
+App passwords are created and revoked in the web interface, on the
+mailbox's own page or through the [[API|API]], never by an AI assistant
+through MCP. Changing the mailbox's password does not revoke them, unless
+the person asks for it on their own page.
+
+### Your mailbox's own page
+
+The people who use a mailbox manage it themselves at
+**`https://<mail server name>/`** (for example `https://mail.example.com/`),
+signed in with the full address and the mailbox password. There they can
+
+- see how much room their mail takes and the storage limit;
+- set their **display name**;
+- **change their password** (the current one is needed; the same rules as
+  in the panel: 10 to 200 characters), optionally signing out every mail
+  program that uses an app password at the same time (all app passwords are
+  revoked);
+- **create and revoke app passwords** (shown once, with copy), see when each
+  was last used in the last 30 days, and switch **Only allow mail programs
+  with app passwords** on or off;
+- read the **settings for mail programs** and download the **setup for
+  Apple devices**.
+
+Only the mailbox password signs in there, also when mail programs may only
+use app passwords; app passwords never do. The page signs out after 30
+minutes without use and after 12 hours in any case, and at once when the
+password is changed elsewhere (by the person on another device, or by you
+in the panel) or the mailbox is deleted. Too many wrong passwords from one
+network hold back further tries for 15 minutes.
+
+Changes made there show up in the panel and the activity log with the
+mailbox as the one who made them (never with a password). The page says
+that the people who manage the server can reset the password: there is no
+"forgot password" by e-mail, and an administrator or the domain's owner can
+set a new password at any time, which ends the person's sessions.
+
+The page needs a mail server name of its own, other than the panel's
+address (**Mail health** warns otherwise), and the mail service's web socket
+(set up by `install.sh`).
 
 ### Organisations
 

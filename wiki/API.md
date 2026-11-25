@@ -229,6 +229,23 @@ The panel settings (`GET`/`PUT /api/settings`, admin) also carry `mail_host`, `m
 
 Paths match regardless of case. Caddy passes them to the panel only for `autoconfig.`/`autodiscover.` names the panel has seen point to this server, and the well-known path on site domains that are active mail domains.
 
+**The mailbox's own API (mail server name, outside the panel's API).** On `https://<mail server name>/account/api/` the mail service answers the mailbox's own page ([[E-Mail|E-Mail]], "Your mailbox's own page"). It does not take panel sessions or access tokens: a mailbox signs in with its address and mailbox password (app passwords are refused) and gets the cookie `__Host-ownpanel_mailbox`. Changing requests need `X-Ownpanel-Request: 1`; bodies are JSON, at most 16 KiB; errors are `{"error": "…"}` in plain words. `401` means the session ended (sign in again).
+
+**Me:** `{"address", "display_name", "used_bytes", "messages", "quota_bytes", "app_passwords": [{"id", "name", "created_at", "last_used_at", "last_used_network"}], "app_passwords_only", "app_passwords_available", "uses_known_days", "client": {"server", "imap_port", "smtp_port", "smtp_starttls_port", "user_name_is_address"}}`. `quota_bytes` `0` means no limit; `last_used_at` is `null` when the app password was not used within `uses_known_days`.
+
+| Method | Path below `/account/api` | Body | Answer |
+|---|---|---|---|
+| `POST` | `/session` | `{"address", "password"}` | Me, sets the cookie. `401` wrong address or password, `429` too many failures |
+| `DELETE` | `/session` | | `204`, signs out |
+| `GET` | `/me` | | Me |
+| `PUT` | `/password` | `{"current_password", "new_password", "revoke_app_passwords"}` | Me. Other sessions of the mailbox end; with `revoke_app_passwords` every app password is revoked |
+| `PUT` | `/display-name` | `{"display_name"}` (`""` removes it) | Me |
+| `PUT` | `/app-passwords-only` | `{"app_passwords_only"}` | Me |
+| `POST` | `/app-passwords` | `{"name"}` | `201` `{"app_password", "password"}`; the password is returned only here. `409` at 50 app passwords |
+| `DELETE` | `/app-passwords/{id}` | | `204` |
+| `GET` | `/apple-setup` | | the setup for Apple devices, as in the panel |
+| `GET` | `/health` | | `{"status": "ok"}`, no sign-in |
+
 For record routes, `{name}` is `@` for the zone itself, and `{type}` is for example `A` or `TXT`. See [[DNS|DNS]] for what is allowed.
 
 Any other path under `/api/` answers `404` with `{"error": "No such API endpoint"}`.

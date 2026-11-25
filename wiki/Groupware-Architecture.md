@@ -85,7 +85,7 @@ It all works with standard programs: Thunderbird, Apple Mail/Calendar/Contacts, 
 | Phase | Content | Size | Depends on | Issue |
 |---|---|---|---|---|
 | G0 | Web entry point on the mail host: Caddy site, certificate, routing, DAV socket | S | — | [#85](https://github.com/danielgtmn/ownpanel/issues/85) |
-| G1 | Mailbox accounts: display name, self-service area, app passwords, organisations | M | G0 | [#86](https://github.com/danielgtmn/ownpanel/issues/86) |
+| G1 | Mailbox accounts: display name, self-service area, app passwords, organisations (built) | M | G0 | [#86](https://github.com/danielgtmn/ownpanel/issues/86) |
 | G2 | Filters and out-of-office (Sieve, ManageSieve) | L | G1 | [#87](https://github.com/danielgtmn/ownpanel/issues/87) |
 | G3 | Shared mailboxes, send as / on behalf, distribution groups | XL | G1 | [#88](https://github.com/danielgtmn/ownpanel/issues/88) |
 | G4a | Own calendars and contacts, discovery, sync, directory | XL | G1 | [#89](https://github.com/danielgtmn/ownpanel/issues/89) |
@@ -147,7 +147,7 @@ spike** decides library vs. own code (see [Libraries](#libraries)).
 - The panel answers requests for `mail_host` with the web app only (`/api`
   and `/mcp` are 404 there too). `index.html` then carries
   `<meta name="ownpanel-mail-host">`, which makes the app show the account
-  area (`web/src/account/`, a placeholder until G1) instead of the panel.
+  area (`web/src/account/`) instead of the panel.
 - The settings do not refuse `mail_host` = panel domain yet (there is no
   groupware switch to refuse); Mail health has the check `self_service`,
   a warning in that case.
@@ -201,8 +201,7 @@ resets it, as today.
 
 **Groundwork (built):** display names, organisations, app passwords and
 "mail programs only with app passwords" exist in the panel and the mail
-service; the self-service area and its account API come next. How it is
-built, where it is more precise than the plan above:
+service. How it is built, where it is more precise than the plan above:
 
 - **Configuration:** `Domain.Organisation` (an opaque id: `org-<random>`
   for a group, `dom-<domain>` for a domain that stands alone; never the
@@ -241,6 +240,47 @@ built, where it is more precise than the plan above:
   of one of the owners; the activity log notes "domains of different
   owners". A member sees an organisation an admin put their domain into only
   by name, and can take the domain out.
+
+**Built (self-service area):** how it turned out, and where it differs
+from the plan:
+
+- **Package `internal/mail/account`** serves `/account/api/` on the web
+  socket (wired in `cmd/ownpaneld/mail.go` through
+  `server.Options.AccountHandler`): `POST`/`DELETE session`, `GET me`,
+  `PUT password`, `PUT display-name`, `PUT app-passwords-only`,
+  `POST app-passwords`, `DELETE app-passwords/{id}`, `GET apple-setup`
+  (wiki/API.md). Changes go through `server.ApplyAccountChange`, so they
+  are overlays with revisions and events as described above.
+- **Sign-in:** `signin.Checker.CheckMain` on a Checker of its own (own
+  tables, one hashing slot of its own, no cache): only the main password,
+  `AppPasswordsOnly` ignored, anything of the form of an app password fails
+  after the same work as a wrong password. Throttle as for mail programs:
+  per (network, address) and per network, IPv4 per address, IPv6 per /48,
+  fail closed when the tables are full. Clients whose address is unknown
+  (no `X-Forwarded-For` from Caddy) share one bucket.
+- **Sessions** in `mail.db` (migration 7, `account_sessions`): SHA-256 of a
+  256-bit id, the storage id, the address and a fingerprint (SHA-256) of
+  the password hash at sign-in; at most 20 per mailbox. Every request checks
+  the session against the directory (storage id, address, password hash),
+  so a reset by the panel, a password change on another device or a
+  deleted mailbox end it at once; a conversion to shared will be added to
+  that check with G3 (mailbox kinds do not exist yet). The session that
+  changes the password gets the new fingerprint and stays; the mailbox's
+  other sessions are deleted. Idle 30 minutes, at most 12 hours; ended
+  sessions are pruned every 10 minutes.
+- **CSRF:** changing requests need `X-Ownpanel-Request: 1`; a
+  `Sec-Fetch-Site` other than `same-origin`, or an `Origin` that is not
+  `https://` + the request's host, is refused; requests for another host
+  than the mail host answer 404. 30 changes per session in 15 minutes.
+- **Last use of app passwords** comes from the mail service's own
+  `mailbox.app-password-used` events (kept 30 days), so the page shows
+  uses of the last 30 days; the panel keeps the full history.
+- **Shared code:** the Apple profile and the client settings moved to
+  `internal/mailsetup`, the password rules to `passwd.CheckNew` and
+  `config.CheckNewPassword`; the panel and the mail service use the same.
+- **Not built:** organisation name on the page (the mail service only has
+  the opaque id), a second sign-in step (TOTP), and a list of the
+  mailbox's sessions.
 
 **Known limits:** the new Outlook syncs IMAP through Microsoft's cloud, so
 many people share a few Microsoft addresses. The per-network throttle counts
