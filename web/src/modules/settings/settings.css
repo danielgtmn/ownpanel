@@ -223,3 +223,90 @@
 .mail-health-title {
   overflow-wrap: anywhere;
 }
+
+.settings-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+}
+
+.settings-notice > p {
+  flex: 1 1 20rem;
+  margin: 0;
+}
+
+.setting-current {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.setting-current > p,
+.setting-value {
+  margin: 0;
+}
+
+.setting-values {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+.update-auto-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.mail-settings {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mail-setting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.875rem 0;
+}
+
+.mail-setting + .mail-setting {
+  border-top: 1px solid var(--ui-border);
+}
+
+.mail-setting:first-child {
+  padding-top: 0;
+}
+
+.mail-setting-main {
+  display: flex;
+  flex: 1 1 20rem;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.mail-setting-main h3 {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 650;
+}
+
+.mail-setting-main p {
+  margin: 0;
+  font-size: 0.875rem;
+}

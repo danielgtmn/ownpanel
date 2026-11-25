@@ -1,5 +1,6 @@
 export {
   buildFamilies,
+  attentionText,
   familyStatus,
   familySummary,
   findFamily,

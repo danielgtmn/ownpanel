@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { settingsFixture } from '../../shared/settings/testing.ts'
-import { parseLists, spamChange, spamDraft, validateSpamDraft } from './spamChecks.ts'
+import { parseLists, spamChange, spamDraft, spamSummary, validateSpamDraft } from './spamChecks.ts'
 
 describe('spam checks', () => {
   it('reads the three choices for the lists from the settings', () => {
@@ -85,5 +85,25 @@ describe('spam checks', () => {
     expect(validateSpamDraft({ ...base, junkScore: null }).junkScore).toBe('Enter a number.')
     expect(validateSpamDraft({ ...base, junkScore: 0.5 }).junkScore).toMatch(/from 1 to 50/)
     expect(validateSpamDraft({ ...base, mode: 'off', lists: 'garbage here' })).toEqual({})
+  })
+})
+
+describe('spamSummary', () => {
+  it('describes the checks in one sentence', () => {
+    const base = settingsFixture({
+      mail_blocklists_default: true,
+      mail_blocklists: ['zen.spamhaus.org'],
+      mail_junk_score: 5,
+      mail_greylisting: false,
+    })
+    expect(spamSummary(base)).toBe(
+      'Checks the recommended list of spam senders. Junk from 5 points; first mail from unknown servers is not held back.',
+    )
+    expect(spamSummary({ ...base, mail_blocklists_default: false, mail_blocklists: [], mail_greylisting: true })).toBe(
+      "Doesn't check lists of spam senders. Junk from 5 points; first mail from unknown servers is held back.",
+    )
+    expect(spamSummary({ ...base, mail_blocklists_default: false, mail_blocklists: ['a.example', 'b.example'] })).toMatch(
+      /^Checks 2 own lists of spam senders\./,
+    )
   })
 })

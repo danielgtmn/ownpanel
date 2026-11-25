@@ -24,6 +24,8 @@ When it is done, the installer prints:
 
 The setup code is only valid until the first administrator exists. Show it again with `sudo cat /var/lib/ownpanel/setup-code`.
 
+On an upgrade or a second run, once an administrator exists, the installer just tells you to open the panel at its usual address: the domain set in the panel (or with `--panel-domain`, which it then names), and `https://<server address>/`, which leads there.
+
 To set everything up front without the browser, pass the options (all optional):
 
 ```sh
@@ -172,7 +174,7 @@ There are three ways, all ending in the same steps: look up the release, downloa
 
 ### In the panel
 
-**Settings → Updates** shows the installed version and channel, the newest version of each channel with a link to its release notes, and a button **Update to vX.Y.Z**. After you confirm, the page shows the progress; the panel restarts in the middle, the page waits for it and reloads itself with the new version. Switching to the other channel works the same way; if that would install an older version (e.g. from a nightly build back to the last stable release), the panel says so and asks again.
+**Settings → Updates** shows the installed version and channel, the newest version of each channel with a link to its release notes, and a button **Update to vX.Y.Z**. For nightly builds the date is when the build was made. Before asking you to confirm, the panel looks for the newest version again, so it names the build that will be installed. After you confirm, the page shows the progress; the panel restarts in the middle, the page waits for it and reloads itself with the new version. Other open tabs of the panel reload themselves too as soon as they hear from it, before asking you to sign in again. Switching to the other channel works the same way; if that would install an older version (e.g. from a nightly build back to the last stable release), the panel says so and asks again.
 
 The panel looks for new versions on GitHub at most every 30 minutes. If GitHub cannot be reached it says so, and nothing else is affected. **Check for updates** looks right away (at most once a minute) and the page shows when it last looked.
 
@@ -206,7 +208,7 @@ Installations made before the updater existed have no local `update.sh` and no u
 It refuses to run where ownpanel is not installed and never asks setup questions. The steps:
 
 1. Look up the release through GitHub's API (`/releases/latest` for stable, `/releases/tags/nightly` or `/releases/tags/vX.Y.Z`) and print the version it holds. Nothing to do if that is the installed version.
-2. Download `checksums.txt` and the archive for this machine **by asset id** from that same answer, and check the archive against `checksums.txt` and its `VERSION` against what GitHub reported. A release that is still being published (the nightly is replaced in place) is refused with "try again in a few minutes" instead of mixing two builds.
+2. Download `checksums.txt` and the archive for this machine **by asset id** from that same answer, and check the archive against `checksums.txt` and its `VERSION` against what GitHub reported. Two builds are never mixed. The nightly is replaced in place by every new build: if its files disappear during the download, the nightly is looked up again and the build it holds now is downloaded instead (for a few minutes at most, then "try again in a few minutes"). With `--version nightly-…` the update fails instead and says that this build is no longer available. A connection that does not open within 15 seconds, or a download slower than 1 KB/s for 30 seconds, is given up after two retries instead of hanging.
 3. `ownpaneld backup` into `/var/lib/ownpanel/backups/` (root only; the last three are kept).
 4. Keep the current binaries, unit files, `caddy-bootstrap.json`, `ownpaneld.env` and `release` as `*.previous`.
 5. Run the **new release's** `install.sh --from-dir <unpacked> --yes`, so the file layout is only ever defined by `install.sh`.
@@ -220,6 +222,8 @@ The database is not restored on a rollback: a new version may have migrated it. 
 The panel runs as the unprivileged user `ownpanel` and never gets root. It only writes a small request into `/var/lib/ownpanel/update/request.json`. `ownpanel-update.path` notices it and starts `ownpanel-update.service` (root), which runs `/usr/local/lib/ownpanel/ownpanel-update`: it moves the request out of the panel's reach, accepts exactly `{"id": <32 hex digits>, "channel": "stable"|"nightly"}` or `{"id", "version": "vX.Y.Z"}` and nothing else, and runs `update.sh --yes --status-file /var/lib/ownpanel/update/status.json` with those values. `ownpanel-update.timer` starts the same service every 15 minutes for automatic updates, which reads `auto.json` (written by the panel) through the same strict checks. See [[Security|Security#updates]].
 
 On the server, `journalctl -u ownpanel-update` shows what the updater did.
+
+An update may take at most 30 minutes; then systemd stops it. Whenever `update.sh` ends without a result (stopped, or an unexpected error) it reports the update as failed, so the panel never keeps showing it as running. Should even that not happen (the process was killed outright), the panel shows an update that has been running for more than 35 minutes as failed.
 
 ### Running the installer again
 

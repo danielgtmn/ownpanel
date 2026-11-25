@@ -1,23 +1,11 @@
+/* Every step, including the account step, uses the same card width so it doesn't jump. */
 .gate-card.wizard-card {
   max-width: 40rem;
 }
 
+/* Centered like the sign-in card; the page scrolls when a step is taller than the window. */
 .wizard {
-  align-items: start;
   padding-block: 2rem;
-}
-
-.steps {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.steps-count {
-  margin: 0;
-  color: var(--ui-muted-foreground);
-  font-size: 0.8125rem;
-  font-weight: 600;
 }
 
 .steps-list {
@@ -32,6 +20,7 @@
 
 .steps-list li {
   display: flex;
+  white-space: nowrap;
   align-items: center;
   gap: 0.4rem;
   color: var(--ui-muted-foreground);
@@ -70,6 +59,20 @@
   gap: 1.25rem;
 }
 
+.wizard-intro {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+/* Forms stay at a comfortable line length inside the wider card. */
+.wizard-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-width: 28rem;
+}
+
 .wizard-step h2 {
   margin: 0;
   font-size: 1.125rem;
@@ -79,26 +82,6 @@
 
 .wizard-step p {
   margin: 0;
-}
-
-.wizard-skip {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.375rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--ui-border);
-}
-
-.link-button[data-slot='button'] {
-  height: auto;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--ui-primary);
-  font-weight: 600;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in oklab, currentColor 40%, transparent);
 }
 
 .wizard-actions {
@@ -156,5 +139,19 @@
 
   .wizard-actions > [data-slot='button'] {
     flex: 1 1 auto;
+  }
+
+  .wizard-hint {
+    flex-basis: 100%;
+  }
+
+  /* Narrow screens show only the current step's name next to the numbers. */
+  .steps-list li:not([data-state='current']) .step-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 }

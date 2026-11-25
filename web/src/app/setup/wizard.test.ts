@@ -4,6 +4,7 @@ import { checksFixture, json, mockFetch, settingsFixture } from '../../shared/se
 import {
   canContinue,
   canSkip,
+  checkPanelStep,
   continueHint,
   finishOutcome,
   finishQuestion,
@@ -11,7 +12,7 @@ import {
   nextStep,
   previousStep,
   runFinish,
-  stepLabel,
+  stepNumber,
 } from './wizard.ts'
 
 afterEach(() => {
@@ -20,8 +21,8 @@ afterEach(() => {
 
 describe('steps', () => {
   it('counts four steps', () => {
-    expect(stepLabel('addresses')).toBe('Step 2 of 4')
-    expect(stepLabel('done')).toBe('Step 4 of 4')
+    expect(stepNumber('addresses')).toBe(2)
+    expect(stepNumber('done')).toBe(4)
   })
 
   it('moves forward and back, never back to the finished account step', () => {
@@ -41,7 +42,7 @@ describe('steps', () => {
 })
 
 describe('can continue', () => {
-  const base = { settings: settingsFixture(), selectedAddresses: [] as string[], domainDirty: false }
+  const base = { settings: settingsFixture(), selectedAddresses: [] as string[] }
 
   it('needs at least one address, unless they are locked', () => {
     expect(canContinue('addresses', base)).toBe(false)
@@ -52,18 +53,50 @@ describe('can continue', () => {
     ).toBe(true)
   })
 
-  it('needs a saved domain without unsaved edits', () => {
-    expect(canContinue('panel', base)).toBe(false)
-    expect(continueHint('panel', base)).toMatch(/skip/)
-    const saved = { ...base, settings: settingsFixture({ panel_domain: 'panel.example.com' }) }
-    expect(canContinue('panel', saved)).toBe(true)
-    expect(continueHint('panel', saved)).toBeNull()
-    expect(canContinue('panel', { ...saved, domainDirty: true })).toBe(false)
-    expect(continueHint('panel', { ...saved, domainDirty: true })).toMatch(/save the domain/i)
+  it('lets Continue check the panel step itself', () => {
+    expect(canContinue('panel', base)).toBe(true)
+    expect(continueHint('panel', base)).toBeNull()
   })
 
   it('has nothing to continue to after the last step', () => {
     expect(canContinue('done', base)).toBe(false)
+  })
+})
+
+describe('the panel step', () => {
+  const draft = (domain: string, email = '') => ({ domain, email })
+
+  it('needs a domain', () => {
+    const check = checkPanelStep(settingsFixture(), draft(''))
+    expect(check.domainError).toMatch(/enter a domain/i)
+    expect(check.emailError).toBeNull()
+  })
+
+  it('rejects an IP address and a wrong e-mail', () => {
+    const check = checkPanelStep(settingsFixture(), draft('203.0.113.5', 'nope'))
+    expect(check.domainError).toMatch(/not an IP address/)
+    expect(check.emailError).toMatch(/e-mail address/)
+  })
+
+  it('saves the cleaned-up domain and the optional e-mail in one go', () => {
+    expect(checkPanelStep(settingsFixture(), draft(' https://Panel.Example.com/ ', ' me@example.com '))).toEqual({
+      domainError: null,
+      emailError: null,
+      change: { panel_domain: 'panel.example.com', acme_email: 'me@example.com' },
+    })
+    expect(checkPanelStep(settingsFixture(), draft('panel.example.com')).change).toEqual({
+      panel_domain: 'panel.example.com',
+    })
+  })
+
+  it('saves nothing when nothing changed', () => {
+    const saved = settingsFixture({ panel_domain: 'panel.example.com', acme_email: 'me@example.com' })
+    expect(checkPanelStep(saved, draft('panel.example.com', 'me@example.com')).change).toEqual({})
+  })
+
+  it('accepts locked fields as they are', () => {
+    const locked = settingsFixture({ panel_domain_locked: true, acme_email_locked: true, acme_email: 'x' })
+    expect(checkPanelStep(locked, draft('', 'not an e-mail'))).toEqual({ domainError: null, emailError: null, change: {} })
   })
 })
 

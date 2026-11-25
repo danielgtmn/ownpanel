@@ -1,4 +1,4 @@
-import { formatReleaseDate, parseReleaseDate } from '../../shared/format/index.ts'
+import { formatDateTime, formatReleaseDate, parseReleaseDate } from '../../shared/format/index.ts'
 import type { Activity } from './types.ts'
 
 export const LIMITS = [50, 100, 200] as const
@@ -115,9 +115,14 @@ export function describeDetail({ action, detail }: Pick<Activity, 'action' | 'de
     case 'update.auto':
       return detail === 'off' ? 'Off' : `On: ${detail}`
     case 'update.result':
+    case 'setup.complete':
       return detail.charAt(0).toUpperCase() + detail.slice(1)
     case 'settings.update':
-      return detail.charAt(0).toUpperCase() + detail.slice(1)
+      return detail.charAt(0).toUpperCase() + detail.slice(1).replaceAll('; ', ' · ')
+    case 'site.upload-link': {
+      const match = /^valid until (.+)$/.exec(detail)
+      return match ? `Valid until ${formatDateTime(match[1])}` : detail
+    }
     case 'mail.domain.enable':
       return ''
     case 'mail.domain.activate': {
@@ -194,8 +199,32 @@ export function describeActivity({ actor, action, target }: Entry): string {
       return `${who} changed the automatic updates`
     case 'update.result':
       return 'An update of the panel finished'
+    case 'setup.complete':
+      return `${who} finished setting up the panel`
     case 'settings.update':
       return `${who} changed the settings`
+    case 'site.upload-link':
+      return about(target, (t) => `${who} created an upload link for ${t}`, `${who} created an upload link`)
+    case 'redirect.create':
+      return about(target, (t) => `${who} added a redirect from ${t}`, `${who} added a redirect`)
+    case 'redirect.update':
+      return about(target, (t) => `${who} changed the redirect from ${t}`, `${who} changed a redirect`)
+    case 'redirect.delete':
+      return about(target, (t) => `${who} removed the redirect from ${t}`, `${who} removed a redirect`)
+    case 'dns.connect':
+      return about(target, (t) => `${who} connected ${t}`, `${who} connected a domain provider`)
+    case 'dns.disconnect':
+      return about(target, (t) => `${who} disconnected ${t}`, `${who} disconnected a domain provider`)
+    case 'dns.zone.create':
+      return about(target, (t) => `${who} added the domain ${t}`, `${who} added a domain`)
+    case 'dns.zone.delete':
+      return about(target, (t) => `${who} removed the domain ${t}`, `${who} removed a domain`)
+    case 'dns.record.set':
+      return about(target, (t) => `${who} changed a DNS record of ${t}`, `${who} changed a DNS record`)
+    case 'dns.record.delete':
+      return about(target, (t) => `${who} deleted a DNS record of ${t}`, `${who} deleted a DNS record`)
+    case 'dns.point':
+      return about(target, (t) => `${who} pointed ${t} to this server`, `${who} pointed a domain to this server`)
     case 'mail.domain.enable':
       return about(target, (t) => `${who} turned on e-mail for ${t}`, `${who} turned on e-mail for a domain`)
     case 'mail.domain.activate':

@@ -204,7 +204,7 @@ export function RecordsSection({ domain, onApplied }: { domain: string; onApplie
             </p>
           ) : data.can_apply ? (
             <p>
-              {data.zone} is in your DNS account
+              {data.zone} is managed through one of your DNS connections
               {data.connection_id !== null ? (
                 <>
                   {' '}

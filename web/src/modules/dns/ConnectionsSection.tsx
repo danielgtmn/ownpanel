@@ -141,27 +141,28 @@ export function ConnectionsSection({ connections, onChanged }: Props) {
 
   return (
     <Section
-      title="Connections"
+      title="DNS connections"
       description="Connect the company that manages your domains, so you can change their DNS records here."
       actions={connections.status === 'ready' && connections.data.length > 0 ? connectButton : null}
     >
-      {connections.status === 'loading' ? <LoadingState label="Loading your connections…" /> : null}
+      {connections.status === 'loading' ? <LoadingState label="Loading your DNS connections…" /> : null}
       {connections.status === 'error' ? (
         <ErrorState
-          title="Couldn't load your connections"
+          title="Couldn't load your DNS connections"
           message={errorMessage(connections.error)}
           onRetry={connections.retry}
         />
       ) : null}
       {connections.status === 'ready' && connections.data.length === 0 ? (
         <EmptyState
-          title="Nothing connected yet"
+          inSection
+          title="No DNS connection yet"
           description="Connect Hetzner to see your domains and manage their DNS records."
           action={connectButton}
         />
       ) : null}
       {connections.status === 'ready' && connections.data.length > 0 ? (
-        <ul className="record-list" aria-label="Connections">
+        <ul className="record-list" aria-label="DNS connections">
           {connections.data.map((connection) => (
             <ConnectionRow
               key={connection.id}

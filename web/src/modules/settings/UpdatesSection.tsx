@@ -1,5 +1,6 @@
 import { confirm } from '@ui-sdk/react/alert-dialog'
 import { Button } from '@ui-sdk/react/button'
+import { DialogClose } from '@ui-sdk/react/dialog'
 import { Field, FieldDescription, FieldError, FieldLabel } from '@ui-sdk/react/field'
 import { Switch, SwitchThumb } from '@ui-sdk/react/switch'
 import { TimeInput } from '@ui-sdk/react/time-input'
@@ -9,7 +10,7 @@ import { errorMessage } from '../../shared/api/index.ts'
 import { formatDate, formatDateTime } from '../../shared/format/index.ts'
 import { useResource } from '../../shared/hooks/index.ts'
 import { startPolling } from '../../shared/settings/index.ts'
-import { ExternalIcon, LoadingState, Section, StatusBadge } from '../../shared/ui/index.ts'
+import { ExternalIcon, FormDialog, LoadingState, Section, StatusBadge } from '../../shared/ui/index.ts'
 import {
   CHANNELS,
   channelHint,
@@ -17,6 +18,7 @@ import {
   checkResult,
   isBusy,
   lastCheckedText,
+  latestBeforeInstall,
   needsReload,
   POLL_INTERVAL,
   progressText,
@@ -119,7 +121,9 @@ function ChannelRow({ info, channel, busy, onInstall }: ChannelRowProps) {
   )
 }
 
-function AutoUpdatesForm({ info, onSaved }: { info: UpdateInfo; onSaved: (info: UpdateInfo) => void }) {
+type AutoProps = { info: UpdateInfo; onSaved: (info: UpdateInfo) => void }
+
+function AutoUpdatesForm({ info, onSaved, onDone }: AutoProps & { onDone: () => void }) {
   const channel = info.installed.channel
   const [initialFrom, initialTo] = splitWindow(info.auto.window)
   const [enabled, setEnabled] = useState(info.auto.mode !== 'off')
@@ -142,14 +146,14 @@ function AutoUpdatesForm({ info, onSaved }: { info: UpdateInfo; onSaved: (info: 
       })
       onSaved(next)
       toast.success(next.auto.mode === 'off' ? 'Automatic updates are off.' : 'Automatic updates are on.')
+      onDone()
     } catch (caught) {
       setError(errorMessage(caught))
     }
   }
 
   return (
-    <div className="update-auto">
-      <h3>Automatic updates</h3>
+    <form className="form update-auto" onSubmit={(event) => event.preventDefault()} noValidate>
       <Field className="update-switch" disabled={unavailable}>
         <Switch
           checked={enabled}
@@ -163,8 +167,9 @@ function AutoUpdatesForm({ info, onSaved }: { info: UpdateInfo; onSaved: (info: 
         <div className="choice-text">
           <FieldLabel>Install new versions automatically</FieldLabel>
           <FieldDescription>
-            Once a day within the hours below (server time), a newer version from {channelName(channel).toLowerCase()} is
-            installed. If it doesn't start, the previous version is put back.
+            Once a day{enabled ? ' within the hours below (server time)' : ''}, a newer version
+            {channel ? ` from ${channelName(channel).toLowerCase()}` : ''} is installed. If it doesn't start, the previous
+            version is put back.
           </FieldDescription>
         </div>
       </Field>
@@ -185,11 +190,53 @@ function AutoUpdatesForm({ info, onSaved }: { info: UpdateInfo; onSaved: (info: 
           <FieldError match>{error}</FieldError>
         </Field>
       ) : null}
-      <div className="settings-actions">
-        <Button pendingAnnouncement="Saving" disabled={unavailable || unchanged} onClick={save}>
+      <div className="form-actions">
+        <DialogClose>Cancel</DialogClose>
+        <Button
+          type="submit"
+          data-variant="solid"
+          pendingAnnouncement="Saving"
+          disabled={unavailable}
+          onClick={unchanged ? onDone : save}
+        >
           Save
         </Button>
       </div>
+    </form>
+  )
+}
+
+function autoSummary(info: UpdateInfo): string {
+  if (info.auto.mode === 'off') return 'Off. New versions are installed only when you start an update.'
+  const [from, to] = splitWindow(info.auto.window)
+  const hours = from && to ? ` between ${from} and ${to} (server time)` : ''
+  return `On. Once a day${hours}, a newer version from ${channelName(info.auto.mode).toLowerCase()} is installed.`
+}
+
+function AutoUpdates({ info, onSaved }: AutoProps) {
+  const [open, setOpen] = useState(false)
+  const unavailable = !info.supported || info.installed.channel === ''
+  return (
+    <div className="update-auto">
+      <div className="update-auto-row">
+        <div className="choice-text">
+          <h3>Automatic updates</h3>
+          <span className="muted">{autoSummary(info)}</span>
+        </div>
+        {unavailable ? null : (
+          <Button onClick={() => setOpen(true)}>
+            Change<span className="visually-hidden"> automatic updates</span>
+          </Button>
+        )}
+      </div>
+      <FormDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="Automatic updates"
+        description="Let the panel install new versions by itself, at a time that suits you."
+      >
+        <AutoUpdatesForm info={info} onSaved={onSaved} onDone={() => setOpen(false)} />
+      </FormDialog>
     </div>
   )
 }
@@ -260,8 +307,10 @@ function Loaded({ initial }: { initial: UpdateInfo }) {
   }, [watching])
 
   async function install(channel: Channel) {
-    const release = info.available[channel]
-    const yes = await confirm({ ...updateQuestion(info, channel), cancelLabel: 'Cancel' })
+    const current = await latestBeforeInstall(info, checkForUpdates)
+    setInfo(current)
+    const release = current.available[channel]
+    const yes = await confirm({ ...updateQuestion(current, channel), cancelLabel: 'Cancel' })
     if (!yes) return
     try {
       const next = await requestUpdate({ channel, allow_downgrade: release?.older === true })
@@ -312,7 +361,7 @@ function Loaded({ initial }: { initial: UpdateInfo }) {
             <ChannelRow key={channel} info={info} channel={channel} busy={busy} onInstall={install} />
           ))}
         </ul>
-        <AutoUpdatesForm key={`${info.auto.mode}|${info.auto.window}`} info={info} onSaved={setInfo} />
+        <AutoUpdates info={info} onSaved={setInfo} />
       </div>
     </Section>
   )

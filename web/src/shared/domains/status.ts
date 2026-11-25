@@ -2,14 +2,12 @@ import type { ChangedRecord, DomainStatus } from '../api/index.ts'
 
 export type StatusTone = 'positive' | 'warning' | 'neutral'
 
-export function statusText(status: Pick<DomainStatus, 'state' | 'found'>): string {
+export function statusText(status: Pick<DomainStatus, 'state'>): string {
   switch (status.state) {
     case 'points_here':
       return 'Points to this server'
     case 'points_elsewhere':
-      return status.found.length > 0
-        ? `Points somewhere else (found: ${status.found.join(', ')})`
-        : 'Points somewhere else'
+      return 'Points somewhere else'
     case 'no_record':
       return 'No address record yet'
     case 'lookup_failed':
@@ -23,15 +21,17 @@ export function statusTone(status: Pick<DomainStatus, 'state'>): StatusTone {
   return 'warning'
 }
 
+/** The addresses a domain points to instead of this server, as a sentence; empty when there's nothing to say. */
+export function foundText(status: Pick<DomainStatus, 'state' | 'found'>): string {
+  if (status.state !== 'points_elsewhere' || status.found.length === 0) return ''
+  return `Right now it points to ${status.found.join(', ')}.`
+}
+
 export type DomainAction = 'none' | 'point' | 'manual'
 
 export function statusAction(status: Pick<DomainStatus, 'state' | 'zone'>): DomainAction {
   if (status.state === 'points_here') return 'none'
   return status.zone ? 'point' : 'manual'
-}
-
-export function needsServerAddresses(statuses: DomainStatus[]): boolean {
-  return statuses.some((status) => statusAction(status) === 'manual')
 }
 
 function recordLabel(record: ChangedRecord, zone: string | undefined): string {

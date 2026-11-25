@@ -1,4 +1,8 @@
+import { BUILD_HEADER, createBuildWatch } from './build.ts'
+
 const BASE_PATH = '/api'
+
+const noticeBuild = createBuildWatch()
 
 export class ApiError extends Error {
   status: number
@@ -85,6 +89,10 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     if (error instanceof DOMException && error.name === 'AbortError') throw error
     throw new ApiError(0, OFFLINE_MESSAGE)
   }
+
+  // The panel was updated since this page was loaded: it reloads now, so nothing (no sign-in screen, no error)
+  // should happen on the way.
+  if (noticeBuild(response.headers.get(BUILD_HEADER))) return new Promise<T>(() => {})
 
   if (method !== 'GET' && (response.ok || response.status === 502)) changeListeners.forEach((listener) => listener())
   if (!response.ok) {

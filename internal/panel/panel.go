@@ -110,6 +110,10 @@ type Service struct {
 	// unhealthyRetry is how soon Run retries while the web server is out of
 	// sync. A field so tests can lower it.
 	unhealthyRetry time.Duration
+	// startupGrace is how long Run waits quietly at startup for the web
+	// server, retrying every startupRetry. Fields so tests can lower them.
+	startupGrace time.Duration
+	startupRetry time.Duration
 
 	secrets     *secrets.Box
 	serverIPs   []netip.Addr
@@ -159,6 +163,8 @@ func New(cfg Config) (*Service, error) {
 		clientLimiter:  newLimiter(cfg.Store, loginMaxPerClient, loginWindow),
 		passwordChecks: make(chan struct{}, maxPasswordChecks),
 		unhealthyRetry: 2 * time.Second,
+		startupGrace:   15 * time.Second,
+		startupRetry:   250 * time.Millisecond,
 		secrets:        cfg.Secrets,
 		serverIPs:      slices.Clone(cfg.ServerIPs),
 		newProvider:    cfg.NewDNSProvider,
@@ -497,12 +503,24 @@ func (s *Service) syncSaved(ctx context.Context) error {
 // Run syncs once, then every interval until ctx is done, so drift (e.g. a
 // restarted Caddy) heals by itself. While out of sync it retries sooner.
 // The mail service is kept in sync next to it, independently (runMail).
+//
+// At startup the web server may not be listening yet: systemd starts Caddy
+// first, but Caddy opens its admin socket a moment after it counts as
+// started. Until the first successful sync, for up to startupGrace, Run
+// retries often and quietly; only then does it warn.
 func (s *Service) Run(ctx context.Context, interval time.Duration) {
 	go s.runMail(ctx, interval)
 	healthy := true
+	starting := true
+	graceEnd := time.Now().Add(s.startupGrace)
 	for {
 		err := s.Sync(ctx, System)
+		if err == nil || !time.Now().Before(graceEnd) {
+			starting = false
+		}
 		switch {
+		case err != nil && ctx.Err() == nil && starting:
+			slog.Debug("web server not ready yet", "err", err)
 		case err != nil && ctx.Err() == nil:
 			slog.Warn("web server not in sync", "err", err)
 			healthy = false
@@ -511,7 +529,10 @@ func (s *Service) Run(ctx context.Context, interval time.Duration) {
 			healthy = true
 		}
 		wait := interval
-		if !healthy {
+		switch {
+		case starting:
+			wait = s.startupRetry
+		case !healthy:
 			wait = s.unhealthyRetry
 		}
 		select {

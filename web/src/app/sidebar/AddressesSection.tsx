@@ -1,8 +1,6 @@
 import { Button } from '@ui-sdk/react/button'
-import { Field, FieldDescription, FieldError, FieldLabel } from '@ui-sdk/react/field'
-import { Input, InputGroup } from '@ui-sdk/react/input'
 import { toast } from '@ui-sdk/react/toast'
-import { useMemo, useState, type FormEvent } from 'react'
+import { useMemo, useState } from 'react'
 import {
   createRedirect,
   errorMessage,
@@ -15,7 +13,6 @@ import {
   addressActions,
   checksOnLoad,
   collectAddresses,
-  subdomainHost,
   type Address,
   type AddressAction,
   type DomainSources,
@@ -27,13 +24,8 @@ import { RedirectDialog } from '../../shared/redirects/index.ts'
 import { hrefFor, hrefWithQuery, newSiteHref } from '../../shared/routing/index.ts'
 import { Section, StatusBadge } from '../../shared/ui/index.ts'
 import { AddToSiteDialog } from './AddToSiteDialog.tsx'
+import { UseAddressDialog, type UseTarget } from './UseAddressDialog.tsx'
 import { loadZoneRecords } from './data.ts'
-
-const ACTION_TEXT: Record<AddressAction, string> = {
-  'add-website': 'Add website',
-  'add-redirect': 'Add redirect',
-  'add-to-website': 'Add to a website',
-}
 
 function AddressUse({ address, domain }: { address: Address; domain: string }) {
   if (address.wildcard) return <p className="muted address-use">Answers for every subdomain without its own entry</p>
@@ -63,12 +55,12 @@ function AddressUse({ address, domain }: { address: Address; domain: string }) {
 type RowProps = {
   address: Address
   domain: string
-  actions: AddressAction[]
+  usable: boolean
   checked: boolean
-  onAction: (action: AddressAction, host: string) => void
+  onUse: (host: string) => void
 }
 
-function AddressRow({ address, domain, actions, checked, onAction }: RowProps) {
+function AddressRow({ address, domain, usable, checked, onUse }: RowProps) {
   const { host } = address
   return (
     <li className="record-row address-row">
@@ -77,86 +69,14 @@ function AddressRow({ address, domain, actions, checked, onAction }: RowProps) {
         <AddressUse address={address} domain={domain} />
         {checked ? <DomainCheck domain={host} /> : null}
       </div>
-      {actions.length > 0 ? (
+      {usable ? (
         <div className="record-actions">
-          {actions.map((action) => (
-            <Button key={action} onClick={() => onAction(action, host)}>
-              {ACTION_TEXT[action]}
-              <span className="visually-hidden"> for {host}</span>
-            </Button>
-          ))}
+          <Button onClick={() => onUse(host)}>
+            Set up<span className="visually-hidden"> {host}</span>
+          </Button>
         </div>
       ) : null}
     </li>
-  )
-}
-
-function AddSubdomain({
-  domain,
-  addresses,
-  actions,
-  onAction,
-}: {
-  domain: string
-  addresses: Address[]
-  actions: AddressAction[]
-  onAction: (action: AddressAction, host: string) => void
-}) {
-  const [label, setLabel] = useState('')
-  const [error, setError] = useState<string | null>(null)
-
-  function run(action: AddressAction | null) {
-    const result = subdomainHost(label, domain)
-    if ('error' in result) {
-      setError(result.error)
-      return
-    }
-    const existing = addresses.find((address) => address.host === result.host)
-    if (existing && existing.use.kind !== 'none') {
-      setError(`${result.host} is already in use, see its row above.`)
-      return
-    }
-    if (!action) return
-    setError(null)
-    setLabel('')
-    onAction(action, result.host)
-  }
-
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    run(null)
-  }
-
-  return (
-    <form className="form address-add" onSubmit={submit} noValidate aria-label="Add subdomain">
-      <Field name="subdomain" invalid={error ? true : undefined}>
-        <FieldLabel>Add subdomain</FieldLabel>
-        <InputGroup className="address-input">
-          <Input
-            value={label}
-            autoComplete="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            placeholder="shop"
-            onValueChange={(value) => {
-              setLabel(value)
-              setError(null)
-            }}
-          />
-          <span className="address-suffix">.{domain}</span>
-        </InputGroup>
-        <FieldDescription>Letters, digits and hyphens. Then choose what it shows.</FieldDescription>
-        {error ? <FieldError match>{error}</FieldError> : null}
-      </Field>
-      <div className="record-actions">
-        {actions.map((action) => (
-          <Button key={action} type="button" onClick={() => run(action)}>
-            {ACTION_TEXT[action]}
-            <span className="visually-hidden"> for the new subdomain</span>
-          </Button>
-        ))}
-      </div>
-    </form>
   )
 }
 
@@ -167,10 +87,12 @@ export function AddressesSection({ family, sources }: { family: Family; sources:
   const addresses = useMemo(() => collectAddresses(family.domain, sources, zones), [family.domain, sources, zones])
   const [redirectHost, setRedirectHost] = useState<string | null>(null)
   const [siteHost, setSiteHost] = useState<string | null>(null)
+  const [useTarget, setUseTarget] = useState<UseTarget | null>(null)
   const siteCount = sources.sites.length
   const newActions = addressActions({ host: '', wildcard: false, use: { kind: 'none' } }, siteCount)
 
   function act(action: AddressAction, host: string) {
+    setUseTarget(null)
     if (action === 'add-website') window.location.hash = newSiteHref(host)
     else if (action === 'add-redirect') setRedirectHost(host)
     else setSiteHost(host)
@@ -199,16 +121,20 @@ export function AddressesSection({ family, sources }: { family: Family; sources:
   }
 
   return (
-    <Section title="Addresses" description={`Every address under ${family.domain} and what visitors see there.`}>
+    <Section
+      title="Addresses"
+      description={`Every address under ${family.domain} and what visitors see there.`}
+      actions={<Button onClick={() => setUseTarget({ kind: 'subdomain' })}>Add subdomain</Button>}
+    >
       <ul className="record-list" aria-label={`Addresses of ${family.domain}`}>
         {addresses.map((address) => (
           <AddressRow
             key={address.host}
             address={address}
             domain={family.domain}
-            actions={addressActions(address, siteCount)}
+            usable={addressActions(address, siteCount).length > 0}
             checked={checksOnLoad(address)}
-            onAction={act}
+            onUse={(host) => setUseTarget({ kind: 'existing', host })}
           />
         ))}
       </ul>
@@ -221,7 +147,16 @@ export function AddressesSection({ family, sources }: { family: Family; sources:
           missing. <Button onClick={records.retry}>Try again</Button>
         </p>
       ) : null}
-      <AddSubdomain domain={family.domain} addresses={addresses} actions={newActions} onAction={act} />
+      <UseAddressDialog
+        target={useTarget}
+        onOpenChange={(open) => {
+          if (!open) setUseTarget(null)
+        }}
+        domain={family.domain}
+        addresses={addresses}
+        actions={newActions}
+        onChoose={act}
+      />
       <RedirectDialog
         open={redirectHost !== null}
         onOpenChange={(open) => {
