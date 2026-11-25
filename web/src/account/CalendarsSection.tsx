@@ -104,7 +104,7 @@ export function CalendarsSection({
         ))}
       </dl>
       <p className="muted account-calendars-note">
-        On an iPhone, iPad or Mac, the setup for Apple devices below adds calendars and contacts as well. Most other
+        On an iPhone, iPad or Mac, the setup for Apple devices above adds calendars and contacts as well. Most other
         programs only need your e-mail address and password and find the rest by themselves.
       </p>
       <input
