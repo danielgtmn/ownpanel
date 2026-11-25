@@ -52,7 +52,7 @@ func newSettingsEnv(t *testing.T, opts caddy.Options, ips ...netip.Addr) *settin
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	if _, err := st.CreateUser(context.Background(), admin.Name, "unused", store.RoleAdmin, true); err != nil {
+	if _, err := st.CreateUser(context.Background(), admin.Name, "", store.RoleAdmin, true); err != nil {
 		t.Fatal(err)
 	}
 	e := &settingsEnv{web: &fakeWeb{}, st: st, dir: dir, ips: ips}

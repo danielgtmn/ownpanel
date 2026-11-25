@@ -1,6 +1,8 @@
 package panel
 
 import (
+	"github.com/danielgtmn/sesam"
+
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
@@ -77,10 +79,24 @@ func newService(t *testing.T) (*Service, *fakeWeb, string) {
 	t.Helper()
 	svc, web, sites := newEmptyService(t)
 	// The first user gets id 1, which the admin actor refers to.
-	if _, err := svc.store.CreateUser(context.Background(), admin.Name, "unused", store.RoleAdmin, true); err != nil {
+	addUser(t, svc, admin.Name, store.RoleAdmin)
+	return svc, web, sites
+}
+
+// addUser adds a user with a sign-in (password "<name>-password") straight
+// to the store, without an actor.
+func addUser(t *testing.T, svc *Service, name, role string) store.User {
+	t.Helper()
+	ctx := context.Background()
+	au, err := svc.pw.CreateUser(ctx, sesam.NewUser{Username: name}, name+"-password")
+	if err != nil {
 		t.Fatal(err)
 	}
-	return svc, web, sites
+	u, err := svc.store.CreateUser(ctx, name, au.ID, role, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }
 
 // newEmptyService has no users yet, like a fresh install.

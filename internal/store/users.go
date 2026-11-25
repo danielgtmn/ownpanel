@@ -12,26 +12,29 @@ const (
 	RoleMember = "member"
 )
 
-// User is a person who can sign in.
+// User is a person who can sign in. How they sign in (password, sessions,
+// e-mail address) is kept in the auth_* tables under AuthUserID.
 type User struct {
-	ID           int64
-	Name         string
-	PasswordHash string
-	Role         string
-	CreatedAt    time.Time
+	ID         int64
+	Name       string
+	Role       string
+	AuthUserID string // "" until the user was moved to the auth tables
+	CreatedAt  time.Time
 }
 
-const userCols = `id, name, password_hash, role, created_at`
+const userCols = `id, name, role, auth_user_id, created_at`
 
 func scanUser(row interface{ Scan(...any) error }) (User, error) {
 	var u User
 	var created int64
-	if err := row.Scan(&u.ID, &u.Name, &u.PasswordHash, &u.Role, &created); err != nil {
+	var authID sql.NullString
+	if err := row.Scan(&u.ID, &u.Name, &u.Role, &authID, &created); err != nil {
 		if noRows(err) {
 			return User{}, notFoundf("user not found")
 		}
 		return User{}, err
 	}
+	u.AuthUserID = authID.String
 	u.CreatedAt = unix(created)
 	return u, nil
 }
@@ -43,10 +46,10 @@ func (s *Store) CountUsers(ctx context.Context) (int, error) {
 	return n, err
 }
 
-// CreateUser adds a user. When firstOnly is set it fails with ErrConflict if
+// CreateUser adds a user linked to the auth user authUserID. When firstOnly is set it fails with ErrConflict if
 // any user exists already, atomically. A new admin takes over sites that
 // have no owner (imported before any user existed).
-func (s *Store) CreateUser(ctx context.Context, name, hash, role string, firstOnly bool) (User, error) {
+func (s *Store) CreateUser(ctx context.Context, name, authUserID, role string, firstOnly bool) (User, error) {
 	var u User
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		if firstOnly {
@@ -58,8 +61,9 @@ func (s *Store) CreateUser(ctx context.Context, name, hash, role string, firstOn
 				return conflictf("the panel is already set up")
 			}
 		}
-		res, err := tx.Exec(`INSERT INTO users (name, password_hash, role, created_at) VALUES (?, ?, ?, ?)`,
-			name, hash, role, s.now())
+		// The password lives in the auth tables; password_hash stays empty.
+		res, err := tx.Exec(`INSERT INTO users (name, password_hash, role, auth_user_id, created_at) VALUES (?, '', ?, ?, ?)`,
+			name, role, nullString(authUserID), s.now())
 		if isUnique(err) {
 			return conflictf("the user name %q is already taken", name)
 		}
@@ -84,6 +88,14 @@ func (s *Store) CreateUser(ctx context.Context, name, hash, role string, firstOn
 // User returns one user by id.
 func (s *Store) User(ctx context.Context, id int64) (User, error) {
 	return scanUser(s.db.QueryRowContext(ctx, `SELECT `+userCols+` FROM users WHERE id = ?`, id))
+}
+
+// UserByAuthID returns the user linked to an auth user.
+func (s *Store) UserByAuthID(ctx context.Context, authUserID string) (User, error) {
+	if authUserID == "" {
+		return User{}, notFoundf("user not found")
+	}
+	return scanUser(s.db.QueryRowContext(ctx, `SELECT `+userCols+` FROM users WHERE auth_user_id = ?`, authUserID))
 }
 
 // UserByName returns one user by name.
@@ -122,22 +134,6 @@ func (s *Store) SetRole(ctx context.Context, id int64, role string) error {
 			}
 		}
 		_, err = tx.Exec(`UPDATE users SET role = ? WHERE id = ?`, role, id)
-		return err
-	})
-}
-
-// SetPassword replaces a user's password hash and ends all of the user's
-// sessions except keepSession (a session id, or "" for none).
-func (s *Store) SetPassword(ctx context.Context, id int64, hash, keepSession string) error {
-	return s.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, hash, id)
-		if err != nil {
-			return err
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return notFoundf("user not found")
-		}
-		_, err = tx.Exec(`DELETE FROM sessions WHERE user_id = ? AND id != ?`, id, keepSession)
 		return err
 	})
 }

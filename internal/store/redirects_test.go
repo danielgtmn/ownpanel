@@ -7,14 +7,14 @@ import (
 
 func TestRedirectsMigrationAndCRUD(t *testing.T) {
 	s, _ := open(t)
-	alice, err := s.CreateUser(ctx, "alice", "pw-hash", RoleAdmin, false)
+	alice, err := s.CreateUser(ctx, "alice", "", RoleAdmin, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateUser(ctx, "carol", "pw-hash", RoleAdmin, false); err != nil {
+	if _, err := s.CreateUser(ctx, "carol", "", RoleAdmin, false); err != nil {
 		t.Fatal(err)
 	}
-	bob, err := s.CreateUser(ctx, "bob", "pw-hash", RoleMember, false)
+	bob, err := s.CreateUser(ctx, "bob", "", RoleMember, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestRedirectOfOwnerlessSiteIsAdopted(t *testing.T) {
 	if err != nil || r.OwnerID != 0 || r.Owner != "" {
 		t.Fatalf("%+v %v", r, err)
 	}
-	admin, err := s.CreateUser(ctx, "root", "pw-hash", RoleAdmin, true)
+	admin, err := s.CreateUser(ctx, "root", "", RoleAdmin, true)
 	if err != nil {
 		t.Fatal(err)
 	}

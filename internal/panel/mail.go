@@ -49,6 +49,9 @@ type MailService interface {
 	Unblock(ctx context.Context, storageID string) error
 	DeleteMailbox(ctx context.Context, storageID string) error
 	CheckOutbound(ctx context.Context) (config.OutboundCheck, error)
+	// Send hands a finished message (a password reset link) to the
+	// service, which signs it and delivers or queues it.
+	Send(ctx context.Context, m config.OutgoingMail) error
 }
 
 // Limits of e-mail.

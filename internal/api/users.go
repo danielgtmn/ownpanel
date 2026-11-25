@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 	"strconv"
+
+	"github.com/danielgtmn/ownpanel/internal/panel"
 )
 
 func (s *Server) userRoutes(mux *http.ServeMux) {
@@ -39,13 +41,14 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name     string `json:"name"`
+		Email    string `json:"email"`
 		Password string `json:"password"`
 		Role     string `json:"role"`
 	}
-	if !decodeJSON(w, r, &body, `{"name": "…", "password": "…", "role": "member"}`) {
+	if !decodeJSON(w, r, &body, `{"name": "…", "email": "… (optional)", "password": "…", "role": "member"}`) {
 		return
 	}
-	u, err := s.Panel.CreateUser(r.Context(), actorOf(r), body.Name, body.Password, body.Role)
+	u, err := s.Panel.CreateUser(r.Context(), actorOf(r), panel.NewUser{Name: body.Name, Email: body.Email, Password: body.Password, Role: body.Role})
 	if err != nil {
 		writeFailure(w, err)
 		return
@@ -61,11 +64,12 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Role     *string `json:"role"`
 		Password *string `json:"password"`
+		Email    *string `json:"email"`
 	}
-	if !decodeJSON(w, r, &body, `{"role": "admin"} or {"password": "…"}`) {
+	if !decodeJSON(w, r, &body, `{"role": "admin"}, {"email": "…"} ("" removes it) or {"password": "…"}`) {
 		return
 	}
-	u, err := s.Panel.UpdateUser(r.Context(), actorOf(r), id, body.Role, body.Password)
+	u, err := s.Panel.UpdateUser(r.Context(), actorOf(r), id, panel.UserUpdate{Role: body.Role, Password: body.Password, Email: body.Email})
 	if err != nil {
 		writeFailure(w, err)
 		return

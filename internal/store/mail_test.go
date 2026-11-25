@@ -13,10 +13,10 @@ func dkim(sel string) DKIMKey {
 
 func TestMailDomainsMailboxesAliases(t *testing.T) {
 	s, _ := open(t)
-	if _, err := s.CreateUser(ctx, "root", "pw-hash", RoleAdmin, false); err != nil {
+	if _, err := s.CreateUser(ctx, "root", "", RoleAdmin, false); err != nil {
 		t.Fatal(err)
 	}
-	bob, err := s.CreateUser(ctx, "bob", "pw-hash", RoleMember, false)
+	bob, err := s.CreateUser(ctx, "bob", "", RoleMember, false)
 	if err != nil {
 		t.Fatal(err)
 	}

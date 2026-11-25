@@ -23,7 +23,8 @@ type Actor struct {
 	Sites    []string // non-nil: token limited to these site names
 	Via      string   // "session" | "token" | "system"
 
-	sessionID string // hash of the session, to keep it on password change
+	sessionID  string // hash of the session, to keep it on password change
+	authUserID string // the sign-in user (sessions only)
 	tokenName string // for the activity log
 	tokenHash string // to re-check the token later (upload links)
 }

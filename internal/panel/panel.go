@@ -18,6 +18,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/danielgtmn/sesam"
+	"github.com/danielgtmn/sesam/plugins/password"
+
 	"github.com/danielgtmn/ownpanel/internal/caddy"
 	"github.com/danielgtmn/ownpanel/internal/deploy"
 	"github.com/danielgtmn/ownpanel/internal/dns"
@@ -96,11 +99,11 @@ type Service struct {
 	setupCodeFile string
 
 	now func() time.Time
-	// limiter throttles failed attempts per address and name (or setup
-	// code), clientLimiter per address; passwordChecks bounds the password
-	// checks in flight.
-	limiter        *limiter
-	clientLimiter  *limiter
+	// auth signs people in (users, passwords, sessions, reset links; see
+	// signin.go), pw is its password plugin. passwordChecks bounds the
+	// password checks in flight.
+	auth           *sesam.Auth
+	pw             *password.Plugin
 	passwordChecks chan struct{}
 	uploads        uploads
 
@@ -150,8 +153,6 @@ func New(cfg Config) (*Service, error) {
 		opts:           cfg.Caddy,
 		setupCodeFile:  cfg.SetupCodeFile,
 		now:            time.Now,
-		limiter:        newLimiter(cfg.Store, loginMaxPerName, loginWindow),
-		clientLimiter:  newLimiter(cfg.Store, loginMaxPerClient, loginWindow),
 		passwordChecks: make(chan struct{}, maxPasswordChecks),
 		unhealthyRetry: 2 * time.Second,
 		secrets:        cfg.Secrets,
@@ -177,8 +178,6 @@ func New(cfg Config) (*Service, error) {
 	if s.interfaces == nil {
 		s.interfaces = DetectAddresses
 	}
-	s.limiter.now = func() time.Time { return s.now() }
-	s.clientLimiter.now = s.limiter.now
 	if s.newProvider == nil {
 		s.newProvider = DefaultDNSProvider
 	}
@@ -217,6 +216,9 @@ func New(cfg Config) (*Service, error) {
 	if s.store != nil {
 		if err := s.loadSettings(context.Background()); err != nil {
 			return nil, err
+		}
+		if err := s.initAuth(context.Background()); err != nil {
+			return nil, fmt.Errorf("sign-in: %w", err)
 		}
 	}
 	return s, nil
