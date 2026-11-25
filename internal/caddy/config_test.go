@@ -212,3 +212,46 @@ func TestBuildMailHostChallengeRoute(t *testing.T) {
 		t.Fatal("a mail host without the panel's address must fail")
 	}
 }
+
+func TestBuildMailSetupRoutes(t *testing.T) {
+	o := Options{AdminListen: "127.0.0.1:2019", StorageDir: "/data/caddy", TLSMode: TLSACME, HTTPPort: 80, HTTPSPort: 443,
+		PanelUpstream:         "127.0.0.1:8600",
+		MailSetupHosts:        []string{"autodiscover.a.example.com", "autoconfig.a.example.com"},
+		MailAutoconfigDomains: []string{"a.example.com", "c.example.com"}}
+	sites := []Site{
+		{Name: "a", Domains: []string{"a.example.com", "www.a.example.com"}, Root: "/r/a", Live: true},
+		{Name: "b", Domains: []string{"b.example.com"}, Root: "/r/b", Live: true},
+	}
+	cfg, err := Build(o, sites)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(cfg)
+	s := string(b)
+	proxy := `{"handler":"reverse_proxy","transport":{"dial_timeout":"5s","protocol":"http","response_header_timeout":"10m"},"upstreams":[{"dial":"127.0.0.1:8600"}]}`
+	hosts := `{"handle":[{"handler":"subroute","routes":[{"handle":[` + proxy + `],"match":[{"path":["/mail/config-v1.1.xml","/.well-known/autoconfig/mail/config-v1.1.xml","/autodiscover/autodiscover.xml"]}]},{"handle":[{"body":"Not found.\n","handler":"static_response","status_code":404}]}]}],"match":[{"host":["autoconfig.a.example.com","autodiscover.a.example.com"]}],"terminal":true}`
+	if !strings.Contains(s, hosts) {
+		t.Fatalf("no route for the setup names in %s", s)
+	}
+	wellKnown := `{"handle":[` + proxy + `],"match":[{"host":["a.example.com"],"path":["/.well-known/autoconfig/mail/config-v1.1.xml"]}],"terminal":true}`
+	if !strings.Contains(s, wellKnown) {
+		t.Fatalf("no well-known route in %s", s)
+	}
+	// Only the mail domain among the site's domains, and no site without one.
+	if strings.Count(s, "/.well-known/autoconfig/mail/config-v1.1.xml") != 2 {
+		t.Fatalf("well-known routes %s", s)
+	}
+
+	// Nothing without them; an error without the panel's address.
+	o2 := o
+	o2.MailSetupHosts, o2.MailAutoconfigDomains = nil, nil
+	cfg, _ = Build(o2, sites)
+	b, _ = json.Marshal(cfg)
+	if strings.Contains(string(b), "autoconfig") {
+		t.Fatalf("setup routes without setup names: %s", b)
+	}
+	o.PanelUpstream = ""
+	if _, err := Build(o, sites); err == nil {
+		t.Fatal("setup names without the panel's address must fail")
+	}
+}

@@ -25,6 +25,7 @@ import (
 const (
 	HealthService      = "service"
 	HealthMailHostDNS  = "mail_host_dns"
+	HealthMailHostSPF  = "mail_host_spf"
 	HealthPTR          = "ptr"
 	HealthOutboundPort = "outbound_port"
 	HealthCertificate  = "certificate"
@@ -60,6 +61,10 @@ type MailHealthCheck struct {
 	Found    []string `json:"found"`
 	Expected []string `json:"expected"`
 	Detail   string   `json:"detail"`
+	// CanApply: SetUpMailHostSPF can write what is expected (only for
+	// mail_host_spf, when the mail host's zone is in one of the actor's
+	// own DNS connections).
+	CanApply bool `json:"can_apply"`
 }
 
 // MailHealth lists the checks in a fixed order.
@@ -113,7 +118,7 @@ func (s *Service) MailHealth(ctx context.Context, a Actor) (MailHealth, error) {
 	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
 	defer cancel()
 	host := s.MailHost()
-	ids := []string{HealthService, HealthMailHostDNS, HealthPTR, HealthOutboundPort, HealthCertificate, HealthListeners, HealthPostmaster, HealthBlocklists}
+	ids := []string{HealthService, HealthMailHostDNS, HealthMailHostSPF, HealthPTR, HealthOutboundPort, HealthCertificate, HealthListeners, HealthPostmaster, HealthBlocklists}
 	out := MailHealth{MailHost: host, Checks: make([]MailHealthCheck, len(ids))}
 
 	// The status of the mail service feeds three checks; ask once.
@@ -147,12 +152,13 @@ func (s *Service) MailHealth(ctx context.Context, a Actor) (MailHealth, error) {
 	}
 	run(0, func() MailHealthCheck { return s.healthService(ctx, st, stErr) })
 	run(1, func() MailHealthCheck { return s.healthMailHostDNS(ctx, host) })
-	run(2, func() MailHealthCheck { return s.healthPTR(ctx, host) })
-	run(3, func() MailHealthCheck { return s.healthOutbound(ctx) })
-	run(4, func() MailHealthCheck { return s.healthCertificate(st) })
-	run(5, func() MailHealthCheck { return s.healthListeners(st) })
-	run(6, func() MailHealthCheck { return s.healthPostmaster(ctx) })
-	run(7, func() MailHealthCheck { return s.healthBlocklists(s.store.Settings(ctx)) })
+	run(2, func() MailHealthCheck { return s.healthMailHostSPF(ctx, a, host) })
+	run(3, func() MailHealthCheck { return s.healthPTR(ctx, host) })
+	run(4, func() MailHealthCheck { return s.healthOutbound(ctx) })
+	run(5, func() MailHealthCheck { return s.healthCertificate(st) })
+	run(6, func() MailHealthCheck { return s.healthListeners(st) })
+	run(7, func() MailHealthCheck { return s.healthPostmaster(ctx) })
+	run(8, func() MailHealthCheck { return s.healthBlocklists(s.store.Settings(ctx)) })
 	wg.Wait()
 	return out, nil
 }
@@ -206,6 +212,43 @@ func (s *Service) healthMailHostDNS(ctx context.Context, host string) MailHealth
 		c.State, c.Detail = HealthError, host+" has no A or AAAA record yet. Create them with the server's addresses."
 	default:
 		c.Detail = "The address of " + host + " could not be looked up; try again in a moment."
+	}
+	return c
+}
+
+// healthMailHostSPF checks the SPF record of the mail host: bounces (whose
+// SPF check uses the HELO name, the mail host) and mail forwarded with an
+// SRS address of the mail host are sent under its name.
+func (s *Service) healthMailHostSPF(ctx context.Context, a Actor, host string) MailHealthCheck {
+	if host == "" {
+		return check("", HealthUnknown, "The name of the mail server is not set yet.")
+	}
+	lctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+	defer cancel()
+	found, err := s.lookupRecord(lctx, hostSPFSpec, host)
+	c := check("", HealthUnknown, "")
+	if err != nil {
+		c.Detail = "The SPF record of " + host + " could not be looked up; try again in a moment."
+		return c
+	}
+	j := judge(hostSPFSpec, host, found)
+	c.Found = keptValues(hostSPFSpec, found)
+	switch j.status {
+	case RecordOK:
+		c.State, c.Detail = HealthOK, host+" has an SPF record that allows this server."
+		return c
+	case RecordConflict:
+		// Left to a person; there is no value to suggest.
+		c.State, c.Detail = HealthWarning, j.note
+		return c
+	}
+	c.Expected = []string{j.want}
+	c.State = HealthWarning
+	c.Detail = fmt.Sprintf("Bounces and forwarded mail are sent under the name %s; without an SPF record there that allows this server (%s), receivers may treat them as spam.", host, j.want)
+	if needAdmin(a) == nil && needDNS(a) == nil {
+		if _, note, err := s.mailZone(lctx, a, host); err == nil && note == "" {
+			c.CanApply = true
+		}
 	}
 	return c
 }

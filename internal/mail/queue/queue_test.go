@@ -615,6 +615,12 @@ func TestPublic(t *testing.T) {
 		{"224.0.0.1", false}, {"ff02::1", false}, {"255.255.255.255", false}, {"240.0.0.1", false},
 		{"0.1.2.3", false}, {"192.0.0.8", false}, {"198.18.0.1", false}, {"192.0.2.1", false},
 		{"2001:db8::1", false}, {"::ffff:127.0.0.1", false}, {"::ffff:10.0.0.1", false},
+		// NAT64: the embedded IPv4 address decides.
+		{"64:ff9b::808:808", true}, {"64:ff9b::7f00:1", false}, {"64:ff9b::a00:1", false},
+		{"64:ff9b::a9fe:a9fe", false}, {"64:ff9b::c0a8:101", false}, {"64:ff9b::6440:1", false},
+		{"64:ff9b:1::808:808", true}, {"64:ff9b:1:ab::a00:1", false}, {"64:ff9b:1::7f00:1", false},
+		// The local-use prefix only in its /96 form.
+		{"64:ff9b:1:808:8:800::", false}, {"64:ff9b:1:0:8:808::", false},
 	} {
 		if got := public(net.ParseIP(tc.ip)); got != tc.want {
 			t.Errorf("public(%s) = %v", tc.ip, got)

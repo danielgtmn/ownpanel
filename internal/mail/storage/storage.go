@@ -86,7 +86,7 @@ func Open(dir string, opts Options) (*Store, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	for _, d := range []string{dir, filepath.Join(dir, messagesDir), filepath.Join(dir, tmpDir), filepath.Join(dir, trashDir), filepath.Join(dir, queueDir)} {
+	for _, d := range []string{dir, filepath.Join(dir, messagesDir), filepath.Join(dir, tmpDir), filepath.Join(dir, trashDir), filepath.Join(dir, queueDir), filepath.Join(dir, importsDir)} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return nil, err
 		}
@@ -230,6 +230,54 @@ CREATE INDEX greylist_first ON greylist(first);
 	`
 ALTER TABLE greylist ADD COLUMN net TEXT NOT NULL DEFAULT '';
 CREATE INDEX greylist_net ON greylist(net, passed);
+`,
+	// 5: import jobs, the keys of imported messages, failures and IMAP
+	// watermarks; all go with the mailbox.
+	`
+CREATE TABLE imports (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	storage_id TEXT NOT NULL REFERENCES mailboxes(storage_id) ON DELETE CASCADE,
+	kind       TEXT NOT NULL,
+	state      TEXT NOT NULL,
+	error      TEXT NOT NULL DEFAULT '',
+	host       TEXT NOT NULL DEFAULT '',
+	port       INTEGER NOT NULL DEFAULT 0,
+	username   TEXT NOT NULL DEFAULT '',
+	file_name  TEXT NOT NULL DEFAULT '',
+	file_size  INTEGER NOT NULL DEFAULT 0,
+	received   INTEGER NOT NULL DEFAULT 0,
+	data       TEXT NOT NULL DEFAULT '{}',
+	created    INTEGER NOT NULL,
+	started    INTEGER NOT NULL DEFAULT 0,
+	finished   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX imports_mailbox ON imports(storage_id, id);
+CREATE INDEX imports_state ON imports(state);
+CREATE TABLE import_failures (
+	id         INTEGER PRIMARY KEY,
+	import_id  INTEGER NOT NULL REFERENCES imports(id) ON DELETE CASCADE,
+	folder     TEXT NOT NULL,
+	date       INTEGER NOT NULL DEFAULT 0,
+	subject    TEXT NOT NULL DEFAULT '',
+	reason     TEXT NOT NULL
+);
+CREATE INDEX import_failures_import ON import_failures(import_id, id);
+CREATE TABLE import_seen (
+	storage_id TEXT NOT NULL REFERENCES mailboxes(storage_id) ON DELETE CASCADE,
+	folder     TEXT NOT NULL,
+	key        BLOB NOT NULL,
+	PRIMARY KEY (storage_id, folder, key)
+) WITHOUT ROWID;
+CREATE INDEX import_seen_key ON import_seen(storage_id, key);
+CREATE TABLE import_watermarks (
+	storage_id   TEXT NOT NULL REFERENCES mailboxes(storage_id) ON DELETE CASCADE,
+	host         TEXT NOT NULL,
+	username     TEXT NOT NULL,
+	folder       TEXT NOT NULL,
+	uid_validity INTEGER NOT NULL,
+	last_uid     INTEGER NOT NULL,
+	PRIMARY KEY (storage_id, host, username, folder)
+);
 `,
 }
 

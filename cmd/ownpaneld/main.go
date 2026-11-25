@@ -220,7 +220,8 @@ func serve(args []string) error {
 	go svc.Run(ctx, *interval)
 
 	app := webui.FS()
-	srv := timeouts.Server(*listen, svc.MailChallengeHandler(compose((&api.Server{Panel: svc, Build: webui.Build(app)}).Handler(), webui.Handler(app), mcp.Handler(svc, version, mcp.WithPanelDomainFunc(svc.PanelDomain)))))
+	apiServer := &api.Server{Panel: svc, Build: webui.Build(app)}
+	srv := timeouts.Server(*listen, svc.MailChallengeHandler(apiServer.MailSetupHandler(compose(apiServer.Handler(), webui.Handler(app), mcp.Handler(svc, version, mcp.WithPanelDomainFunc(svc.PanelDomain))))))
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)

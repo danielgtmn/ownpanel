@@ -8,13 +8,16 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	mailconfig "github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/panel"
 )
 
 // E-mail tools. There is deliberately no tool that takes a mailbox
 // password (creating a mailbox or setting its password): passwords of
 // mailboxes are entered in the web interface or sent through the HTTP API
-// and never pass through an AI agent.
+// and never pass through an AI agent. For the same reason importing mail
+// (it takes another account's password) and exporting a mailbox (it reads
+// all its mail) are not offered; agents may list and cancel imports.
 
 func rfc3339(t *time.Time) string {
 	if t == nil {
@@ -45,7 +48,7 @@ func mailDomainInfoOf(d panel.MailDomain) mailDomainInfo {
 }
 
 type mailboxInfo struct {
-	ID          int64  `json:"id" jsonschema:"mailbox id; pass it to set_mailbox_limits, unblock_mailbox or delete_mailbox"`
+	ID          int64  `json:"id" jsonschema:"mailbox id; pass it to set_mailbox_limits, unblock_mailbox, delete_mailbox or list_mail_imports"`
 	Address     string `json:"address" jsonschema:"the mailbox's e-mail address, also its user name in mail programs"`
 	Owner       string `json:"owner" jsonschema:"user the mail domain belongs to"`
 	QuotaBytes  int64  `json:"quota_bytes" jsonschema:"most mail the mailbox may store, in bytes; 0 means no limit"`
@@ -166,14 +169,17 @@ type deleteAliasInput struct {
 }
 
 type mailRecordInfo struct {
-	Kind   string   `json:"kind" jsonschema:"which record: mx, spf, dkim, dmarc, srv-submissions or srv-imaps"`
-	Type   string   `json:"type" jsonschema:"DNS record type (MX, TXT, SRV)"`
+	Kind   string   `json:"kind" jsonschema:"which record: mx, spf, dkim, dmarc, srv-submissions, srv-imaps, autoconfig or autodiscover"`
+	Type   string   `json:"type" jsonschema:"DNS record type (MX, TXT, SRV, CNAME)"`
 	Name   string   `json:"name" jsonschema:"record name relative to zone when can_apply, else relative to the mail domain; @ is the name itself"`
 	FQDN   string   `json:"fqdn" jsonschema:"full record name"`
 	Want   string   `json:"want" jsonschema:"the value that should be published (for SPF: the existing record with mx added)"`
 	Found  []string `json:"found" jsonschema:"values the domain's nameservers answer now"`
 	Status string   `json:"status" jsonschema:"ok, missing, different, conflict (needs a person; never changed automatically) or unknown (lookup failed)"`
 	Note   string   `json:"note" jsonschema:"why the record is not ok, in plain words"`
+	// Optional: autoconfig and autodiscover only let mail programs set
+	// themselves up; A/AAAA records with the server's addresses count too.
+	Optional bool `json:"optional" jsonschema:"recommended only: mail works without it (the names mail programs look up to set themselves up)"`
 }
 
 type mailRecordsOutput struct {
@@ -192,7 +198,7 @@ type setUpMailRecordsInput struct {
 }
 
 type mailRecordChangeInfo struct {
-	Kind         string   `json:"kind" jsonschema:"which record: mx, spf, dkim, dmarc, srv-submissions or srv-imaps"`
+	Kind         string   `json:"kind" jsonschema:"which record: mx, spf, dkim, dmarc, srv-submissions, srv-imaps, autoconfig, autodiscover or mail-host-spf"`
 	Type         string   `json:"type" jsonschema:"DNS record type"`
 	Name         string   `json:"name" jsonschema:"record name relative to the zone"`
 	Action       string   `json:"action" jsonschema:"create, replace, add (to other TXT values that stay), keep (already right) or skip (needs a person)"`
@@ -200,6 +206,7 @@ type mailRecordChangeInfo struct {
 	New          []string `json:"new" jsonschema:"values after"`
 	NeedsConfirm bool     `json:"needs_confirm" jsonschema:"the change is only made with confirm"`
 	Note         string   `json:"note" jsonschema:"explanation"`
+	Optional     bool     `json:"optional" jsonschema:"recommended only: mail works without it"`
 }
 
 type mailRecordChangesOutput struct {
@@ -208,11 +215,12 @@ type mailRecordChangesOutput struct {
 }
 
 type mailHealthCheckInfo struct {
-	ID       string   `json:"id" jsonschema:"service, mail_host_dns, ptr, outbound_port, certificate, listeners, postmaster or blocklists"`
+	ID       string   `json:"id" jsonschema:"service, mail_host_dns, mail_host_spf, ptr, outbound_port, certificate, listeners, postmaster or blocklists"`
 	State    string   `json:"state" jsonschema:"ok, warning, error or unknown"`
 	Found    []string `json:"found" jsonschema:"what was found"`
 	Expected []string `json:"expected" jsonschema:"what was expected"`
 	Detail   string   `json:"detail" jsonschema:"explanation and what to do"`
+	CanApply bool     `json:"can_apply" jsonschema:"for mail_host_spf: set_up_mail_host_spf can write the expected record (the zone is in one of your own DNS connections)"`
 }
 
 type mailHealthOutput struct {
@@ -249,6 +257,7 @@ func addMailTools(s *sdk.Server, p *panel.Service) {
 		Name:  "get_mail_records",
 		Title: "Show a mail domain's DNS records",
 		Description: "List the DNS records a mail domain needs (MX, SPF, DKIM, DMARC, and SRV records for mail programs), " +
+			"plus the optional autoconfig and autodiscover names that let mail programs set themselves up, " +
 			"what the domain's nameservers answer now and whether each is ok. can_apply tells whether set_up_mail_records " +
 			"can write them; otherwise tell the user what to create at their DNS provider.",
 		Annotations: annotations("Show a mail domain's DNS records", true, false, true),
@@ -290,7 +299,8 @@ func addMailTools(s *sdk.Server, p *panel.Service) {
 		Name:  "get_mail_health",
 		Title: "Check the mail server's health",
 		Description: "Check what decides whether mail from this server is accepted elsewhere (admins only): the mail service " +
-			"runs, the mail server's name points here, each server address has it as reverse name (PTR), outgoing port 25 " +
+			"runs, the mail server's name points here and has an SPF record (bounces and forwarded mail are sent under it; " +
+			"set_up_mail_host_spf writes it), each server address has it as reverse name (PTR), outgoing port 25 " +
 			"works, the certificate is valid, every port listens, postmaster mail has somewhere to go and no blocklist refused " +
 			"this server's queries in the last 7 days.",
 		Annotations: annotations("Check the mail server's health", true, false, true),
@@ -302,6 +312,25 @@ func addMailTools(s *sdk.Server, p *panel.Service) {
 		out := mailHealthOutput{MailHost: h.MailHost, Checks: []mailHealthCheckInfo{}}
 		for _, x := range h.Checks {
 			out.Checks = append(out.Checks, mailHealthCheckInfo(x))
+		}
+		return out, nil
+	})
+
+	add(s, &sdk.Tool{
+		Name:  "set_up_mail_host_spf",
+		Title: "Set up the SPF record of the mail server's name",
+		Description: "Write the SPF record of the mail server's name (v=spf1 a -all, or a added to an existing SPF record) " +
+			"into its zone in your own DNS connection (admins only). Bounces and forwarded mail are sent under that name. " +
+			"An SPF record that cannot be merged safely is skipped and reported.",
+		Annotations: annotations("Set up the SPF record of the mail server's name", false, false, true),
+	}, func(ctx context.Context, c call, _ noInput) (mailRecordChangesOutput, error) {
+		r, err := p.SetUpMailHostSPF(ctx, c.actor)
+		if err != nil {
+			return mailRecordChangesOutput{}, err
+		}
+		out := mailRecordChangesOutput{Changes: []mailRecordChangeInfo{}, Applied: r.Applied}
+		for _, x := range r.Changes {
+			out.Changes = append(out.Changes, mailRecordChangeInfo(x))
 		}
 		return out, nil
 	})
@@ -474,4 +503,79 @@ func addMailTools(s *sdk.Server, p *panel.Service) {
 		}
 		return deletedOutput{Deleted: a.Address}, nil
 	})
+
+	add(s, &sdk.Tool{
+		Name:  "list_mail_imports",
+		Title: "List a mailbox's imports",
+		Description: "List the imports of mail into a mailbox, newest first: where from (another mail account or an uploaded " +
+			"file), state (uploading, checking, ready, waiting, running, paused, interrupted, done, failed, cancelled) and how " +
+			"many messages were copied, skipped as already there or failed. Imports are started in the web interface.",
+		Annotations: annotations("List a mailbox's imports", true, false, true),
+	}, func(ctx context.Context, c call, in mailboxIDInput) (mailImportsOutput, error) {
+		js, err := p.MailImports(ctx, c.actor, in.ID)
+		if err != nil {
+			return mailImportsOutput{}, err
+		}
+		out := mailImportsOutput{Imports: []mailImportInfo{}}
+		for _, j := range js {
+			out.Imports = append(out.Imports, mailImportInfoOf(j))
+		}
+		return out, nil
+	})
+
+	add(s, &sdk.Tool{
+		Name:  "cancel_mail_import",
+		Title: "Cancel a mail import",
+		Description: "Stop an import that has not finished (mail copied so far stays in the mailbox), or remove a finished " +
+			"import from the list. Only call it when the user asked for it.",
+		Annotations: annotations("Cancel a mail import", false, true, false),
+	}, func(ctx context.Context, c call, in mailImportIDInput) (cancelledOutput, error) {
+		if err := p.CancelMailImport(ctx, c.actor, in.ID, in.ImportID); err != nil {
+			return cancelledOutput{}, err
+		}
+		return cancelledOutput{Cancelled: in.ImportID}, nil
+	})
+}
+
+type mailImportInfo struct {
+	ID       int64  `json:"id" jsonschema:"import id; pass it to cancel_mail_import as import_id"`
+	Address  string `json:"address" jsonschema:"the mailbox mail is imported into"`
+	Source   string `json:"source" jsonschema:"where the mail comes from: user and server of another account, or the file name"`
+	State    string `json:"state" jsonschema:"uploading, checking, ready (waits to be started), waiting, running, paused (the other server limits downloads; continue in the web interface), interrupted (the mail server restarted; continue in the web interface), done, failed or cancelled"`
+	Error    string `json:"error,omitempty" jsonschema:"why it failed or paused"`
+	Messages int    `json:"messages" jsonschema:"messages it looks at, once known"`
+	Copied   int    `json:"copied" jsonschema:"messages copied"`
+	Skipped  int    `json:"skipped" jsonschema:"messages skipped because they were there already"`
+	Failed   int    `json:"failed" jsonschema:"messages that could not be copied"`
+	Bytes    int64  `json:"bytes" jsonschema:"bytes copied"`
+	Created  string `json:"created" jsonschema:"when the import was created, RFC 3339 (UTC)"`
+	Finished string `json:"finished,omitempty" jsonschema:"when it ended, RFC 3339 (UTC)"`
+}
+
+func mailImportInfoOf(j panel.MailImport) mailImportInfo {
+	src := j.FileName
+	if j.Kind == mailconfig.ImportIMAP {
+		src = j.Username + " at " + j.Host
+	}
+	v := mailImportInfo{
+		ID: j.ID, Address: j.Address, Source: src, State: j.State, Error: j.Error, Messages: j.Messages,
+		Copied: j.Copied, Skipped: j.Skipped, Failed: j.Failed, Bytes: j.Bytes, Created: j.Created.UTC().Format(time.RFC3339),
+	}
+	if !j.Finished.IsZero() {
+		v.Finished = j.Finished.UTC().Format(time.RFC3339)
+	}
+	return v
+}
+
+type mailImportsOutput struct {
+	Imports []mailImportInfo `json:"imports"`
+}
+
+type mailImportIDInput struct {
+	ID       int64 `json:"id" jsonschema:"mailbox id from list_mailboxes"`
+	ImportID int64 `json:"import_id" jsonschema:"import id from list_mail_imports"`
+}
+
+type cancelledOutput struct {
+	Cancelled int64 `json:"cancelled" jsonschema:"the import that was cancelled or removed"`
 }

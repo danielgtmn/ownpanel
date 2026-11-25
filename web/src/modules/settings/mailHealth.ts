@@ -9,6 +9,8 @@ export type HealthCheck = {
   found: string[]
   expected: string[]
   detail: string
+  // Only for mail_host_spf: the panel can add the record through your DNS account.
+  can_apply?: boolean
 }
 
 export type MailHealth = { mail_host: string; checks: HealthCheck[] }
@@ -22,9 +24,12 @@ export async function getMailHealth(): Promise<MailHealth> {
       found: check.found ?? [],
       expected: check.expected ?? [],
       detail: check.detail ?? '',
+      can_apply: check.can_apply ?? false,
     })),
   }
 }
+
+export const setUpMailHostSPF = () => request<unknown>('/mail/host-spf', { method: 'POST' })
 
 // ownDetail: the hint already says what the server's detail says, in plainer words.
 export type HealthLine = {
@@ -47,6 +52,7 @@ const BADGE: Record<string, { tone: HealthLine['tone']; badge: string }> = {
 const TOPIC: Record<string, string> = {
   service: 'whether the mail service runs',
   mail_host_dns: 'where the mail server name points',
+  mail_host_spf: 'whether other servers trust bounces and forwarded mail from here',
   ptr: "which name the server's addresses carry",
   outbound_port: 'whether this server can deliver mail to others',
   certificate: 'the certificate of the mail server',
@@ -79,6 +85,23 @@ function sentence(check: HealthCheck, host: string): { title: string; hint?: str
               .filter(Boolean)
               .join(' '),
           }
+    case 'mail_host_spf':
+      if (ok) return { title: `Other mail servers can tell that bounces and forwarded mail from ${name} are genuine.` }
+      if (check.state === 'warning' && check.expected.length === 0) {
+        return { title: `The record that says which servers may send for ${name} needs a look.` }
+      }
+      return {
+        title: `Bounces and forwarded mail from ${name} may land in spam.`,
+        hint: [
+          check.expected.length > 0
+            ? `Add a TXT record for ${name} with the value ${check.expected[0]}${check.found.length > 0 ? ' in place of the one there now' : ''}.`
+            : '',
+          check.found.length > 0 ? `Now: ${list(check.found)}.` : '',
+        ]
+          .filter(Boolean)
+          .join(' '),
+        ownDetail: check.expected.length > 0,
+      }
     case 'ptr':
       return ok
         ? {

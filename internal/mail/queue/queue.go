@@ -29,7 +29,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"net/netip"
 	"slices"
 	"sort"
 	"strings"
@@ -38,6 +37,7 @@ import (
 
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/mail/directory"
+	"github.com/danielgtmn/ownpanel/internal/mail/netcheck"
 	"github.com/danielgtmn/ownpanel/internal/mail/storage"
 )
 
@@ -519,6 +519,9 @@ func (q *Queue) mxHosts(ctx context.Context, domain string) ([]string, *result) 
 	return hosts, nil
 }
 
+// public tells whether the queue may connect to ip (see netcheck.Public).
+var public = netcheck.Public
+
 // errNotPublic: a host has addresses, but none the queue may connect to.
 var errNotPublic = errors.New("only private or local addresses")
 
@@ -562,42 +565,6 @@ func (q *Queue) addresses(ctx context.Context, host string) ([]net.IP, error) {
 		out = out[:5]
 	}
 	return out, nil
-}
-
-// Special-purpose ranges netip does not classify (RFC 6890).
-var special = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),       // this network
-	netip.MustParsePrefix("100.64.0.0/10"),   // carrier-grade NAT
-	netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments
-	netip.MustParsePrefix("198.18.0.0/15"),   // benchmarking
-	netip.MustParsePrefix("240.0.0.0/4"),     // reserved, broadcast
-	netip.MustParsePrefix("192.0.2.0/24"),    // documentation
-	netip.MustParsePrefix("198.51.100.0/24"), // documentation
-	netip.MustParsePrefix("203.0.113.0/24"),  // documentation
-	netip.MustParsePrefix("2001:db8::/32"),   // documentation
-}
-
-// public tells whether ip is a public unicast address the queue may
-// connect to. It is stricter than filter.Checkable (which only decides
-// whether to ask blocklists about a client): loopback, private (RFC 1918,
-// ULA), link-local, unspecified, multicast and the special ranges
-// above are not.
-func public(ip net.IP) bool {
-	a, ok := netip.AddrFromSlice(ip)
-	if !ok {
-		return false
-	}
-	a = a.Unmap()
-	if !a.IsValid() || !a.IsGlobalUnicast() || a.IsPrivate() || a.IsLoopback() ||
-		a.IsLinkLocalUnicast() || a.IsUnspecified() || a.IsMulticast() {
-		return false
-	}
-	for _, p := range special {
-		if p.Contains(a) {
-			return false
-		}
-	}
-	return true
 }
 
 func humanDur(d time.Duration) string {

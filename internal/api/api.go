@@ -65,6 +65,7 @@ var routeGroups = []func(*Server, *http.ServeMux){
 	(*Server).redirectRoutes,
 	(*Server).updateRoutes,
 	(*Server).mailRoutes,
+	(*Server).mailTransferRoutes,
 }
 
 // Handler returns the API routes.
@@ -264,6 +265,10 @@ func writeFailure(w http.ResponseWriter, err error) {
 		status = http.StatusTooManyRequests
 	case panel.Unavailable:
 		status = http.StatusBadGateway
+	case panel.TooLarge:
+		status = http.StatusRequestEntityTooLarge
+	case panel.NoSpace:
+		status = http.StatusInsufficientStorage
 	default:
 		slog.Error("request failed", "err", err)
 		writeError(w, status, "something went wrong on the server")

@@ -34,9 +34,11 @@ Errors are JSON with a readable sentence:
 | `401` | not signed in, wrong credentials, or an invalid token |
 | `403` | known, but not allowed (read-only or site-limited token, not an admin, missing header) |
 | `404` | missing, or not visible to you (the two look the same); unknown endpoint |
-| `409` | cannot be done in the current state: name taken, nothing to go back to, last admin, user still owns sites, setup already done |
-| `429` | too many failed sign-in attempts, too many sign-ins at the same moment, or Hetzner's request limit was reached |
-| `502` | the change is saved but the web server could not be updated yet (the loop retries), or an outside service such as Hetzner is unavailable |
+| `409` | cannot be done in the current state: name taken, nothing to go back to, last admin, user still owns sites, setup already done, another import of the mailbox running |
+| `413` | a file or part of an upload is too large |
+| `429` | too many failed sign-in attempts, too many sign-ins at the same moment, Hetzner's request limit was reached, or too many mail imports in an hour |
+| `502` | the change is saved but the web server could not be updated yet (the loop retries), or an outside service such as Hetzner or another mail server is unavailable or refused (for an import: its answer, never the password) |
+| `507` | not enough free disk space on the server (mail import) |
 | `500` | something went wrong on the server; the details are only in the log |
 
 Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limited to 1 MB; archives to 512 MB.
@@ -67,11 +69,11 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 
 **Mail status:** `{"mail_host", "service_set_up", "reachable", "in_sync", "problem", "listeners": [{"name", "address", "listening", "error"}], "certificate_expires", "queue_length", "client": {"server", "imap_port", "smtp_port", "smtp_starttls_port", "user_name_is_address"}}`.
 
-**Mail records:** `{"domain", "mail_host", "records": [{"kind", "type", "name", "fqdn", "want", "found", "status", "note"}], "can_apply", "connection_id", "zone", "apply_note"}`. `kind` is `mx`, `spf`, `dkim`, `dmarc`, `srv-submissions` or `srv-imaps`; `found` are the values the domain's authoritative nameservers answer; `status` is `ok`, `missing`, `different`, `conflict` (needs a person, never changed automatically: several SPF or DMARC records, SPF with `+all`/`?all` or more than 10 lookups) or `unknown` (the lookup failed). For SPF, `want` is the existing record with `mx` added; an existing DMARC record is `ok` whatever it says. `can_apply` is true when the domain lies in a zone of exactly one of **your own** DNS connections with write access (never someone else's, also not for admins) and you may write; `connection_id` and `zone` then name it and `name` is relative to that zone, otherwise `connection_id` is `0`, `zone` is empty, `name` is relative to the mail domain and `apply_note` says why.
+**Mail records:** `{"domain", "mail_host", "records": [{"kind", "type", "name", "fqdn", "want", "found", "status", "note"}], "can_apply", "connection_id", "zone", "apply_note"}`. `kind` is `mx`, `spf`, `dkim`, `dmarc`, `srv-submissions`, `srv-imaps`, `autoconfig` or `autodiscover`; the last two are CNAMEs to the mail host with `"optional": true` (recommended, mail works without them), judged by where the name leads: `ok` when it resolves to the server's addresses only (a CNAME to the mail host or A/AAAA records), `missing`, `different` (it leads elsewhere; `found` lists those addresses) or `unknown` (also when the server's addresses are not set). Applying creates the CNAME where the name is unused, replaces a CNAME that leads elsewhere and skips names with other records; `found` are the values the domain's authoritative nameservers answer; `status` is `ok`, `missing`, `different`, `conflict` (needs a person, never changed automatically: several SPF or DMARC records, SPF with `+all`/`?all` or more than 10 lookups) or `unknown` (the lookup failed). For SPF, `want` is the existing record with `mx` added; an existing DMARC record is `ok` whatever it says. `can_apply` is true when the domain lies in a zone of exactly one of **your own** DNS connections with write access (never someone else's, also not for admins) and you may write; `connection_id` and `zone` then name it and `name` is relative to that zone, otherwise `connection_id` is `0`, `zone` is empty, `name` is relative to the mail domain and `apply_note` says why.
 
-**Mail record changes:** `{"changes": [{"kind", "type", "name", "action", "old", "new", "needs_confirm", "note"}], "applied"}`. `action` is `create`, `replace`, `add` (to other TXT values, which stay), `keep` or `skip`. Only replacing MX records that do not point to the mail host has `needs_confirm` (mail would move here). `applied` is `false` only when such a change was not confirmed; nothing was written then.
+**Mail record changes:** `{"changes": [{"kind", "type", "name", "action", "old", "new", "needs_confirm", "note", "optional"}], "applied"}`. `action` is `create`, `replace`, `add` (to other TXT values, which stay), `keep` or `skip`. Only replacing MX records that do not point to the mail host has `needs_confirm` (mail would move here). `applied` is `false` only when such a change was not confirmed; nothing was written then.
 
-**Mail health:** `{"mail_host", "checks": [{"id", "state", "found", "expected", "detail"}]}` with the checks `service`, `mail_host_dns`, `ptr`, `outbound_port`, `certificate`, `listeners`, `postmaster`, `blocklists` in this order; `state` is `ok`, `warning`, `error` or `unknown` (a lookup or the mail service could not be asked). IPv4 addresses without a PTR naming `mail_host` are an error, IPv6 ones a warning. The outbound port check is reused for 10 minutes.
+**Mail health:** `{"mail_host", "checks": [{"id", "state", "found", "expected", "detail", "can_apply"}]}` with the checks `service`, `mail_host_dns`, `mail_host_spf`, `ptr`, `outbound_port`, `certificate`, `listeners`, `postmaster`, `blocklists` in this order; `state` is `ok`, `warning`, `error` or `unknown` (a lookup or the mail service could not be asked). IPv4 addresses without a PTR naming `mail_host` are an error, IPv6 ones a warning. The outbound port check is reused for 10 minutes. `mail_host_spf` looks at the SPF record of `mail_host` itself (bounces and SRS-forwarded mail use it as sender domain): `expected` is `v=spf1 a -all`, or the existing record with `a` added; a missing or unmerged record is a `warning`, an SPF record that cannot be merged safely a `warning` without `expected`. `can_apply` is true (only on this check) when an admin's own DNS connection holds the zone of `mail_host`.
 
 ## Routes
 
@@ -160,6 +162,7 @@ Entries of `GET /api/dns/zones` are Zone objects, with `nameservers`.
 | `GET` | `/api/mail/status` | mail read | | Mail status (includes the settings for mail programs) |
 | `POST` | `/api/mail/checks/outbound` | admin (also read-only token) | | `{"ok", "target", "error"}`: whether the mail service can reach port 25 elsewhere |
 | `GET` | `/api/mail/health` | admin (also read-only token) | | Mail health; checks run in parallel within 10 seconds |
+| `POST` | `/api/mail/host-spf` | admin, and the zone of the mail host in one of your own DNS connections | | Mail record changes for the `mail-host-spf` record (written at once). `409` if the mail host is not set or no own connection holds its zone |
 | `GET` | `/api/mail/domains` | mail read | | list of Mail domain you may see, sorted by name |
 | `POST` | `/api/mail/domains` | mail write; members only for a domain of their site or domain redirect, or in a zone of their own DNS connection; admins any domain | `{"domain": "example.com"}` | `201` Mail domain. `400` if another person's site or redirect uses the domain (not naming it) or for the mail host itself, `403` for a domain you do not control, `409` if e-mail is already enabled for it or you have 20 mail domains |
 | `GET` | `/api/mail/domains/{domain}` | mail read, own | | Mail domain |
@@ -175,6 +178,7 @@ Entries of `GET /api/dns/zones` are Zone objects, with `nameservers`.
 | `PATCH` | `/api/mail/mailboxes/{id}` | mail write, own; only admins raise values | `{"quota_bytes", "send_per_hour", "send_per_day"}`, missing fields stay | Mailbox |
 | `POST` | `/api/mail/mailboxes/{id}/password` | mail write, own | `{"password"}` (10 to 200 characters) | `204` |
 | `POST` | `/api/mail/mailboxes/{id}/unblock` | admin | | `204`; lifts a sending block of the mail service |
+| `GET` | `/api/mail/mailboxes/{id}/apple-profile` | mail read, own | | An unsigned configuration profile (`application/x-apple-aspen-config`, attachment `<address>.mobileconfig`) with one IMAP/SMTP account (`com.apple.mail.managed`) for the mailbox; no password inside. Its identifiers are stable, so installing it again replaces it |
 | `DELETE` | `/api/mail/mailboxes/{id}` | mail write, own | | `204`; the mail service deletes the stored mail (retried later if it cannot be reached) |
 | `GET` | `/api/mail/domains/{domain}/aliases` | mail read, own | | list of Alias |
 | `POST` | `/api/mail/domains/{domain}/aliases` | mail write, own | `{"local_part", "targets": ["a@example.com", …]}` | `201` Alias. 1 to 50 targets; `409` if the address is a mailbox or an alias already |
@@ -183,9 +187,35 @@ Entries of `GET /api/dns/zones` are Zone objects, with `nameservers`.
 | `PUT` | `/api/mail/aliases/{id}` | mail write, own | same as `POST` | Alias (stays in its domain) |
 | `DELETE` | `/api/mail/aliases/{id}` | mail write, own | | `204` |
 
+**Moving mail in and out** of a mailbox (see [[E-Mail|E-Mail]] and "Import and export" in [[E-Mail architecture|E-Mail-Architecture]]). The mailbox is addressed by its domain and local part. Importing and exporting need mail write (a password sign-in or an unrestricted `write` token) and owning the mail domain or being an admin; listing imports needs mail read (read tokens too). Another person's mailbox answers `404`. Passwords of other accounts are passed to the mail service only, never stored, logged, returned or written to the activity log. Each person and each mailbox may begin 10 checks, starts and uploads per hour.
+
+**Import:** `{"id", "address", "kind", "state", "error", "host", "port", "username", "file_name", "file_size", "received", "check", "choices", "folders", "messages", "copied", "skipped", "failed", "bytes", "created", "started", "finished", "failures"}`. `kind` is `imap` or `file`; `state` is `uploading`, `checking`, `ready` (a file was read; start it), `waiting`, `running`, `paused` (the other server limits downloads), `interrupted` (the mail service restarted; IMAP imports need the password again), `done`, `failed` or `cancelled`. `folders` lists `{"remote", "local", "copied", "skipped", "failed", "done"}`; `failures` (only from `GET …/imports/{id}`, at most 1000) `{"folder", "date", "subject", "reason"}`. **Import check:** `{"folders": [{"remote", "local", "special_use", "messages", "bytes", "selected", "note"}], "messages", "bytes", "quota_bytes", "used_bytes", "quota_left", "skipped_entries", "own_export"}`; `note` is `junk`, `trash`, `starred`, `important`, `all-mail` or `too-many`; `quota_left` `-1` means no limit; `own_export` is true for a zip from "Download all mail" (the web interface then also selects Junk and Trash). **Choices:** `{"folders": ["INBOX", …], "include_junk", "include_trash"}`; with `folders`, exactly those are copied, otherwise the default ones plus junk and trash as the flags say.
+
+| Method | Path below `/api/mail/domains/{domain}/mailboxes/{local_part}` | Who | Body | Answer |
+|---|---|---|---|---|
+| `POST` | `/imports/check` | mail write, own | `{"host", "port", "username", "password"}`; `port` 993 (default) or 143 | Import check, after signing in to the other account; nothing is copied. `502` with the other server's reason (sign-in refused, certificate, unreachable) |
+| `POST` | `/imports` | mail write, own | the same plus `"choices"` | `201` Import (`waiting`) |
+| `POST` | `/uploads` | mail write, own | `{"name", "size"}`, at most 20 GiB | `201` Import (`uploading`) |
+| `PUT` | `/uploads/{id}?offset=N` | mail write, own | the bytes from `N` on, at most 256 MiB, `Content-Length` required | `{"received"}`. `N` must be what the server has (`received` of the import); otherwise `409`, then read the import and go on from there. After the last part the file is read (`checking`, then `ready` with `check`) |
+| `POST` | `/imports/{id}/start` | mail write, own | `{"choices"}` for a `ready` file; `{"password"}` to continue a `paused` or `interrupted` IMAP import (empty body: default choices) | Import |
+| `GET` | `/imports` | mail read, own | | list of Import, newest first, without `failures` |
+| `GET` | `/imports/{id}` | mail read, own | | Import with `failures` |
+| `DELETE` | `/imports/{id}` | mail write, own | | `204`; cancels an unfinished import (copied mail stays) or removes a finished one from the list |
+| `GET` | `/export` | mail write, own | | `application/zip`, attachment `mail-<address>-<date>.zip`, streamed: `manifest.json` and one mboxrd file per folder. One export per mailbox at a time (`409`), four in the service (`429`). A connection cut before the end means the zip is incomplete |
+
 A change that is saved but could not be sent to the mail service answers `502` with "saved, but the mail server could not be updated yet"; the panel keeps retrying. Without a mail service (`-mail-admin` not set) everything is stored, and `GET /api/mail/status` says the service is not set up.
 
 The panel settings (`GET`/`PUT /api/settings`, admin) also carry `mail_host`, `mail_host_locked` and `postmaster_address`; see [[Configuration|Configuration]]. The spam checks are `mail_blocklists` (list of DNS blocklist zones, at most 10; `[]` turns them off; zones with a Spamhaus key, `<key>.….dq.spamhaus.net`, are answered as `••••.….dq.spamhaus.net`, and sending the masked name back keeps the stored zone), `mail_blocklists_default` (`true` uses the default list and ignores `mail_blocklists`), `mail_junk_score` (1–50, default 5) and `mail_greylisting` (default `false`). Omitted fields stay unchanged.
+
+**Settings for mail programs (public, outside `/api/`).** Mail programs ask before they have a password, so these need no sign-in. They answer only for active mail domains, the same for every address (never whether a mailbox exists), and `404` for everything else:
+
+| Method | Path | Host | Answer |
+|---|---|---|---|
+| `GET` | `/mail/config-v1.1.xml` | `autoconfig.<domain>` | client configuration 1.1 (Thunderbird): IMAP 993 SSL, SMTP 465 SSL and 587 STARTTLS, user name `%EMAILADDRESS%` |
+| `GET` | `/.well-known/autoconfig/mail/config-v1.1.xml` | `<domain>` (a site of this panel) or `autoconfig.<domain>` | the same |
+| `POST` | `/autodiscover/autodiscover.xml` | `autodiscover.<domain>` | Outlook "plain old XML" answer with IMAP and SMTP for the request's `EMailAddress`, which must be an address of `<domain>`. Requests over 8 KiB answer `413`, malformed ones `400`, requests for the mobile (ActiveSync) schema `404` |
+
+Paths match regardless of case. Caddy passes them to the panel only for `autoconfig.`/`autodiscover.` names the panel has seen point to this server, and the well-known path on site domains that are active mail domains.
 
 For record routes, `{name}` is `@` for the zone itself, and `{type}` is for example `A` or `TXT`. See [[DNS|DNS]] for what is allowed.
 
