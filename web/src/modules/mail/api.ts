@@ -7,10 +7,13 @@ import type {
   ImportSource,
   MailImport,
   LimitsChange,
+  AliasOptions,
   MailAlias,
   MailDomain,
   Mailbox,
   MailboxChange,
+  MailboxKind,
+  NewMailbox,
   MailOrganisation,
   MailRecords,
   MailStatus,
@@ -59,13 +62,47 @@ export const setDomainOrganisation = async (domain: string, organisation: string
     await request<MailDomain>(`${domainPath(domain)}/organisation`, { method: 'PUT', body: { organisation } }),
   )
 
+// Lists may come as null (or, from an older server, not at all); the interface always sees them.
+function withMailboxLists(mailbox: Mailbox): Mailbox {
+  return {
+    ...mailbox,
+    kind: mailbox.kind === 'shared' ? 'shared' : 'personal',
+    keep_sent_copy: mailbox.keep_sent_copy ?? false,
+    shared_with: (mailbox.shared_with ?? []).map((entry) => ({ ...entry, rights: entry.rights ?? [] })),
+    access_to: (mailbox.access_to ?? []).map((entry) => ({ ...entry, rights: entry.rights ?? [] })),
+  }
+}
+
+const mailboxIdPath = (id: number) => `/mail/mailboxes/${id}`
+
 export const listMailboxes = async (domain: string) =>
-  (await request<Mailbox[] | null>(`${domainPath(domain)}/mailboxes`)) ?? []
-export const createMailbox = (domain: string, localPart: string, password: string, displayName = '') =>
-  request<Mailbox>(`${domainPath(domain)}/mailboxes`, {
-    method: 'POST',
-    body: displayName ? { local_part: localPart, password, display_name: displayName } : { local_part: localPart, password },
-  })
+  ((await request<Mailbox[] | null>(`${domainPath(domain)}/mailboxes`)) ?? []).map(withMailboxLists)
+export const getMailbox = async (id: number) => withMailboxLists(await request<Mailbox>(mailboxIdPath(id)))
+// A shared mailbox has no password; empty fields stay out of the request.
+export const createMailbox = async (domain: string, mailbox: NewMailbox) => {
+  const body: Record<string, unknown> = { local_part: mailbox.local_part, kind: mailbox.kind }
+  if (mailbox.kind === 'personal') body.password = mailbox.password ?? ''
+  if (mailbox.display_name) body.display_name = mailbox.display_name
+  if (mailbox.kind === 'shared' && mailbox.keep_sent_copy) body.keep_sent_copy = true
+  return withMailboxLists(await request<Mailbox>(`${domainPath(domain)}/mailboxes`, { method: 'POST', body }))
+}
+// Making a mailbox personal needs a new password; making it shared drops its password and app passwords.
+export const setMailboxKind = async (id: number, kind: MailboxKind, password = '') =>
+  withMailboxLists(
+    await request<Mailbox>(`${mailboxIdPath(id)}/kind`, {
+      method: 'PUT',
+      body: kind === 'personal' ? { kind, password } : { kind },
+    }),
+  )
+export const setKeepSentCopy = async (id: number, keep: boolean) =>
+  withMailboxLists(
+    await request<Mailbox>(`${mailboxIdPath(id)}/keep-sent-copy`, { method: 'PUT', body: { keep_sent_copy: keep } }),
+  )
+// Gives a personal mailbox of the organisation access to a shared one, or changes its rights.
+export const setMailboxGrant = async (id: number, address: string, rights: string[]) =>
+  withMailboxLists(await request<Mailbox>(`${mailboxIdPath(id)}/grants`, { method: 'PUT', body: { address, rights } }))
+export const removeMailboxGrant = async (id: number, granteeId: number) =>
+  withMailboxLists(await request<Mailbox>(`${mailboxIdPath(id)}/grants/${granteeId}`, { method: 'DELETE' }))
 export const setMailboxPassword = (id: number, password: string) =>
   request<void>(`/mail/mailboxes/${id}/password`, { method: 'POST', body: { password } })
 export const setMailboxLimits = (id: number, change: LimitsChange) => updateMailbox(id, change)
@@ -91,11 +128,16 @@ export const listAliases = async (domain: string) =>
   ((await request<MailAlias[] | null>(`${domainPath(domain)}/aliases`)) ?? []).map((alias) => ({
     ...alias,
     targets: alias.targets ?? [],
+    sender_policy: alias.sender_policy || 'anyone',
+    hide_from_directory: alias.hide_from_directory ?? false,
   }))
-export const createAlias = (domain: string, localPart: string, targets: string[]) =>
-  request<MailAlias>(`${domainPath(domain)}/aliases`, { method: 'POST', body: { local_part: localPart, targets } })
-export const updateAlias = (id: number, localPart: string, targets: string[]) =>
-  request<MailAlias>(`/mail/aliases/${id}`, { method: 'PUT', body: { local_part: localPart, targets } })
+export const createAlias = (domain: string, localPart: string, targets: string[], options: AliasOptions) =>
+  request<MailAlias>(`${domainPath(domain)}/aliases`, {
+    method: 'POST',
+    body: { local_part: localPart, targets, ...options },
+  })
+export const updateAlias = (id: number, localPart: string, targets: string[], options: AliasOptions) =>
+  request<MailAlias>(`/mail/aliases/${id}`, { method: 'PUT', body: { local_part: localPart, targets, ...options } })
 export const deleteAlias = (id: number) => request<void>(`/mail/aliases/${id}`, { method: 'DELETE' })
 
 export async function getMailRecords(domain: string): Promise<MailRecords> {

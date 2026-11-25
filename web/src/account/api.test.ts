@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AccountError, changePassword, loadMe, onSessionEnded, signIn } from './api.ts'
+import { AccountError, changePassword, loadMe, onSessionEnded, setDelegations, signIn } from './api.ts'
 
 function respond(status: number, body: unknown) {
   return vi.fn(async (..._args: unknown[]) => new Response(body === undefined ? null : JSON.stringify(body), { status }))
@@ -38,6 +38,22 @@ describe('account API', () => {
     vi.stubGlobal('fetch', respond(401, { error: 'Your session has ended. Sign in again.' }))
     await expect(loadMe()).rejects.toBeInstanceOf(AccountError)
     expect(ended).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends the whole list of people the mailbox is shared with and always answers with lists', async () => {
+    const fetch = respond(200, { address: 'anna@example.com', shared_with: null })
+    vi.stubGlobal('fetch', fetch)
+    const me = await setDelegations([{ address: 'ben@example.com', rights: ['read', 'send-on-behalf'] }])
+    const [url, init] = fetch.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/account/api/delegations')
+    expect(init.method).toBe('PUT')
+    expect((init.headers as Record<string, string>)['X-Ownpanel-Request']).toBe('1')
+    expect(JSON.parse(init.body as string)).toEqual({
+      grants: [{ address: 'ben@example.com', rights: ['read', 'send-on-behalf'] }],
+    })
+    expect(me.shared_with).toEqual([])
+    expect(me.access).toEqual([])
+    expect(me.app_passwords).toEqual([])
   })
 
   it('falls back to a plain message', async () => {

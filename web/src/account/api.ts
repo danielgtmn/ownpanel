@@ -30,8 +30,25 @@ export type Me = {
   app_passwords_available: boolean
   uses_known_days: number
   client: ClientSettings
+  // Who the person shared their own mailbox with.
+  shared_with: Delegate[]
+  // Mailboxes the person may use besides their own.
+  access: MailboxAccess[]
   // Only on the answer to a password change: the password was changed, but not all that came with it.
   warning?: string
+}
+
+// Rights are "read", "write", "manage", "send-as", "send-on-behalf" (src/shared/sharing).
+export type Delegate = { address: string; display_name: string; rights: string[] }
+
+export type MailboxAccess = {
+  address: string
+  display_name: string
+  // A shared mailbox (rather than someone's own mailbox they shared).
+  shared: boolean
+  rights: string[]
+  // Where mail programs show its folders, like "Shared/info@example.com".
+  folder: string
 }
 
 export type NewAppPassword = { app_password: AppPassword; password: string }
@@ -103,30 +120,46 @@ export function isSessionEnded(error: unknown): boolean {
   return error instanceof AccountError && error.status === 401
 }
 
+// Lists may come as null (or, from an older server, not at all); the page always sees arrays.
+export function withLists<T extends Me>(me: T): T {
+  return {
+    ...me,
+    app_passwords: me.app_passwords ?? [],
+    shared_with: (me.shared_with ?? []).map((entry) => ({ ...entry, rights: entry.rights ?? [] })),
+    access: (me.access ?? []).map((entry) => ({ ...entry, rights: entry.rights ?? [] })),
+  }
+}
+
+const account = async (path: string, options: Options = {}) => withLists(await request<Me>(path, options))
+
 // Wrong address or password answers 401 too; that is not an ended session.
 export const signIn = (address: string, password: string) =>
-  request<Me>('/session', { method: 'POST', body: { address, password }, quiet401: true })
+  account('/session', { method: 'POST', body: { address, password }, quiet401: true })
 
 export const signOut = () => request<void>('/session', { method: 'DELETE', quiet401: true })
 
-export const loadMe = (quiet401 = false) => request<Me>('/me', { quiet401 })
+export const loadMe = (quiet401 = false) => account('/me', { quiet401 })
 
 export const changePassword = (current: string, next: string, revokeAppPasswords: boolean) =>
-  request<Me>('/password', {
+  account('/password', {
     method: 'PUT',
     body: { current_password: current, new_password: next, revoke_app_passwords: revokeAppPasswords },
   })
 
 export const setDisplayName = (name: string) =>
-  request<Me>('/display-name', { method: 'PUT', body: { display_name: name } })
+  account('/display-name', { method: 'PUT', body: { display_name: name } })
 
 export const setAppPasswordsOnly = (on: boolean) =>
-  request<Me>('/app-passwords-only', { method: 'PUT', body: { app_passwords_only: on } })
+  account('/app-passwords-only', { method: 'PUT', body: { app_passwords_only: on } })
 
 export const createAppPassword = (name: string) =>
   request<NewAppPassword>('/app-passwords', { method: 'POST', body: { name } })
 
 export const revokeAppPassword = (id: string) =>
   request<void>(`/app-passwords/${encodeURIComponent(id)}`, { method: 'DELETE' })
+
+// Replaces the whole list of people the person's mailbox is shared with; empty: nobody.
+export const setDelegations = (grants: { address: string; rights: string[] }[]) =>
+  account('/delegations', { method: 'PUT', body: { grants } })
 
 export const APPLE_SETUP_URL = `${BASE_PATH}/apple-setup`

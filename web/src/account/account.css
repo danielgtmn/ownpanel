@@ -170,6 +170,26 @@
   font-size: 0.875rem;
 }
 
+.account-sharing-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.account-folder,
+.account-share-person {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.account-folder {
+  font-size: 0.875rem;
+}
+
+.account-share-person {
+  font-weight: 500;
+}
+
 .account-footer {
   font-size: 0.875rem;
 }

@@ -1,7 +1,7 @@
 import { Dialog } from '@ui-sdk/react/dialog'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { ChangePasswordForm } from './AccountDialogs.tsx'
+import { ChangePasswordForm, ShareForm } from './AccountDialogs.tsx'
 import { AccountPage } from './AccountPage.tsx'
 import type { Me } from './api.ts'
 import { SignInForm } from './SignInForm.tsx'
@@ -21,6 +21,22 @@ const me: Me = {
   app_passwords_available: true,
   uses_known_days: 30,
   client: { server: 'mail.example.com', imap_port: 993, smtp_port: 465, smtp_starttls_port: 587, user_name_is_address: true },
+  shared_with: [],
+  access: [],
+}
+
+const sharing: Me = {
+  ...me,
+  shared_with: [{ address: 'ben@example.com', display_name: 'Ben Assistant', rights: ['read', 'write', 'send-on-behalf'] }],
+  access: [
+    {
+      address: 'info@example.com',
+      display_name: 'Info desk',
+      shared: true,
+      rights: ['read', 'send-as'],
+      folder: 'Shared/info@example.com',
+    },
+  ],
 }
 
 describe('account area', () => {
@@ -43,6 +59,54 @@ describe('account area', () => {
     expect(html).toContain('href="/account/api/apple-setup"')
     expect(html).toContain('The people who manage this server can reset your password.')
     expect(html).not.toMatch(/argon|cookie|session|HMAC|JSON/i)
+  })
+
+  it('shows nobody sharing and no other mailboxes plainly', () => {
+    const html = renderToStaticMarkup(<AccountPage host="mail.example.com" me={me} onChange={noop} onSignedOut={noop} />)
+    expect(html).toContain('Your mailbox is shared with')
+    expect(html).toContain('Nobody. Only you can use your mailbox.')
+    expect(html).toContain('Share with someone')
+    expect(html).toContain('You have access to')
+    expect(html).toContain('No other mailboxes.')
+  })
+
+  it('lists who the mailbox is shared with and the mailboxes the person may use', () => {
+    const html = renderToStaticMarkup(
+      <AccountPage host="mail.example.com" me={sharing} onChange={noop} onSignedOut={noop} />,
+    )
+    expect(html).toContain('ben@example.com')
+    expect(html).toContain('Ben Assistant')
+    expect(html).toContain('Read and write, Send on behalf')
+    expect(html).toContain('info@example.com')
+    expect(html).toContain('Shared mailbox')
+    expect(html).toContain('Read, Send as')
+    expect(html).toContain('In your mail program: the folder Shared/info@example.com')
+    const sections = html.slice(html.indexOf('Your mailbox is shared with'), html.indexOf('Settings for mail programs'))
+    expect(sections).not.toMatch(/imap|acl|sieve|grant|delegat/i)
+  })
+
+  it('asks for an address and rights when sharing, and keeps Read while Write is on', () => {
+    const add = renderToStaticMarkup(
+      <Dialog open>
+        <ShareForm own="anna@example.com" existing={null} onSubmit={async () => undefined} />
+      </Dialog>,
+    )
+    expect(add).toContain('Their e-mail address')
+    expect(add).toContain('Manage filters and out-of-office')
+    expect(add).toContain('Send on behalf')
+    const change = renderToStaticMarkup(
+      <Dialog open>
+        <ShareForm
+          own="anna@example.com"
+          existing={{ address: 'ben@example.com', display_name: '', rights: ['write'] }}
+          onSubmit={async () => undefined}
+        />
+      </Dialog>,
+    )
+    expect(change).not.toContain('Their e-mail address')
+    expect(change).toContain('ben@example.com')
+    // Read is ticked and locked because Write is on.
+    expect(change.match(/data-disabled/g)?.length ?? 0).toBeGreaterThan(0)
   })
 
   it('offers to sign out app password programs only when there are some', () => {

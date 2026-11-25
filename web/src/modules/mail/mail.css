@@ -434,3 +434,21 @@
   margin: 0;
   overflow-wrap: anywhere;
 }
+
+/* A checkbox with its label and hint, like the switches above. */
+.mail-choice[data-slot='field'] {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.mail-choice > [data-slot='checkbox'] {
+  flex: none;
+  margin-top: 0.125rem;
+}
+
+.mail-grant-person {
+  margin: 0;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}

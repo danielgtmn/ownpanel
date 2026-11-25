@@ -1,5 +1,14 @@
 import type { RowStatus } from '../../shared/families/index.ts'
-import type { MailAlias, MailClientSettings, MailDomain, Mailbox, MailRecord, RecordChange } from './types.ts'
+import { addressList } from '../../shared/sharing/rights.ts'
+import type {
+  MailAlias,
+  MailClientSettings,
+  MailDomain,
+  Mailbox,
+  MailRecord,
+  RecordChange,
+  SenderPolicy,
+} from './types.ts'
 
 export type Tone = 'positive' | 'neutral' | 'warning'
 
@@ -283,4 +292,41 @@ export function organisationDomainsText(organisation: MailDomain['organisation']
   if (!organisation) return ''
   if (organisation.domains.length === 0) return 'No other domains you can see belong to it.'
   return `Together with ${organisation.domains.join(', ')}.`
+}
+
+// ---- shared mailboxes and who may write to an address ----
+
+export const NOT_IN_EFFECT = 'Not in effect: the two mailboxes belong to different organisations now.'
+
+// Short facts for a mailbox's row: who uses a shared one, what a personal one can use and who it is shared with.
+export function accessFacts(mailbox: Pick<Mailbox, 'kind' | 'shared_with' | 'access_to'>): string[] {
+  const names = (list: { address: string }[]) => addressList(list.map((entry) => entry.address))
+  if (mailbox.kind === 'shared') {
+    return [mailbox.shared_with.length === 0 ? 'Nobody has access yet' : `Used by ${names(mailbox.shared_with)}`]
+  }
+  const facts: string[] = []
+  if (mailbox.access_to.length > 0) facts.push(`Has access to ${names(mailbox.access_to)}`)
+  if (mailbox.shared_with.length > 0) facts.push(`Shared with ${names(mailbox.shared_with)}`)
+  return facts
+}
+
+export const SENDER_POLICIES: { value: SenderPolicy; label: string; hint: string }[] = [
+  { value: 'anyone', label: 'Anyone', hint: 'Also people outside the organisation, for example customers.' },
+  {
+    value: 'organisation',
+    label: 'Only addresses of this organisation',
+    hint: 'Mail from anywhere else is turned away.',
+  },
+  {
+    value: 'members',
+    label: 'Only its members',
+    hint: 'Only the addresses it delivers to. Mail from anyone else is turned away.',
+  },
+]
+
+// The fact in the list of forwarding; empty for "anyone".
+export function senderPolicyText(policy: string): string {
+  if (policy === 'organisation') return 'Only the organisation may write to it'
+  if (policy === 'members') return 'Only its members may write to it'
+  return ''
 }

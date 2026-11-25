@@ -1,5 +1,5 @@
 import { validatePasswordPair } from '../shared/session/validation.ts'
-import type { AppPassword, ClientSettings, Me } from './api.ts'
+import type { AppPassword, ClientSettings, MailboxAccess, Me } from './api.ts'
 
 // The same limits as the mail server's (internal/mail/config, internal/passwd).
 export const NAME_MAX = 64
@@ -141,4 +141,15 @@ export function passwordChangedNotice(
       ? 'Your password was changed and all app passwords were revoked.'
       : 'Your password was changed.',
   }
+}
+
+// Where a mailbox the person may use shows up in mail programs.
+export function folderText(access: Pick<MailboxAccess, 'folder'>): string {
+  return access.folder
+    ? `In your mail program: the folder ${access.folder}`
+    : 'In your mail program, next to your own mail'
+}
+
+export function accessKindText(access: Pick<MailboxAccess, 'shared'>): string {
+  return access.shared ? 'Shared mailbox' : 'Someone’s own mailbox, shared with you'
 }

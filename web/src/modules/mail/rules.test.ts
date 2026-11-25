@@ -3,6 +3,9 @@ import { buildFamilies, findFamily } from '../../shared/families/index.ts'
 import { parseRoute } from '../../shared/routing/index.ts'
 import { mailRows } from './index.ts'
 import {
+  accessFacts,
+  SENDER_POLICIES,
+  senderPolicyText,
   aliasTitle,
   appPasswordUse,
   changeSentence,
@@ -252,5 +255,36 @@ describe('sender names, app passwords and organisations', () => {
     expect(organisationSentence(organisation)).toBe('Part of Acme.')
     expect(organisationDomainsText(organisation)).toBe('Together with acme.org, acme.net.')
     expect(organisationDomainsText({ ...organisation, domains: [] })).toBe('No other domains you can see belong to it.')
+  })
+})
+
+describe('shared mailboxes', () => {
+  const person = (address: string) => ({ mailbox_id: 1, address, display_name: '', rights: ['read'], active: true })
+  const box = (address: string) => ({ mailbox_id: 2, address, kind: 'shared' as const, rights: ['read'], active: true })
+
+  it('sums up who uses a shared mailbox', () => {
+    expect(accessFacts({ kind: 'shared', shared_with: [], access_to: [] })).toEqual(['Nobody has access yet'])
+    expect(
+      accessFacts({
+        kind: 'shared',
+        shared_with: [person('a@x.com'), person('b@x.com'), person('c@x.com')],
+        access_to: [],
+      }),
+    ).toEqual(['Used by a@x.com, b@x.com and 1 more'])
+  })
+
+  it('sums up what a personal mailbox uses and who it is shared with, and says nothing when there is nothing', () => {
+    expect(accessFacts({ kind: 'personal', shared_with: [], access_to: [] })).toEqual([])
+    expect(accessFacts({ kind: 'personal', shared_with: [person('ben@x.com')], access_to: [box('info@x.com')] })).toEqual([
+      'Has access to info@x.com',
+      'Shared with ben@x.com',
+    ])
+  })
+
+  it('names who may write to an address only when it is limited', () => {
+    expect(senderPolicyText('anyone')).toBe('')
+    expect(senderPolicyText('organisation')).toBe('Only the organisation may write to it')
+    expect(senderPolicyText('members')).toBe('Only its members may write to it')
+    expect(SENDER_POLICIES.map((policy) => policy.value)).toEqual(['anyone', 'organisation', 'members'])
   })
 })
