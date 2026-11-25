@@ -24,7 +24,17 @@ import {
 } from '@ui-sdk/react/navigation-menu'
 import { useShortcut, useShortcutHint } from '@ui-sdk/react/shortcuts'
 import { createTooltipController, Tooltip, TooltipContent, TooltipTrigger } from '@ui-sdk/react/tooltip'
-import { useCallback, useId, useState, type ReactElement, type ReactNode } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useState,
+  useRef,
+  type ReactElement,
+  type ReactNode,
+  type RefObject,
+} from 'react'
 import {
   hueOf,
   initialsOf,
@@ -94,6 +104,29 @@ function TipTrigger({
       {children}
     </TooltipTrigger>
   )
+}
+
+// Whether the domain list has more above or below what is shown, for the faded edges.
+// `content` changes when the list's first child is replaced, so the observer follows it.
+function useScrollEdges(ref: RefObject<HTMLDivElement | null>, content: unknown) {
+  const [edges, setEdges] = useState({ above: false, below: false })
+  const measure = useCallback(() => {
+    const el = ref.current
+    if (!el) return
+    const above = el.scrollTop > 1
+    const below = el.scrollTop + el.clientHeight < el.scrollHeight - 1
+    setEdges((current) => (current.above === above && current.below === below ? current : { above, below }))
+  }, [ref])
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    if (el.firstElementChild) observer.observe(el.firstElementChild)
+    return () => observer.disconnect()
+  }, [ref, measure, content])
+  return { edges, measure }
 }
 
 function TileLabel({ children }: { children: ReactNode }) {
@@ -211,6 +244,12 @@ function Rail({
     (src: string) => setMissing((current) => (current.has(src) ? current : new Set(current).add(src))),
     [],
   )
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const { edges, measure } = useScrollEdges(scrollRef, families.length > 0)
+  // Keep the selected domain in view, e.g. after opening its page by its address.
+  useEffect(() => {
+    scrollRef.current?.querySelector('[data-current]')?.scrollIntoView({ block: 'nearest' })
+  }, [tile, families.length])
   const iconOf = (family: Family) => {
     const site = mainSite(family)
     return site ? iconUrl(site) : null
@@ -218,71 +257,111 @@ function Rail({
 
   return (
     <div className="rail" id={railId} data-expanded={expanded ? '' : undefined}>
-      <NavigationMenu aria-label="Domains" orientation="vertical" className="rail-nav">
-        <NavigationMenuList>
-          <NavigationMenuItem>
-            <TipTrigger
-              tips={tips}
-              tip={{ title: 'All domains', detail: 'Sites, DNS, redirects and e-mail' }}
-              render={
-                <NavigationMenuLink
-                  href={allHref}
-                  current={tile === ALL}
-                  aria-label="All domains"
-                  className="tile"
-                  data-kind="all"
-                />
-              }
-            >
-              <span className="tile-face">
-                <StackIcon />
-              </span>
-              <TileLabel>All domains</TileLabel>
-            </TipTrigger>
-          </NavigationMenuItem>
-          {families.map(({ family, status }) => {
-            const src = iconOf(family)
-            return (
-              <NavigationMenuItem key={family.domain}>
-                <TipTrigger
-                  tips={tips}
-                  tip={{ title: family.domain, detail: capitalize(STATUS_TEXT[status]) }}
-                  render={
-                    <MenuContextTrigger
-                      controller={tileMenu}
-                      payload={family}
+      <div className="rail-top">
+        <NavigationMenu aria-label="Overview" orientation="vertical" className="rail-nav">
+          <NavigationMenuList>
+            <NavigationMenuItem>
+              <TipTrigger
+                tips={tips}
+                tip={{ title: 'All domains', detail: 'Sites, DNS, redirects and e-mail' }}
+                render={
+                  <NavigationMenuLink
+                    href={allHref}
+                    current={tile === ALL}
+                    aria-label="All domains"
+                    className="tile"
+                    data-kind="all"
+                  />
+                }
+              >
+                <span className="tile-face">
+                  <StackIcon />
+                </span>
+                <TileLabel>All domains</TileLabel>
+              </TipTrigger>
+            </NavigationMenuItem>
+          </NavigationMenuList>
+        </NavigationMenu>
+
+        <Menu>
+          <TipTrigger
+            tips={tips}
+            tip={{ title: 'Add', detail: 'A site, a domain, a redirect or e-mail' }}
+            render={
+              <MenuTrigger className="tile" data-kind="add" aria-label="Add a site, domain, redirect or e-mail" />
+            }
+          >
+            <span className="tile-face">
+              <PlusIcon />
+            </span>
+            <TileLabel>Add</TileLabel>
+          </TipTrigger>
+          <MenuContent side="right" align="start">
+            <MenuItem render={<a href={hrefWithQuery(['sites'], { new: '1' })} />}>New site</MenuItem>
+            <MenuItem render={<a href={hrefWithQuery(['dns'], { add: '1' })} />}>
+              Add a domain at your DNS provider
+            </MenuItem>
+            <MenuItem render={<a href={hrefWithQuery(['redirects'], { new: '1' })} />}>New redirect</MenuItem>
+            <MenuItem render={<a href={hrefWithQuery(['mail'], { new: '1' })} />}>Turn on e-mail for a domain</MenuItem>
+          </MenuContent>
+        </Menu>
+      </div>
+
+      <div
+        ref={scrollRef}
+        className="rail-scroll"
+        data-more-above={edges.above ? '' : undefined}
+        data-more-below={edges.below ? '' : undefined}
+        onScroll={measure}
+      >
+        {families.length > 0 ? (
+          <NavigationMenu aria-label="Domains" orientation="vertical" className="rail-nav">
+            <NavigationMenuList>
+              {families.map(({ family, status }) => {
+                const src = iconOf(family)
+                return (
+                  <NavigationMenuItem key={family.domain}>
+                    <TipTrigger
+                      tips={tips}
+                      tip={{ title: family.domain, detail: capitalize(STATUS_TEXT[status]) }}
                       render={
-                        <NavigationMenuLink
-                          href={familyHref(family.domain)}
-                          current={tile === family.domain}
-                          aria-label={`${family.domain}, ${STATUS_TEXT[status]}`}
-                          className="tile"
-                          data-kind="family"
-                          onKeyDown={(event) => {
-                            // Browsers on macOS send no context menu event for these keys.
-                            if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
-                              event.preventDefault()
-                              void tileMenu.open({ payload: family, anchor: event.currentTarget, focus: 'first' })
-                            }
-                          }}
+                        <MenuContextTrigger
+                          controller={tileMenu}
+                          payload={family}
+                          render={
+                            <NavigationMenuLink
+                              href={familyHref(family.domain)}
+                              current={tile === family.domain}
+                              aria-label={`${family.domain}, ${STATUS_TEXT[status]}`}
+                              className="tile"
+                              data-kind="family"
+                              onKeyDown={(event) => {
+                                // Browsers on macOS send no context menu event for these keys.
+                                if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+                                  event.preventDefault()
+                                  void tileMenu.open({ payload: family, anchor: event.currentTarget, focus: 'first' })
+                                }
+                              }}
+                            />
+                          }
                         />
                       }
-                    />
-                  }
-                >
-                  <FamilyFace
-                    domain={family.domain}
-                    status={status}
-                    src={lookOf(prefs, family.domain) === 'icon' && src && !missing.has(src) ? src : null}
-                    onMissing={markMissing}
-                  />
-                  <TileLabel>{family.domain}</TileLabel>
-                </TipTrigger>
-              </NavigationMenuItem>
-            )
-          })}
-        </NavigationMenuList>
-      </NavigationMenu>
+                    >
+                      <FamilyFace
+                        domain={family.domain}
+                        status={status}
+                        src={lookOf(prefs, family.domain) === 'icon' && src && !missing.has(src) ? src : null}
+                        onMissing={markMissing}
+                      />
+                      <TileLabel>{family.domain}</TileLabel>
+                    </TipTrigger>
+                  </NavigationMenuItem>
+                )
+              })}
+            </NavigationMenuList>
+          </NavigationMenu>
+        ) : null}
+      </div>
 
       <Menu controller={tileMenu} onOpenChange={(open) => open && tips.close()}>
         <MenuContent<Family> side="right" align="start" className="tile-menu">
@@ -295,92 +374,73 @@ function Rail({
         </MenuContent>
       </Menu>
 
-      <Menu>
-        <TipTrigger
-          tips={tips}
-          tip={{ title: 'Add', detail: 'A site, a domain, a redirect or e-mail' }}
-          render={<MenuTrigger className="tile" data-kind="add" aria-label="Add a site, domain, redirect or e-mail" />}
-        >
-          <span className="tile-face">
-            <PlusIcon />
-          </span>
-          <TileLabel>Add</TileLabel>
-        </TipTrigger>
-        <MenuContent side="right" align="start">
-          <MenuItem render={<a href={hrefWithQuery(['sites'], { new: '1' })} />}>New site</MenuItem>
-          <MenuItem render={<a href={hrefWithQuery(['dns'], { add: '1' })} />}>Add a domain at your DNS provider</MenuItem>
-          <MenuItem render={<a href={hrefWithQuery(['redirects'], { new: '1' })} />}>New redirect</MenuItem>
-          <MenuItem render={<a href={hrefWithQuery(['mail'], { new: '1' })} />}>Turn on e-mail for a domain</MenuItem>
-        </MenuContent>
-      </Menu>
+      <div className="rail-bottom">
+        <NavigationMenu aria-label="Panel" orientation="vertical" className="rail-nav">
+          <NavigationMenuList>
+            {railEntries.map((entry) => (
+              <NavigationMenuItem key={entry.key}>
+                <TipTrigger
+                  tips={tips}
+                  tip={{ title: entry.label }}
+                  render={
+                    <NavigationMenuLink
+                      href={entry.href}
+                      current={entry.current}
+                      aria-label={entry.label}
+                      className="tile"
+                      data-kind="entry"
+                    />
+                  }
+                >
+                  <span className="tile-face">
+                    <entry.icon />
+                  </span>
+                  <TileLabel>{entry.label}</TileLabel>
+                </TipTrigger>
+              </NavigationMenuItem>
+            ))}
+          </NavigationMenuList>
+        </NavigationMenu>
 
-      <div className="rail-grow" />
+        <Menu>
+          <TipTrigger
+            tips={tips}
+            tip={{ title: user.name, detail: 'Account' }}
+            render={<MenuTrigger className="tile" data-kind="account" aria-label={`Account of ${user.name}`} />}
+          >
+            <span className="tile-face">
+              <span aria-hidden="true">{initialsOf(user.name)}</span>
+            </span>
+            <TileLabel>{user.name}</TileLabel>
+          </TipTrigger>
+          <MenuContent side="right" align="end">
+            <MenuItem onSelect={onChangePassword}>Change password</MenuItem>
+            <MenuItem onSelect={onChangeEmail}>E-mail address</MenuItem>
+            <MenuItem onSelect={signOut}>Sign out</MenuItem>
+            <MenuItem onSelect={signOutEverywhere}>Sign out everywhere</MenuItem>
+          </MenuContent>
+        </Menu>
 
-      <NavigationMenu aria-label="Panel" orientation="vertical" className="rail-nav">
-        <NavigationMenuList>
-          {railEntries.map((entry) => (
-            <NavigationMenuItem key={entry.key}>
-              <TipTrigger
-                tips={tips}
-                tip={{ title: entry.label }}
-                render={
-                  <NavigationMenuLink
-                    href={entry.href}
-                    current={entry.current}
-                    aria-label={entry.label}
-                    className="tile"
-                    data-kind="entry"
-                  />
-                }
-              >
-                <span className="tile-face">
-                  <entry.icon />
-                </span>
-                <TileLabel>{entry.label}</TileLabel>
-              </TipTrigger>
-            </NavigationMenuItem>
-          ))}
-        </NavigationMenuList>
-      </NavigationMenu>
-
-      <Menu>
-        <TipTrigger
-          tips={tips}
-          tip={{ title: user.name, detail: 'Account' }}
-          render={<MenuTrigger className="tile" data-kind="account" aria-label={`Account of ${user.name}`} />}
-        >
-          <span className="tile-face">
-            <span aria-hidden="true">{initialsOf(user.name)}</span>
-          </span>
-          <TileLabel>{user.name}</TileLabel>
-        </TipTrigger>
-        <MenuContent side="right" align="end">
-          <MenuItem onSelect={onChangePassword}>Change password</MenuItem>
-          <MenuItem onSelect={onChangeEmail}>E-mail address</MenuItem>
-          <MenuItem onSelect={signOut}>Sign out</MenuItem>
-          <MenuItem onSelect={signOutEverywhere}>Sign out everywhere</MenuItem>
-        </MenuContent>
-      </Menu>
-
-      {inDrawer ? null : (
-        <TipTrigger
-          tips={tips}
-          tip={{ title: expanded ? 'Hide names' : 'Show names', shortcut: hint.text }}
-          render={
-            <Button
-              className="tile"
-              data-kind="toggle"
-              aria-expanded={expanded}
-              aria-controls={railId}
-              aria-keyshortcuts={hint.ariaKeyshortcuts}
-              onClick={toggle}
-            />
-          }
-        >
-          <span className="tile-face">{expanded ? <PanelCollapseIcon /> : <PanelExpandIcon />}</span>
-          <span className="tile-label">{expanded ? 'Hide names' : 'Show names'}</span>
-        </TipTrigger>
-      )}
+        {inDrawer ? null : (
+          <TipTrigger
+            tips={tips}
+            tip={{ title: expanded ? 'Hide names' : 'Show names', shortcut: hint.text }}
+            render={
+              <Button
+                className="tile"
+                data-kind="toggle"
+                aria-expanded={expanded}
+                aria-controls={railId}
+                aria-keyshortcuts={hint.ariaKeyshortcuts}
+                onClick={toggle}
+              />
+            }
+          >
+            <span className="tile-face">{expanded ? <PanelCollapseIcon /> : <PanelExpandIcon />}</span>
+            <span className="tile-label">{expanded ? 'Hide names' : 'Show names'}</span>
+          </TipTrigger>
+        )}
+      </div>
 
       <Tooltip controller={tips}>
         <TooltipContent<Tip> side="right" sideOffset={10} className="rail-tip">

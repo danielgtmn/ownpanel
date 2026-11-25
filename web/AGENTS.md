@@ -39,8 +39,10 @@ search `node_modules/@ui-sdk/react/docs/core.md` by heading, and read
 ## Navigation
 
 The shell (`src/app/Shell.tsx`, `src/app/sidebar/`) draws a sidebar organised
-by domain: a narrow rail with an "All" tile, one tile per domain family and
-an add menu, and a column with the rows of the selected tile. Modules hang
+by domain: a narrow rail with an "All" tile and an add menu at the top, one
+tile per domain family in the middle (only this part scrolls) and the module
+entries and account at the bottom, and a column with the rows of the
+selected tile. Modules hang
 into it only through optional fields on `PanelModule`:
 
 - `railEntry: { icon, label? }` adds an icon tile to the rail's bottom group
