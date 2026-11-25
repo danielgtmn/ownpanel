@@ -178,6 +178,9 @@ const (
 	// EventAppPasswordUsed: an app password signed in (at most once per
 	// AppPasswordUseEvery per app password). Revision is 0: not a change.
 	EventAppPasswordUsed = "mailbox.app-password-used"
+	// EventGrantsChanged: a personal mailbox changed who may use it
+	// (self-delegation, G3).
+	EventGrantsChanged = "mailbox.grants-changed"
 )
 
 // AppPasswordUseEvery is how often the use of one app password is reported.
@@ -200,6 +203,8 @@ type AccountChange struct {
 	AppPasswordID string `json:"app_password_id,omitempty"`
 	// Network: EventAppPasswordUsed (see Network).
 	Network string `json:"network,omitempty"`
+	// Grants: EventGrantsChanged, the complete new list (empty: nobody).
+	Grants *[]Grant `json:"grants,omitempty"`
 }
 
 // ErrLooksLikeAppPassword: a new main password has the form of an app

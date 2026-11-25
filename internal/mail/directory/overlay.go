@@ -32,6 +32,9 @@ type Overlay struct {
 	AppPasswordsOnly *Stamped[bool]       `json:"app_passwords_only,omitempty"`
 	Added            []StampedAppPassword `json:"added,omitempty"`
 	Revoked          []Stamped[string]    `json:"revoked,omitempty"`
+	// Grants is the self-delegation of a personal mailbox (G3): the whole
+	// list as the person set it last.
+	Grants *Stamped[[]config.Grant] `json:"grants,omitempty"`
 }
 
 // Stamped is a value with the revision and time (Unix seconds) of the
@@ -50,7 +53,8 @@ type StampedAppPassword struct {
 
 // Empty tells whether the overlay holds no change.
 func (o *Overlay) Empty() bool {
-	return o.PasswordHash == nil && o.DisplayName == nil && o.AppPasswordsOnly == nil && len(o.Added) == 0 && len(o.Revoked) == 0
+	return o.PasswordHash == nil && o.DisplayName == nil && o.AppPasswordsOnly == nil && len(o.Added) == 0 && len(o.Revoked) == 0 &&
+		o.Grants == nil
 }
 
 // NextRevision is the revision of the next change of a mailbox whose pushed
@@ -71,6 +75,9 @@ func (o *Overlay) Apply(ch config.AccountChange, at time.Time) {
 	}
 	if ch.AppPasswordsOnly != nil {
 		o.AppPasswordsOnly = &Stamped[bool]{*ch.AppPasswordsOnly, r, sec}
+	}
+	if ch.Grants != nil {
+		o.Grants = &Stamped[[]config.Grant]{slices.Clone(*ch.Grants), r, sec}
 	}
 	if ch.AppPassword != nil {
 		o.Added = append(o.Added, StampedAppPassword{*ch.AppPassword, r})
@@ -93,6 +100,9 @@ func (o *Overlay) Prune(pushed int64) {
 	}
 	if o.AppPasswordsOnly != nil && o.AppPasswordsOnly.Revision <= pushed {
 		o.AppPasswordsOnly = nil
+	}
+	if o.Grants != nil && o.Grants.Revision <= pushed {
+		o.Grants = nil
 	}
 	o.Added = slices.DeleteFunc(o.Added, func(a StampedAppPassword) bool { return a.Revision <= pushed })
 	o.Revoked = slices.DeleteFunc(o.Revoked, func(r Stamped[string]) bool { return r.Revision <= pushed })
@@ -117,6 +127,15 @@ func (o *Overlay) PruneFor(m config.Mailbox) {
 
 // MergeInto applies the overlay to m (the mailbox as pushed).
 func (o *Overlay) MergeInto(m *config.Mailbox) {
+	if m.Shared() {
+		// A shared mailbox has no password: what it changed while it was
+		// personal no longer applies (its sessions ended with the
+		// conversion).
+		if o.DisplayName != nil {
+			m.DisplayName = o.DisplayName.Value
+		}
+		return
+	}
 	if o.PasswordHash != nil {
 		m.PasswordHash = o.PasswordHash.Value
 	}
@@ -125,6 +144,11 @@ func (o *Overlay) MergeInto(m *config.Mailbox) {
 	}
 	if o.AppPasswordsOnly != nil {
 		m.AppPasswordsOnly = o.AppPasswordsOnly.Value
+	}
+	// Only a personal mailbox delegates itself; the grants of a shared one
+	// are the panel's.
+	if o.Grants != nil && !m.Shared() {
+		m.Grants = slices.Clone(o.Grants.Value)
 	}
 	if len(o.Added) == 0 && len(o.Revoked) == 0 {
 		return

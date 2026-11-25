@@ -314,6 +314,8 @@ type MailboxChange struct {
 	AppPasswordsOnly  *bool
 	AddAppPassword    *AppPassword // MailboxID is filled in
 	RevokeAppPassword string
+	// Grants replaces who a personal mailbox is shared with.
+	Grants *[]GrantByStorage
 }
 
 // MailboxChangeResult tells what ApplyMailboxChange did.
@@ -387,6 +389,15 @@ func (s *Store) ApplyMailboxChange(ctx context.Context, storageID string, ch Mai
 			if maxAppPasswords > 0 && n >= maxAppPasswords {
 				r.TooManyAppPasswords = true
 			} else if err := insertAppPassword(tx, a, s.now(), 0); err != nil && !errors.Is(err, ErrConflict) {
+				return err
+			}
+		}
+		if ch.Grants != nil {
+			// Only a personal mailbox delegates itself: the grants of a
+			// shared one are the panel's.
+			if m.Kind == "shared" {
+				r.Overridden = true
+			} else if err := replaceGrants(tx, m.ID, *ch.Grants, s.now()); err != nil {
 				return err
 			}
 		}

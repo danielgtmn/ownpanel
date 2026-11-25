@@ -108,6 +108,9 @@ type Server struct {
 	state atomic.Pointer[runtime]
 	tls   *tls.Config
 
+	ignoredMu sync.Mutex
+	ignored   string // grants last logged as ignored
+
 	loadMu sync.Mutex // serializes loads and account changes
 	// overlays are the account changes mailboxes made here that the
 	// pushed configuration does not include yet, by storage id (see
@@ -303,8 +306,26 @@ func (s *Server) apply(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	s.state.Store(&runtime{pushed: cfg, dir: directory.New(directory.Merge(cfg, s.overlays)), hash: cfg.Hash(), certs: certs})
+	dir := directory.New(directory.Merge(cfg, s.overlays))
+	s.state.Store(&runtime{pushed: cfg, dir: dir, hash: cfg.Hash(), certs: certs})
+	s.logIgnoredGrants(dir.Ignored())
 	return nil
+}
+
+// logIgnoredGrants logs the grants a configuration has that do not count
+// (another organisation, a deleted or shared mailbox), once for as long as
+// they stay the same.
+func (s *Server) logIgnoredGrants(notes []string) {
+	key := strings.Join(notes, "\n")
+	s.ignoredMu.Lock()
+	defer s.ignoredMu.Unlock()
+	if key == s.ignored {
+		return
+	}
+	s.ignored = key
+	for _, n := range notes {
+		s.log.Warn("mail: grant ignored", "what", n)
+	}
 }
 
 // Load validates, binds, persists and applies a configuration.

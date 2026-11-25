@@ -67,6 +67,10 @@ type Mailbox struct {
 	AdminPasswordAt         time.Time
 	AdminDisplayNameAt      time.Time
 	AdminAppPasswordsOnlyAt time.Time
+	// Kind is "personal" or "shared" (config.Kind*). KeepSentCopy: shared
+	// mailboxes keep a copy of mail sent for them.
+	Kind         string
+	KeepSentCopy bool
 }
 
 // MailAlias delivers mail for LocalPart@Domain to Targets. LocalPart "*" is
@@ -79,6 +83,10 @@ type MailAlias struct {
 	CreatedAt time.Time
 	OwnerID   int64
 	Owner     string
+	// SenderPolicy is "anyone", "organisation" or "members";
+	// HideFromDirectory leaves it out of the address book.
+	SenderPolicy      string
+	HideFromDirectory bool
 }
 
 // ---- domains ----
@@ -254,7 +262,7 @@ func (s *Store) DKIMKeys(ctx context.Context, domain string) ([]DKIMKey, error) 
 
 const mailboxCols = `m.id, m.storage_id, m.domain, m.local_part, m.password_hash, m.quota_bytes, m.send_per_hour, m.send_per_day,
 	m.created_at, d.owner_id, coalesce(u.name, ''), m.display_name, m.app_passwords_only, m.revision,
-	m.admin_password_at, m.admin_display_name_at, m.admin_app_passwords_only_at`
+	m.admin_password_at, m.admin_display_name_at, m.admin_app_passwords_only_at, m.kind, m.keep_sent_copy`
 
 const mailboxFrom = ` FROM mailboxes m JOIN mail_domains d ON d.domain = m.domain LEFT JOIN users u ON u.id = d.owner_id`
 
@@ -263,7 +271,7 @@ func scanMailbox(row interface{ Scan(...any) error }) (Mailbox, error) {
 	var created, adminPassword, adminDisplayName, adminAppPasswordsOnly int64
 	err := row.Scan(&m.ID, &m.StorageID, &m.Domain, &m.LocalPart, &m.PasswordHash, &m.QuotaBytes, &m.SendPerHour, &m.SendPerDay,
 		&created, &m.OwnerID, &m.Owner, &m.DisplayName, &m.AppPasswordsOnly, &m.Revision,
-		&adminPassword, &adminDisplayName, &adminAppPasswordsOnly)
+		&adminPassword, &adminDisplayName, &adminAppPasswordsOnly, &m.Kind, &m.KeepSentCopy)
 	if err != nil {
 		if noRows(err) {
 			return Mailbox{}, notFoundf("mailbox not found")
@@ -337,8 +345,13 @@ func (s *Store) CreateMailbox(ctx context.Context, m Mailbox, limit int) (Mailbo
 				return conflictf("at most %d mailboxes are possible per person", limit)
 			}
 		}
-		res, err := tx.Exec(`INSERT INTO mailboxes (storage_id, domain, local_part, password_hash, quota_bytes, send_per_hour, send_per_day, created_at, display_name)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, m.StorageID, m.Domain, m.LocalPart, m.PasswordHash, m.QuotaBytes, m.SendPerHour, m.SendPerDay, s.now(), m.DisplayName)
+		kind := m.Kind
+		if kind == "" {
+			kind = "personal"
+		}
+		res, err := tx.Exec(`INSERT INTO mailboxes (storage_id, domain, local_part, password_hash, quota_bytes, send_per_hour, send_per_day, created_at, display_name, kind, keep_sent_copy)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, m.StorageID, m.Domain, m.LocalPart, m.PasswordHash, m.QuotaBytes, m.SendPerHour, m.SendPerDay, s.now(), m.DisplayName,
+			kind, m.KeepSentCopy)
 		if isUnique(err) {
 			var n int
 			if e := tx.QueryRow(`SELECT count(*) FROM mailboxes WHERE domain = ? AND local_part = ?`, m.Domain, m.LocalPart).Scan(&n); e == nil && n > 0 {
@@ -451,7 +464,7 @@ func (s *Store) DonePendingMailDelete(ctx context.Context, storageID string) err
 
 // ---- aliases ----
 
-const aliasCols = `a.id, a.domain, a.local_part, a.targets, a.created_at, d.owner_id, coalesce(u.name, '')`
+const aliasCols = `a.id, a.domain, a.local_part, a.targets, a.created_at, d.owner_id, coalesce(u.name, ''), a.sender_policy, a.hide_from_directory`
 
 const aliasFrom = ` FROM mail_aliases a JOIN mail_domains d ON d.domain = a.domain LEFT JOIN users u ON u.id = d.owner_id`
 
@@ -459,7 +472,7 @@ func scanAlias(row interface{ Scan(...any) error }) (MailAlias, error) {
 	var a MailAlias
 	var targets string
 	var created int64
-	if err := row.Scan(&a.ID, &a.Domain, &a.LocalPart, &targets, &created, &a.OwnerID, &a.Owner); err != nil {
+	if err := row.Scan(&a.ID, &a.Domain, &a.LocalPart, &targets, &created, &a.OwnerID, &a.Owner, &a.SenderPolicy, &a.HideFromDirectory); err != nil {
 		if noRows(err) {
 			return MailAlias{}, notFoundf("alias not found")
 		}
@@ -548,8 +561,12 @@ func (s *Store) CreateMailAlias(ctx context.Context, a MailAlias) (MailAlias, er
 		if err := aliasFree(tx, a.Domain, a.LocalPart, 0); err != nil {
 			return err
 		}
-		res, err := tx.Exec(`INSERT INTO mail_aliases (domain, local_part, targets, created_at) VALUES (?, ?, ?, ?)`,
-			a.Domain, a.LocalPart, string(targets), s.now())
+		policy := a.SenderPolicy
+		if policy == "" {
+			policy = "anyone"
+		}
+		res, err := tx.Exec(`INSERT INTO mail_aliases (domain, local_part, targets, created_at, sender_policy, hide_from_directory) VALUES (?, ?, ?, ?, ?, ?)`,
+			a.Domain, a.LocalPart, string(targets), s.now(), policy, a.HideFromDirectory)
 		if err != nil {
 			return err
 		}
@@ -563,8 +580,9 @@ func (s *Store) CreateMailAlias(ctx context.Context, a MailAlias) (MailAlias, er
 	return out, err
 }
 
-// UpdateMailAlias replaces the local part and targets of an alias (its
-// domain stays), with the checks of CreateMailAlias.
+// UpdateMailAlias replaces the local part, targets, sender policy and
+// directory switch of an alias (its domain stays), with the checks of
+// CreateMailAlias.
 func (s *Store) UpdateMailAlias(ctx context.Context, a MailAlias) (MailAlias, error) {
 	targets, err := json.Marshal(a.Targets)
 	if err != nil {
@@ -582,7 +600,12 @@ func (s *Store) UpdateMailAlias(ctx context.Context, a MailAlias) (MailAlias, er
 		if err := aliasFree(tx, cur.Domain, a.LocalPart, a.ID); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`UPDATE mail_aliases SET local_part = ?, targets = ? WHERE id = ?`, a.LocalPart, string(targets), a.ID); err != nil {
+		policy := a.SenderPolicy
+		if policy == "" {
+			policy = "anyone"
+		}
+		if _, err := tx.Exec(`UPDATE mail_aliases SET local_part = ?, targets = ?, sender_policy = ?, hide_from_directory = ? WHERE id = ?`,
+			a.LocalPart, string(targets), policy, a.HideFromDirectory, a.ID); err != nil {
 			return err
 		}
 		out, err = scanAlias(tx.QueryRow(`SELECT `+aliasCols+aliasFrom+` WHERE a.id = ?`, a.ID))

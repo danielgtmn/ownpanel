@@ -31,6 +31,10 @@ type Change struct {
 	// that made the change (nil if none), so that a session can tell its
 	// own changes from those of others.
 	Origin any
+	// Reader is set for FlagsChanged when only the read state of this
+	// reader (a storage id) changed in a shared mailbox: other readers'
+	// views do not change.
+	Reader string
 }
 
 type originKey struct{}

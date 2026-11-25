@@ -28,6 +28,7 @@ import (
 // they are plain and name no internals.
 var (
 	errUnknownRcpt    = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 1, 1}, Message: "No such recipient here"}
+	errGroupDenied    = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 7, 1}, Message: "This address accepts mail only from certain senders"}
 	errForwardOnly    = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 1, 1}, Message: "This address forwards elsewhere; forwarding is not available"}
 	errNoPostmstr     = &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Postmaster mailbox not set up yet, try again later"}
 	errMailboxFull    = &smtp.SMTPError{Code: 452, EnhancedCode: smtp.EnhancedCode{4, 2, 2}, Message: "Mailbox full, try again later"}
@@ -217,6 +218,13 @@ func (ss *session) Rcpt(to string, _ *smtp.RcptOptions) error {
 		if ss.s.opts.Queue == nil {
 			return errForwardOnly
 		}
+	}
+	// A distribution group restricted to its organisation or members (G3):
+	// the envelope sender must be one of them. It is one of our addresses
+	// then, so the message is only accepted with an SPF or DKIM pass
+	// aligned with it (unauthenticatedOwn at DATA).
+	if g, ok := ss.dir.Group(addr); ok && !ss.dir.GroupAllows(g, directory.Normalize(ss.from)) {
+		return errGroupDenied
 	}
 	if err := ss.greylist(addr); err != nil {
 		return err

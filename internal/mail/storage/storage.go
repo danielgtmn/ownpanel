@@ -305,6 +305,21 @@ CREATE TABLE account_sessions (
 );
 CREATE INDEX account_sessions_mailbox ON account_sessions(storage_id, created);
 `,
+	// 8: shared mailboxes (G3). shared_seen is the read state of each
+	// reader (a storage id) in a shared mailbox, by message row: it moves
+	// with the message and goes with it. msgid is the Message-ID of copies
+	// of sent mail kept in a shared mailbox, so one saved by the mail
+	// program and one kept by the server are stored once.
+	`
+CREATE TABLE shared_seen (
+	message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+	reader     TEXT    NOT NULL,
+	PRIMARY KEY (message_id, reader)
+) WITHOUT ROWID;
+CREATE INDEX shared_seen_reader ON shared_seen(reader);
+ALTER TABLE messages ADD COLUMN msgid TEXT NOT NULL DEFAULT '';
+CREATE INDEX messages_msgid ON messages(folder_id, msgid) WHERE msgid != '';
+`,
 }
 
 func migrate(db *sql.DB) error {

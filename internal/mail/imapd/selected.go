@@ -6,13 +6,18 @@ import (
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
 
+	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/mail/storage"
 )
 
 // selected is a session's view of its selected folder.
 type selected struct {
-	name     string
+	// t is the folder: the session's own or one of another mailbox.
+	t target
+	// readOnly: nothing may change (EXAMINE, or no write right); examine:
+	// the client asked for it, so not even its own read state changes.
 	readOnly bool
+	examine  bool
 	// uids is the folder as the client knows it: sequence number i+1 is
 	// uids[i]. Only the session's goroutine changes it, and outside poll
 	// the client has been told about every entry (EXISTS).
@@ -39,17 +44,19 @@ func (s *session) Select(name string, options *imap.SelectOptions) (*imap.Select
 	if err := s.check(); err != nil {
 		return nil, err
 	}
-	name, err := storage.NormalizeFolderName(name)
+	t, err := s.resolve(s.srv.opts.Directory(), name)
 	if err != nil {
-		return nil, s.fail(err)
+		return nil, err
 	}
 	// Watch first, then read: a change committed in between is both in
 	// the queue and in the snapshot, and applying the queue is idempotent.
-	sel := &selected{name: name, readOnly: options.ReadOnly}
+	// (The watches of every readable mailbox are always there.)
+	readOnly := options.ReadOnly || !t.rights.Has(config.Write)
+	sel := &selected{t: t, readOnly: readOnly, examine: options.ReadOnly}
 	s.mu.Lock()
 	s.sel = sel
 	s.mu.Unlock()
-	f, msgs, err := s.srv.opts.Store.Select(s.ctx, s.id(), name)
+	f, msgs, err := s.srv.opts.Store.SelectAs(s.ctx, t.sid, t.folder, t.reader)
 	if err != nil {
 		s.mu.Lock()
 		s.sel = nil
@@ -65,10 +72,17 @@ func (s *session) Select(name string, options *imap.SelectOptions) (*imap.Select
 		}
 	}
 	perm := append(slices.Clone(permanentFlags), imap.FlagWildcard)
-	if options.ReadOnly {
+	switch {
+	case options.ReadOnly:
+		perm = nil
+	case readOnly && t.reader != "":
+		// Read only, but the own read state is kept.
+		perm = []imap.Flag{imap.FlagSeen}
+	case readOnly:
 		perm = nil
 	}
 	return &imap.SelectData{
+		ReadOnly:          readOnly && !options.ReadOnly,
 		Flags:             allFlags,
 		PermanentFlags:    perm,
 		NumMessages:       uint32(len(msgs)),
@@ -254,13 +268,13 @@ func (s *session) load(sel *selected, entries []entry) (map[uint32]storage.Messa
 	var err error
 	if len(entries) > 32 {
 		// One query for the whole folder beats one per message.
-		_, msgs, err = s.srv.opts.Store.Select(s.ctx, s.id(), sel.name)
+		_, msgs, err = s.srv.opts.Store.SelectAs(s.ctx, sel.t.sid, sel.t.folder, sel.t.reader)
 	} else {
 		uids := make([]uint32, len(entries))
 		for i, e := range entries {
 			uids[i] = e.uid
 		}
-		msgs, err = s.srv.opts.Store.Messages(s.ctx, s.id(), sel.name, uids)
+		msgs, err = s.srv.opts.Store.MessagesAs(s.ctx, sel.t.sid, sel.t.folder, uids, sel.t.reader)
 	}
 	if err != nil {
 		return nil, err
@@ -284,12 +298,12 @@ func (s *session) Store(w *imapserver.FetchWriter, numSet imap.NumSet, flags *im
 		return err
 	}
 	sel := s.sel
-	if sel.readOnly {
-		return errReadOnly
-	}
 	fl, err := storeFlags(flags.Flags)
 	if err != nil {
 		return s.fail(err)
+	}
+	if err := sel.mayStore(flags.Op, fl); err != nil {
+		return err
 	}
 	var op storage.FlagOp
 	switch flags.Op {
@@ -304,7 +318,7 @@ func (s *session) Store(w *imapserver.FetchWriter, numSet imap.NumSet, flags *im
 	if len(entries) == 0 {
 		return nil
 	}
-	msgs, err := s.srv.opts.Store.SetFlags(s.ctx, s.id(), sel.name, uidsOf(entries), op, fl)
+	msgs, err := s.srv.opts.Store.SetFlagsAs(s.ctx, sel.t.sid, sel.t.folder, uidsOf(entries), op, fl, sel.t.reader)
 	if err != nil {
 		return s.fail(err)
 	}
@@ -347,6 +361,14 @@ func (s *session) Copy(numSet imap.NumSet, dest string) (*imap.CopyData, error) 
 		return nil, err
 	}
 	sel := s.sel
+	dst, err := s.resolve(s.srv.opts.Directory(), dest)
+	if err != nil {
+		return nil, errTryCreate(err)
+	}
+	// Copying out needs only read (the selection); copying in needs write.
+	if err := dst.need(config.Write); err != nil {
+		return nil, err
+	}
 	entries := sel.resolve(numSet)
 	if len(entries) == 0 {
 		return nil, nil
@@ -356,11 +378,57 @@ func (s *session) Copy(numSet imap.NumSet, dest string) (*imap.CopyData, error) 
 	if err := s.checkDisk(); err != nil {
 		return nil, err
 	}
-	res, err := s.srv.opts.Store.Copy(s.ctx, s.id(), sel.name, uidsOf(entries), dest)
+	res, err := s.copyTo(sel, entries, dst, false)
 	if err != nil {
 		return nil, s.fail(errTryCreate(err))
 	}
 	return copyData(res), nil
+}
+
+// copyTo copies or moves messages of the selection into dst, within the
+// mailbox or into another one (quota of the destination).
+func (s *session) copyTo(sel *selected, entries []entry, dst target, move bool) (storage.CopyResult, error) {
+	st := s.srv.opts.Store
+	if dst.sid == sel.t.sid {
+		if move {
+			return st.Move(s.ctx, sel.t.sid, sel.t.folder, uidsOf(entries), dst.folder)
+		}
+		return st.Copy(s.ctx, sel.t.sid, sel.t.folder, uidsOf(entries), dst.folder)
+	}
+	return st.CopyAcross(s.ctx, sel.t.sid, sel.t.folder, uidsOf(entries), dst.sid, dst.folder,
+		storage.CrossOptions{Move: move, SrcReader: sel.t.reader, DstReader: dst.reader})
+}
+
+// mayStore tells whether STORE with op and flags is allowed: not after
+// EXAMINE; with read only, nothing but the reader's own \Seen in a shared
+// mailbox.
+func (sel *selected) mayStore(op imap.StoreFlagsOp, flags []string) error {
+	if sel.examine {
+		return errReadOnly
+	}
+	if !sel.readOnly {
+		return nil
+	}
+	if sel.t.reader != "" && op != imap.StoreFlagsSet && len(flags) == 1 && flags[0] == storage.FlagSeen {
+		return nil
+	}
+	if sel.t.shared {
+		return errNoPerm
+	}
+	return errReadOnly
+}
+
+// mayChange refuses changes of a read-only selection.
+func (sel *selected) mayChange() error {
+	switch {
+	case sel.examine:
+		return errReadOnly
+	case sel.readOnly && sel.t.shared:
+		return errNoPerm
+	case sel.readOnly:
+		return errReadOnly
+	}
+	return nil
 }
 
 func (s *session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string) error {
@@ -368,8 +436,15 @@ func (s *session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string
 		return err
 	}
 	sel := s.sel
-	if sel.readOnly {
-		return errReadOnly
+	if err := sel.mayChange(); err != nil {
+		return err
+	}
+	dst, err := s.resolve(s.srv.opts.Directory(), dest)
+	if err != nil {
+		return errTryCreate(err)
+	}
+	if err := dst.need(config.Write); err != nil {
+		return err
 	}
 	entries := sel.resolve(numSet)
 	if len(entries) == 0 {
@@ -379,7 +454,7 @@ func (s *session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string
 	if err := s.checkDisk(); err != nil {
 		return err
 	}
-	res, err := s.srv.opts.Store.Move(s.ctx, s.id(), sel.name, uidsOf(entries), dest)
+	res, err := s.copyTo(sel, entries, dst, true)
 	if err != nil {
 		return s.fail(errTryCreate(err))
 	}
@@ -409,8 +484,8 @@ func (s *session) Expunge(_ *imapserver.ExpungeWriter, uids *imap.UIDSet) error 
 		return err
 	}
 	sel := s.sel
-	if sel.readOnly {
-		return errReadOnly
+	if err := sel.mayChange(); err != nil {
+		return err
 	}
 	var only []uint32
 	if uids != nil {
@@ -419,6 +494,6 @@ func (s *session) Expunge(_ *imapserver.ExpungeWriter, uids *imap.UIDSet) error 
 			return nil
 		}
 	}
-	_, err := s.srv.opts.Store.Expunge(s.ctx, s.id(), sel.name, only)
+	_, err := s.srv.opts.Store.Expunge(s.ctx, sel.t.sid, sel.t.folder, only)
 	return s.fail(err)
 }

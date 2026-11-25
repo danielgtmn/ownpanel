@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/danielgtmn/ownpanel/internal/panel"
 )
@@ -30,6 +31,10 @@ func (s *Server) mailRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/mail/mailboxes/{id}/password", s.setMailboxPassword)
 	mux.HandleFunc("POST /api/mail/mailboxes/{id}/unblock", s.unblockMailbox)
 	mux.HandleFunc("GET /api/mail/mailboxes/{id}/apple-profile", s.appleMailProfile)
+	mux.HandleFunc("PUT /api/mail/mailboxes/{id}/kind", s.setMailboxKind)
+	mux.HandleFunc("PUT /api/mail/mailboxes/{id}/keep-sent-copy", s.setMailboxKeepSentCopy)
+	mux.HandleFunc("PUT /api/mail/mailboxes/{id}/grants", s.setMailboxGrant)
+	mux.HandleFunc("DELETE /api/mail/mailboxes/{id}/grants/{grantee}", s.removeMailboxGrant)
 	mux.HandleFunc("GET /api/mail/aliases", s.listMailAliases)
 	mux.HandleFunc("GET /api/mail/aliases/{id}", s.getMailAlias)
 	mux.HandleFunc("PUT /api/mail/aliases/{id}", s.updateMailAlias)
@@ -136,21 +141,88 @@ const mailboxExample = `{"local_part": "info", "password": "a long password", "d
 
 func (s *Server) createMailbox(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		LocalPart   string `json:"local_part"`
-		Password    string `json:"password"`
-		DisplayName string `json:"display_name"`
-		QuotaBytes  *int64 `json:"quota_bytes"`
-		SendPerHour *int   `json:"send_per_hour"`
-		SendPerDay  *int   `json:"send_per_day"`
+		LocalPart    string `json:"local_part"`
+		Kind         string `json:"kind"`
+		KeepSentCopy bool   `json:"keep_sent_copy"`
+		Password     string `json:"password"`
+		DisplayName  string `json:"display_name"`
+		QuotaBytes   *int64 `json:"quota_bytes"`
+		SendPerHour  *int   `json:"send_per_hour"`
+		SendPerDay   *int   `json:"send_per_day"`
 	}
 	if !decodeJSON(w, r, &body, mailboxExample) {
 		return
 	}
 	v, err := s.Panel.CreateMailbox(r.Context(), actorOf(r), r.PathValue("domain"), panel.MailboxInput{
-		LocalPart: body.LocalPart, Password: body.Password, DisplayName: body.DisplayName,
+		LocalPart: body.LocalPart, Kind: body.Kind, KeepSentCopy: body.KeepSentCopy, Password: body.Password, DisplayName: body.DisplayName,
 		QuotaBytes: body.QuotaBytes, SendPerHour: body.SendPerHour, SendPerDay: body.SendPerDay,
 	})
 	answer(w, http.StatusCreated, v, err)
+}
+
+func (s *Server) setMailboxKind(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r, "mailbox")
+	if !ok {
+		return
+	}
+	var body struct {
+		Kind     string `json:"kind"`
+		Password string `json:"password"`
+	}
+	if !decodeJSON(w, r, &body, `{"kind": "shared"}`) {
+		return
+	}
+	v, err := s.Panel.SetMailboxKind(r.Context(), actorOf(r), id, body.Kind, body.Password)
+	answer(w, http.StatusOK, v, err)
+}
+
+func (s *Server) setMailboxKeepSentCopy(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r, "mailbox")
+	if !ok {
+		return
+	}
+	var body struct {
+		KeepSentCopy *bool `json:"keep_sent_copy"`
+	}
+	if !decodeJSON(w, r, &body, `{"keep_sent_copy": true}`) {
+		return
+	}
+	if body.KeepSentCopy == nil {
+		writeError(w, http.StatusBadRequest, `say whether copies are kept: {"keep_sent_copy": true}`)
+		return
+	}
+	v, err := s.Panel.SetMailboxKeepSentCopy(r.Context(), actorOf(r), id, *body.KeepSentCopy)
+	answer(w, http.StatusOK, v, err)
+}
+
+func (s *Server) setMailboxGrant(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r, "mailbox")
+	if !ok {
+		return
+	}
+	var body struct {
+		Address string   `json:"address"`
+		Rights  []string `json:"rights"`
+	}
+	if !decodeJSON(w, r, &body, `{"address": "anna@example.com", "rights": ["read", "write", "send-as"]}`) {
+		return
+	}
+	v, err := s.Panel.SetMailboxGrant(r.Context(), actorOf(r), id, body.Address, body.Rights)
+	answer(w, http.StatusOK, v, err)
+}
+
+func (s *Server) removeMailboxGrant(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r, "mailbox")
+	if !ok {
+		return
+	}
+	grantee, err := strconv.ParseInt(r.PathValue("grantee"), 10, 64)
+	if err != nil || grantee <= 0 {
+		writeError(w, http.StatusNotFound, "access not found")
+		return
+	}
+	v, err := s.Panel.RemoveMailboxGrant(r.Context(), actorOf(r), id, grantee)
+	answer(w, http.StatusOK, v, err)
 }
 
 func (s *Server) getMailbox(w http.ResponseWriter, r *http.Request) {
@@ -247,11 +319,29 @@ func (s *Server) listMailAliases(w http.ResponseWriter, r *http.Request) {
 	answer(w, http.StatusOK, v, err)
 }
 
-const aliasExample = `{"local_part": "sales", "targets": ["info@example.com", "someone@example.org"]}`
+const aliasExample = `{"local_part": "sales", "targets": ["info@example.com", "someone@example.org"], "sender_policy": "anyone", "hide_from_directory": false}`
 
 type aliasBody struct {
 	LocalPart string   `json:"local_part"`
 	Targets   []string `json:"targets"`
+	// A missing field keeps the current value (anyone, shown on create).
+	SenderPolicy      *string `json:"sender_policy"`
+	HideFromDirectory *bool   `json:"hide_from_directory"`
+}
+
+// group returns the group settings of the body over cur, or nil when the
+// body has none.
+func (b aliasBody) group(cur panel.AliasGroup) []panel.AliasGroup {
+	if b.SenderPolicy == nil && b.HideFromDirectory == nil {
+		return nil
+	}
+	if b.SenderPolicy != nil {
+		cur.SenderPolicy = *b.SenderPolicy
+	}
+	if b.HideFromDirectory != nil {
+		cur.HideFromDirectory = *b.HideFromDirectory
+	}
+	return []panel.AliasGroup{cur}
 }
 
 func (s *Server) createMailAlias(w http.ResponseWriter, r *http.Request) {
@@ -259,7 +349,7 @@ func (s *Server) createMailAlias(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &body, aliasExample) {
 		return
 	}
-	v, err := s.Panel.CreateMailAlias(r.Context(), actorOf(r), r.PathValue("domain"), body.LocalPart, body.Targets)
+	v, err := s.Panel.CreateMailAlias(r.Context(), actorOf(r), r.PathValue("domain"), body.LocalPart, body.Targets, body.group(panel.AliasGroup{})...)
 	answer(w, http.StatusCreated, v, err)
 }
 
@@ -281,7 +371,16 @@ func (s *Server) updateMailAlias(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &body, aliasExample) {
 		return
 	}
-	v, err := s.Panel.UpdateMailAlias(r.Context(), actorOf(r), id, body.LocalPart, body.Targets)
+	var group []panel.AliasGroup
+	if body.SenderPolicy == nil || body.HideFromDirectory == nil {
+		// Only one of them given: the other stays as it is.
+		if cur, err := s.Panel.MailAliasOf(r.Context(), actorOf(r), id); err == nil {
+			group = body.group(panel.AliasGroup{SenderPolicy: cur.SenderPolicy, HideFromDirectory: cur.HideFromDirectory})
+		}
+	} else {
+		group = body.group(panel.AliasGroup{})
+	}
+	v, err := s.Panel.UpdateMailAlias(r.Context(), actorOf(r), id, body.LocalPart, body.Targets, group...)
 	answer(w, http.StatusOK, v, err)
 }
 

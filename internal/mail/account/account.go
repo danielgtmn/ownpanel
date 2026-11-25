@@ -37,6 +37,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -144,6 +145,7 @@ func New(opts Options) *Handler {
 	mux.HandleFunc("POST /account/api/app-passwords", h.authed(h.createAppPassword))
 	mux.HandleFunc("DELETE /account/api/app-passwords/{id}", h.authed(h.revokeAppPassword))
 	mux.HandleFunc("GET /account/api/apple-setup", h.authed(h.appleSetup))
+	mux.HandleFunc("PUT /account/api/delegations", h.authed(h.setDelegations))
 	mux.HandleFunc("/account/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not found.")
 	})
@@ -250,7 +252,8 @@ func fingerprint(passwordHash string) string {
 // for it: same storage, same address, same password.
 func current(dir *directory.Directory, a storage.AccountSession) (*config.Mailbox, bool) {
 	m, ok := dir.MailboxByStorageID(a.StorageID)
-	if !ok || m.Address != a.Address || fingerprint(m.PasswordHash) != a.Credential {
+	// A mailbox made shared has no password: its sessions end.
+	if !ok || m.Shared() || m.Address != a.Address || fingerprint(m.PasswordHash) != a.Credential {
 		return nil, false
 	}
 	return m, true
@@ -443,6 +446,28 @@ type meView struct {
 	// Warning is set only on the answer to a password change whose
 	// password was changed but not everything that came with it.
 	Warning string `json:"warning,omitempty"`
+	// SharedWith are the mailboxes this one is shared with
+	// (self-delegation); Access the mailboxes it may use.
+	SharedWith []delegateView `json:"shared_with"`
+	Access     []accessView   `json:"access"`
+}
+
+// delegateView is a mailbox the signed-in one is shared with.
+type delegateView struct {
+	Address     string   `json:"address"`
+	DisplayName string   `json:"display_name"`
+	Rights      []string `json:"rights"`
+}
+
+// accessView is a mailbox the signed-in one may use.
+type accessView struct {
+	Address     string `json:"address"`
+	DisplayName string `json:"display_name"`
+	// Shared: a shared mailbox (else a person's mailbox delegated).
+	Shared bool     `json:"shared"`
+	Rights []string `json:"rights"`
+	// Folder is where mail programs show its folders.
+	Folder string `json:"folder"`
 }
 
 func (h *Handler) view(ctx context.Context, m *config.Mailbox) (meView, error) {
@@ -462,6 +487,14 @@ func (h *Handler) view(ctx context.Context, m *config.Mailbox) (meView, error) {
 		AppPasswordsAvailable: dir.Config().AppPasswordKey != "",
 		UsesKnownDays:         int(storage.EventRetention / (24 * time.Hour)),
 		Client:                mailsetup.Settings(dir.Hostname()),
+	}
+	v.SharedWith, v.Access = []delegateView{}, []accessView{}
+	for _, g := range dir.Grantees(m.StorageID) {
+		v.SharedWith = append(v.SharedWith, delegateView{Address: g.Mailbox.Address, DisplayName: g.Mailbox.DisplayName, Rights: g.Rights.Names()})
+	}
+	for _, a := range dir.Access(m.StorageID) {
+		v.Access = append(v.Access, accessView{Address: a.Mailbox.Address, DisplayName: a.Mailbox.DisplayName,
+			Shared: a.Mailbox.Shared(), Rights: a.Rights.Names(), Folder: "Shared/" + a.Mailbox.Address})
 	}
 	for _, ap := range m.AppPasswords {
 		pv := appPasswordView{ID: ap.ID, Name: ap.Name, CreatedAt: ap.Created.UTC()}
@@ -632,6 +665,79 @@ func (h *Handler) setDisplayName(w http.ResponseWriter, r *http.Request, s *sess
 		return
 	}
 	h.refreshed(w, r, s)
+}
+
+// setDelegations replaces who the mailbox is shared with: personal
+// mailboxes of the same organisation, each with its rights.
+func (h *Handler) setDelegations(w http.ResponseWriter, r *http.Request, s *session) {
+	var in struct {
+		Grants []struct {
+			Address string   `json:"address"`
+			Rights  []string `json:"rights"`
+		} `json:"grants"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if len(in.Grants) > config.MaxGrants {
+		writeError(w, http.StatusBadRequest, "Your mailbox can be shared with at most "+strconv.Itoa(config.MaxGrants)+" people.")
+		return
+	}
+	dir := h.opts.Backend.Directory()
+	_, ownDomain, _ := config.SplitAddress(s.mailbox.Address)
+	ownOrg, _ := dir.Organisation(ownDomain)
+	grants := []config.Grant{}
+	for _, g := range in.Grants {
+		addr := directory.Normalize(g.Address)
+		other, ok := dir.Mailbox(addr)
+		_, d, _ := config.SplitAddress(addr)
+		org, _ := dir.Organisation(d)
+		switch {
+		case addr == s.mailbox.Address:
+			writeError(w, http.StatusBadRequest, "You can't share your mailbox with yourself.")
+			return
+		case !ok || org != ownOrg:
+			writeError(w, http.StatusBadRequest, "There is no mailbox "+addr+" in your organisation.")
+			return
+		case other.Shared():
+			writeError(w, http.StatusBadRequest, addr+" is a shared mailbox; share with the people who use it instead.")
+			return
+		}
+		r, err := config.ParseRights(g.Rights)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "Choose what "+addr+" may do.")
+			return
+		}
+		if slices.ContainsFunc(grants, func(x config.Grant) bool { return x.StorageID == other.StorageID }) {
+			writeError(w, http.StatusBadRequest, addr+" is listed twice.")
+			return
+		}
+		grants = append(grants, config.Grant{StorageID: other.StorageID, Rights: r.Names()})
+	}
+	if !sameGrants(grants, s.mailbox.Grants) && !h.apply(w, r, s, config.AccountChange{Grants: &grants}) {
+		return
+	}
+	h.refreshed(w, r, s)
+}
+
+// sameGrants tells whether two lists give the same rights to the same
+// mailboxes.
+func sameGrants(a, b []config.Grant) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for _, x := range a {
+		i := slices.IndexFunc(b, func(y config.Grant) bool { return y.StorageID == x.StorageID })
+		if i < 0 {
+			return false
+		}
+		rx, _ := config.ParseRights(x.Rights)
+		ry, _ := config.ParseRights(b[i].Rights)
+		if rx != ry {
+			return false
+		}
+	}
+	return true
 }
 
 func (h *Handler) setAppPasswordsOnly(w http.ResponseWriter, r *http.Request, s *session) {
