@@ -1,4 +1,11 @@
-import { panelReady, type PanelChecks, type PanelSettings, type SaveResult } from '../../shared/settings/index.ts'
+import {
+  panelReady,
+  type PanelChecks,
+  type PanelSettings,
+  type SaveResult,
+  type SettingsChange,
+} from '../../shared/settings/index.ts'
+import { normalizeDomain, validateDomain, validateEmail } from '../../shared/settings/rules.ts'
 
 export type StepId = 'account' | 'addresses' | 'panel' | 'done'
 
@@ -11,10 +18,6 @@ export const STEPS: { id: StepId; name: string }[] = [
 
 export function stepNumber(step: StepId): number {
   return STEPS.findIndex((candidate) => candidate.id === step) + 1
-}
-
-export function stepLabel(step: StepId): string {
-  return `Step ${stepNumber(step)} of ${STEPS.length}`
 }
 
 // The account exists once the wizard shows; saved addresses mean the first wizard step was done.
@@ -36,7 +39,6 @@ export function previousStep(step: StepId): StepId {
 export type ContinueContext = {
   settings: PanelSettings
   selectedAddresses: string[]
-  domainDirty: boolean
 }
 
 export function canContinue(step: StepId, context: ContinueContext): boolean {
@@ -46,7 +48,8 @@ export function canContinue(step: StepId, context: ContinueContext): boolean {
     case 'addresses':
       return context.settings.server_ips_locked || context.selectedAddresses.length > 0
     case 'panel':
-      return context.settings.panel_domain !== '' && !context.domainDirty
+      // Continue checks and saves what was entered; problems show at the fields.
+      return true
     case 'done':
       return false
   }
@@ -55,14 +58,41 @@ export function canContinue(step: StepId, context: ContinueContext): boolean {
 export function continueHint(step: StepId, context: ContinueContext): string | null {
   if (canContinue(step, context)) return null
   if (step === 'addresses') return 'Choose at least one address, or add one.'
-  if (step === 'panel') {
-    return context.domainDirty ? 'Save the domain to continue.' : 'Save a domain to continue, or skip this step for now.'
-  }
   return null
 }
 
 export function canSkip(step: StepId, settings: PanelSettings): boolean {
   return step === 'panel' && settings.panel_domain === '' && !settings.panel_domain_locked
+}
+
+export const SKIP_NOTE =
+  'Without a domain, the panel stays at this IP address with a browser warning. You can add one later under Settings.'
+
+export type PanelDraft = { domain: string; email: string }
+
+export type PanelStepCheck = {
+  domainError: string | null
+  emailError: string | null
+  /** What to save; empty when nothing changed. Only meaningful without errors. */
+  change: SettingsChange
+}
+
+// Checks the panel step's fields for Continue: a domain is required unless it is locked, the e-mail is optional.
+export function checkPanelStep(settings: PanelSettings, draft: PanelDraft): PanelStepCheck {
+  const change: SettingsChange = {}
+  let domainError: string | null = null
+  let emailError: string | null = null
+  if (!settings.panel_domain_locked) {
+    const domain = normalizeDomain(draft.domain)
+    domainError = validateDomain(domain)
+    if (!domainError && domain !== settings.panel_domain) change.panel_domain = domain
+  }
+  if (!settings.acme_email_locked) {
+    const email = draft.email.trim()
+    emailError = validateEmail(email)
+    if (!emailError && email !== settings.acme_email) change.acme_email = email
+  }
+  return { domainError, emailError, change }
 }
 
 export type FinishOutcome = 'app' | 'open' | 'wait'

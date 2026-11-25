@@ -1,4 +1,4 @@
-import { STEPS, stepLabel, stepNumber, type StepId } from './wizard.ts'
+import { STEPS, stepNumber, type StepId } from './wizard.ts'
 
 function CheckMark() {
   return (
@@ -12,7 +12,6 @@ export function StepIndicator({ current }: { current: StepId }) {
   const currentNumber = stepNumber(current)
   return (
     <nav className="steps" aria-label="Setup steps">
-      <p className="steps-count">{stepLabel(current)}</p>
       <ol className="steps-list">
         {STEPS.map((step, index) => {
           const number = index + 1
