@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/danielgtmn/ownpanel/internal/mail/davobj"
 	"github.com/danielgtmn/ownpanel/internal/mail/storage"
 	"github.com/danielgtmn/ownpanel/internal/store"
 )
@@ -35,6 +36,23 @@ func TestCreateWithMail(t *testing.T) {
 	}
 	msg := "Subject: hello\r\n\r\nbody\r\n"
 	if _, err := ms.Append(ctx, testStorageID, storage.Inbox, strings.NewReader(msg), storage.AppendOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// Calendars and contacts live in the same directory and come along.
+	if err := ms.EnsureDefaultDAVCollections(ctx, testStorageID); err != nil {
+		t.Fatal(err)
+	}
+	cal, err := ms.DAVCollection(ctx, testStorageID, davobj.Calendar, storage.DefaultCalendar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := []byte("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:ev1\r\nDTSTAMP:20240101T000000Z\r\nDTSTART:20240101T090000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	info, _, err := davobj.ParseCalendar(ev, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj, _, err := ms.PutDAVObject(ctx, cal, "ev1.ics", ev, info, storage.PutCondition{})
+	if err != nil {
 		t.Fatal(err)
 	}
 	// The service stays open while the backup runs.
@@ -91,6 +109,21 @@ func TestCreateWithMail(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(restore, MailDir, RestoredMarker)); err == nil {
 		t.Error("the restore marker should be consumed by the start-up check")
+	}
+	rcal, err := rs.DAVCollection(ctx, testStorageID, davobj.Calendar, storage.DefaultCalendar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	robj, err := rs.DAVObject(ctx, rcal, "ev1.ics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, err := rs.ReadDAVObject(robj); err != nil || string(b) != string(ev) {
+		t.Fatalf("restored event %q %v", b, err)
+	}
+	// A new epoch: programs sync everything again.
+	if robj.ETag() == obj.ETag() {
+		t.Error("ETag kept after a restore")
 	}
 }
 

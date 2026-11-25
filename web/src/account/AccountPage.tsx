@@ -15,6 +15,7 @@ import {
   type CreatedAppPassword,
   type PasswordChange,
 } from './AccountDialogs.tsx'
+import { CalendarsSection } from './CalendarsSection.tsx'
 import {
   accountErrorMessage,
   APPLE_SETUP_URL,
@@ -274,12 +275,15 @@ export function AccountPage({
           <div className="account-apple">
             <p className="muted">
               On an iPhone, iPad or Mac, download the setup and open it; it asks for the password when you install it.
+              {me.client.dav_url ? ' It sets up your calendars and contacts too.' : ''}
             </p>
             <Button className="account-download" render={<a href={APPLE_SETUP_URL} download />}>
               Download setup for Apple devices
             </Button>
           </div>
         </Section>
+
+        <CalendarsSection client={me.client} address={me.address} appPasswordsOnly={me.app_passwords_only} />
 
         <footer className="account-footer muted">The people who manage this server can reset your password.</footer>
       </main>

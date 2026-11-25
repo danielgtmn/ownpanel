@@ -198,7 +198,7 @@ func openZip(f *os.File, size, declared int64) (*fileSource, error) {
 		}
 		base := path.Base(name)
 		if strings.HasPrefix(name, "__MACOSX/") || strings.HasPrefix(base, "._") || base == ".DS_Store" ||
-			man != nil && name == "manifest.json" {
+			man != nil && (name == "manifest.json" || strings.HasPrefix(name, davCalendarsDir) || strings.HasPrefix(name, davContactsDir)) {
 			continue
 		}
 		if !safeName(name) {

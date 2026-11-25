@@ -88,7 +88,7 @@ It all works with standard programs: Thunderbird, Apple Mail/Calendar/Contacts, 
 | G1 | Mailbox accounts: display name, self-service area, app passwords, organisations (built) | M | G0 | [#86](https://github.com/danielgtmn/ownpanel/issues/86) |
 | G2 | Filters and out-of-office (Sieve, ManageSieve) | L | G1 | [#87](https://github.com/danielgtmn/ownpanel/issues/87) |
 | G3 | Shared mailboxes, send as / on behalf, distribution groups | XL | G1 | [#88](https://github.com/danielgtmn/ownpanel/issues/88) |
-| G4a | Own calendars and contacts, discovery, sync, directory | XL | G1 | [#89](https://github.com/danielgtmn/ownpanel/issues/89) |
+| G4a | Own calendars and contacts, discovery, sync, directory (built) | XL | G1 | [#89](https://github.com/danielgtmn/ownpanel/issues/89) |
 | G4b | Sharing calendars and address books | M | G4a | [#90](https://github.com/danielgtmn/ownpanel/issues/90) |
 | G5a | Free/busy, sending invitations, accepting replies | L | G4a | [#91](https://github.com/danielgtmn/ownpanel/issues/91) |
 | G5b | Server-side scheduling between mailboxes, rooms | XL | G5a | [#92](https://github.com/danielgtmn/ownpanel/issues/92) |
@@ -488,6 +488,129 @@ Synchronizer add-on.
 - Migration guides: Google via `.ics`/`.vcf` export or a CalDAV pull with an app password;
   Microsoft 365 via `.ics` and CSV export.
 
+**Built (G4a):** how it turned out, and where it differs from the plan:
+
+- **Packages:** `internal/mail/dav` (the HTTP handler: tree, sign-in,
+  PROPFIND/PROPPATCH/REPORT/MKCALENDAR/MKCOL/GET/PUT/DELETE, the
+  directory, import/export helpers), `internal/mail/davobj` (iCalendar and
+  vCard: checks, index spans, filters, time zones, splitting and joining
+  files) and `internal/mail/storage/dav.go` (collections, objects,
+  deletions; migration 8). Hooks: `web.Options.DAV` and
+  `server.Options.DAVHandler` (wired in `cmd/ownpaneld/mail.go`),
+  `server.SignIn()`, `mailsetup.ClientSettings.DAVURL`/`WithDAV`, the panel's
+  record list and three account API routes.
+- **Tree:** `/dav/principals/<address>/`, `/dav/calendars/<address>/<calendar>/<object>`,
+  `/dav/addressbooks/<address>/<book>/<object>`, the directory at
+  `/dav/addressbooks/<address>/directory/` (a reserved name).
+  `/.well-known/caldav|carddav` answer `GET`, `HEAD`, `PROPFIND` and
+  `OPTIONS` with `301` to `/dav/`. `OPTIONS` needs no sign-in; the `DAV`
+  header is `1, 3, access-control, calendar-access, addressbook,
+  extended-mkcol` (no locking).
+- **Sign-in:** HTTP Basic on every request through the mail programs'
+  `signin.Checker` (`Check`: main password unless AppPasswordsOnly, or an
+  app password; its cache makes repeated requests one HMAC). Requests for
+  another host than the mail host answer 404. 3000 requests per mailbox in
+  5 minutes, then `429` with `Retry-After`.
+- **Authorisation:** `dav.Authorizer` (`Home`, `Collection` returning a
+  privilege set) decides on every request; G4a's `OwnOnly` gives a mailbox
+  all privileges on its own homes and nothing on others (404). G4b plugs a
+  share-aware implementation in there. The directory is always read-only.
+- **Storage:** files under `dav/<storage_id>/<collection id>/` in the mail
+  data directory with the same durability as messages (temporary file,
+  fsync, rename, fsync of the directory, then the index commit); replaced
+  and deleted files go through `trash/` like messages. Tables
+  `dav_collections` (seq, pruned_seq), `dav_objects` (UID, component,
+  size, `start_at`/`end_at`, file, seq) and `dav_deletions`. Every change
+  takes the collection's next sequence number. ETags, ctags and sync tokens
+  are derived from the **DAV epoch** (`meta.dav_epoch`), the collection and
+  that number, not stored: the start-up check sets a new epoch when it
+  found rows without files or indexed stray files, or the `restored` marker
+  exists, which changes all of them at once. Files without a row are
+  indexed again when they are a valid object of an existing collection
+  whose UID is not taken (`restored-<file>.ics`), otherwise removed.
+  Deletions older than 90 days are pruned hourly (`dav.Handler.Run`); a
+  token older than the kept deletions, of another collection or epoch, or
+  not ours answers `403 valid-sync-token`.
+- **Quota:** DAV bytes are added to `mailboxes.used_bytes` (not to the
+  message count), so IMAP appends, delivery and the self-service page see
+  them; a PUT that would pass the quota answers `507` with
+  `quota-not-exceeded`. `quota-used-bytes`/`quota-available-bytes` on homes
+  and collections.
+- **Default collections** ("Calendar" `calendar`, "Contacts" `contacts`)
+  are created on the first DAV or self-service request when the mailbox has
+  no collection of that kind; deleting the last calendar brings a new
+  empty one back on the next request.
+- **Objects:** one VEVENT or VTODO (with its overrides, same UID) per
+  calendar resource, or one vCard with a UID; VJOURNAL and others are
+  refused (`supported-calendar-component`). Data is stored byte for byte,
+  so the ETag of a PUT is valid. Limits as planned: 1 MiB per object (413
+  with `max-resource-size`), 100 collections per mailbox and 100 000
+  objects per collection (`507`), XML bodies 1 MiB / depth 32 / 20 000
+  elements, content lines with more than 8 KiB of parameters refused.
+- **Time ranges:** the index keeps the span of all occurrences; queries
+  pre-filter on it and then evaluate the full filter. Recurrence is
+  expanded with rrule-go up to 20 000 occurrences and **20 years** after
+  the start (a rule that may go on is open-ended in the index and matches
+  ranges beyond the horizon). TZIDs resolve as an IANA name (also at the
+  end of Mozilla/Citadel ids), the VTIMEZONE's X-LIC-LOCATION, a list of
+  common Windows names, the VTIMEZONE's standard offset as a fixed zone
+  (approximate), else UTC; floating times, dates and approximated zones
+  are widened by 14 hours in both directions, so no reader's zone misses
+  them (clients filter again). The Go time zone database is built in.
+- **Reports:** calendar-query (comp/prop/param filters, text-match,
+  time-range), calendar-multiget, addressbook-query (with `limit`),
+  addressbook-multiget, sync-collection (level 1; `limit` ignored),
+  expand-property (answered like PROPFIND of the named properties, not
+  expanded), principal-property-search and principal-search-property-set
+  (empty until G5). `calendar-data`/`address-data` are returned whole:
+  `<expand>`, `<limit-recurrence-set>` and partial retrieval are ignored.
+- **PROPPATCH:** displayname, description and Apple's calendar-color are
+  kept; Apple's calendar-order, calendar-timezone and
+  schedule-calendar-transp are accepted and not kept; anything else fails
+  the request (403/424). MKCALENDAR takes displayname, description, colour
+  and the component set (VEVENT, VTODO); address books come with extended
+  MKCOL (RFC 5689). COPY, MOVE and LOCK are not offered.
+- **Directory:** vCard 3.0 cards of the organisation's mailboxes (FN and N
+  from the display name) and aliases (not the catch-all, not addresses
+  that are mailboxes), generated per configuration and cached; a field
+  `HideFromDirectory` on mailboxes or aliases (G3) is honoured when present
+  (looked up by name). Its ETags are hashes of the cards; its sync token
+  is a hash of all of them: the current token gives no changes, any other
+  one `403 valid-sync-token` (a full sync, which is small).
+- **Discovery records:** SRV `_caldavs._tcp`/`_carddavs._tcp` `0 1 443
+  <mail host>.` and TXT `path=/dav/` per mail domain, optional
+  (recommended), listed and written with the others only when the mail
+  host serves the web socket (`selfServiceProblem() == ""`).
+- **Apple profile:** `com.apple.caldav.account` and
+  `com.apple.carddav.account` payloads (host, 443, SSL, user name, principal
+  URL, no password) when `ClientSettings.DAVURL` is set: always on the
+  self-service page, in the panel when the mail host serves the web socket.
+- **Thunderbird:** autoconfig cannot carry calendars; Thunderbird 115+
+  finds them from the address or the mail host through the SRV/TXT records
+  and `/.well-known` (documented in [[E-Mail|E-Mail]]).
+- **Self-service:** `GET /account/api/collections`, `GET
+  …/collections/{kind}/{name}/export`, `POST …/import` (10 MB, UID-based
+  replace); the page lists calendars and address books with import and
+  download and shows the settings for programs.
+- **Export and backup:** the mailbox export zip gains
+  `calendars/<name>.ics` and `contacts/<name>.vcf` (the zip import skips
+  them); the backup copies `dav/` with the rest of the data directory;
+  deleting a mailbox deletes its collections.
+- **Libraries (spike):** `emersion/go-webdav` was read and **not used**:
+  its CalDAV/CardDAV servers own the request handling (fixed `Backend`
+  interfaces, no sync-collection in the server, no privilege sets, no
+  quota, PROPPATCH unimplemented, path layout and well-known redirect
+  fixed, XML types internal), so using it would have meant working around
+  most of it. The handler and the XML (encoding/xml with our own limits)
+  are ours. Used: `emersion/go-ical` (parsing iCalendar, which pulls in
+  `teambition/rrule-go` for RRULE expansion) and `emersion/go-vcard`
+  (parsing vCards). Time zones, recurrence sets, filters and writing
+  files are ours; go-ical's own time zone lookup (`time.LoadLocation` of
+  the TZID only) and its encoder (no line folding) are not used.
+- **Not built:** sharing (G4b), scheduling and free/busy (G5), COPY/MOVE,
+  partial retrieval and server-side expansion, sync `limit`, a web
+  calendar (G6).
+
 ## G4b — Sharing calendars and address books
 
 A person shares a collection with mailboxes of the same organisation, read
@@ -535,15 +658,15 @@ decided in its own design.
 
 ## Libraries
 
-None of these are in the module today; a spike decides before each phase:
+A spike decides before each phase:
 
 - **Sieve:** `foxcpp/go-sieve` is, from memory, small, pre-1.0 and without
   `vacation`. Expect our own interpreter for the extension list above,
   with a parser fuzzed in tests.
-- **DAV:** `emersion/go-webdav` for the XML types and basic handlers. Expect
-  our own layer for sync, privileges, quota, sharing and scheduling.
-- **iCalendar/vCard:** `emersion/go-ical` (from memory, it wraps an RRULE
-  library for recurrence sets) and `emersion/go-vcard`.
+- **DAV:** decided in G4a: our own handler and XML on `encoding/xml`;
+  `emersion/go-webdav` was not a fit (see G4a, built).
+- **iCalendar/vCard:** `emersion/go-ical` (with `teambition/rrule-go` for
+  RRULE) and `emersion/go-vcard` for parsing (G4a).
 
 ## Permissions
 

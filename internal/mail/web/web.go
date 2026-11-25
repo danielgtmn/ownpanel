@@ -4,7 +4,7 @@
 //
 //	/account/api/…                     the self-service API (GET /account/api/health here,
 //	                                   everything else from Options.Account)
-//	/dav/…, /.well-known/caldav|carddav calendars and contacts (not built yet)
+//	/dav/…, /.well-known/caldav|carddav calendars and contacts (from Options.DAV)
 //
 // Only Caddy can connect to the socket, so the X-Forwarded-For header it
 // sets is trusted on this listener alone (ClientIP).
@@ -36,6 +36,9 @@ type Options struct {
 	// Account serves everything below /account/api/ except
 	// /account/api/health; it sees the full path. nil answers 404.
 	Account http.Handler
+	// DAV serves /dav/… and /.well-known/caldav|carddav (package dav).
+	// nil answers 501 and 404.
+	DAV http.Handler
 }
 
 // NewServer returns the HTTP server for the web socket, with its time and
@@ -62,12 +65,19 @@ func Handler(o Options) http.Handler {
 		account = http.HandlerFunc(notFound)
 	}
 	mux.Handle("/account/api/", account)
-	// Calendars and contacts come with G4; until then clients that look
-	// for them find nothing rather than a broken service.
-	mux.HandleFunc("/.well-known/caldav", notFound)
-	mux.HandleFunc("/.well-known/carddav", notFound)
-	mux.HandleFunc("/dav", notImplemented)
-	mux.HandleFunc("/dav/", notImplemented)
+	if o.DAV != nil {
+		mux.Handle("/.well-known/caldav", o.DAV)
+		mux.Handle("/.well-known/carddav", o.DAV)
+		mux.Handle("/dav", o.DAV)
+		mux.Handle("/dav/", o.DAV)
+	} else {
+		// Without calendars and contacts, clients that look for them find
+		// nothing rather than a broken service.
+		mux.HandleFunc("/.well-known/caldav", notFound)
+		mux.HandleFunc("/.well-known/carddav", notFound)
+		mux.HandleFunc("/dav", notImplemented)
+		mux.HandleFunc("/dav/", notImplemented)
+	}
 	mux.HandleFunc("/", notFound)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -87,6 +87,8 @@ export type MailClientSettings = {
   smtp_port: number
   smtp_starttls_port: number
   user_name_is_address: boolean
+  // Where calendar and contacts programs connect; missing when the server offers no calendars and contacts.
+  dav_url?: string
 }
 
 export type MailStatus = {
@@ -107,6 +109,10 @@ export type MailRecordKind =
   | 'srv-imaps'
   | 'autoconfig'
   | 'autodiscover'
+  | 'srv-caldav'
+  | 'txt-caldav'
+  | 'srv-carddav'
+  | 'txt-carddav'
 export type MailRecordStatus = 'ok' | 'missing' | 'different' | 'conflict' | 'unknown'
 
 export type MailRecord = {

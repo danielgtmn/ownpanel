@@ -86,7 +86,7 @@ func Open(dir string, opts Options) (*Store, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	for _, d := range []string{dir, filepath.Join(dir, messagesDir), filepath.Join(dir, tmpDir), filepath.Join(dir, trashDir), filepath.Join(dir, queueDir), filepath.Join(dir, importsDir)} {
+	for _, d := range []string{dir, filepath.Join(dir, messagesDir), filepath.Join(dir, tmpDir), filepath.Join(dir, trashDir), filepath.Join(dir, queueDir), filepath.Join(dir, importsDir), filepath.Join(dir, davDir)} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return nil, err
 		}
@@ -305,6 +305,9 @@ CREATE TABLE account_sessions (
 );
 CREATE INDEX account_sessions_mailbox ON account_sessions(storage_id, created);
 `,
+	// Calendars and address books (G4a, dav.go). IF NOT EXISTS keeps the
+	// migration harmless if it ends up numbered after another phase's.
+	davSchema,
 }
 
 func migrate(db *sql.DB) error {

@@ -177,7 +177,7 @@ type deleteAliasInput struct {
 }
 
 type mailRecordInfo struct {
-	Kind   string   `json:"kind" jsonschema:"which record: mx, spf, dkim, dmarc, srv-submissions, srv-imaps, autoconfig or autodiscover"`
+	Kind   string   `json:"kind" jsonschema:"which record: mx, spf, dkim, dmarc, srv-submissions, srv-imaps, autoconfig, autodiscover, srv-caldav, txt-caldav, srv-carddav or txt-carddav"`
 	Type   string   `json:"type" jsonschema:"DNS record type (MX, TXT, SRV, CNAME)"`
 	Name   string   `json:"name" jsonschema:"record name relative to zone when can_apply, else relative to the mail domain; @ is the name itself"`
 	FQDN   string   `json:"fqdn" jsonschema:"full record name"`
@@ -206,7 +206,7 @@ type setUpMailRecordsInput struct {
 }
 
 type mailRecordChangeInfo struct {
-	Kind         string   `json:"kind" jsonschema:"which record: mx, spf, dkim, dmarc, srv-submissions, srv-imaps, autoconfig, autodiscover or mail-host-spf"`
+	Kind         string   `json:"kind" jsonschema:"which record: mx, spf, dkim, dmarc, srv-submissions, srv-imaps, autoconfig, autodiscover, srv-caldav, txt-caldav, srv-carddav, txt-carddav or mail-host-spf"`
 	Type         string   `json:"type" jsonschema:"DNS record type"`
 	Name         string   `json:"name" jsonschema:"record name relative to the zone"`
 	Action       string   `json:"action" jsonschema:"create, replace, add (to other TXT values that stay), keep (already right) or skip (needs a person)"`

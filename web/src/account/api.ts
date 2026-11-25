@@ -17,6 +17,8 @@ export type ClientSettings = {
   smtp_port: number
   smtp_starttls_port: number
   user_name_is_address: boolean
+  // Where calendar and contacts programs connect.
+  dav_url?: string
 }
 
 export type Me = {
@@ -130,3 +132,58 @@ export const revokeAppPassword = (id: string) =>
   request<void>(`/app-passwords/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
 export const APPLE_SETUP_URL = `${BASE_PATH}/apple-setup`
+
+export type CollectionKind = 'calendar' | 'addressbook'
+
+export type Collection = {
+  kind: CollectionKind
+  name: string
+  display_name: string
+  color: string
+  objects: number
+  bytes: number
+}
+
+export type Collections = { collections: Collection[]; max_file_bytes: number }
+
+export type ImportResult = { added: number; replaced: number; skipped: number }
+
+export const loadCollections = () => request<Collections>('/collections')
+
+function collectionPath(collection: Pick<Collection, 'kind' | 'name'>): string {
+  return `/collections/${collection.kind}/${encodeURIComponent(collection.name)}`
+}
+
+export function exportURL(collection: Pick<Collection, 'kind' | 'name'>): string {
+  return BASE_PATH + collectionPath(collection) + '/export'
+}
+
+// Uploads a calendar (.ics) or contacts (.vcf) file into a collection. The body is the file itself.
+export async function importFile(collection: Pick<Collection, 'kind' | 'name'>, file: Blob): Promise<ImportResult> {
+  let response: Response
+  try {
+    response = await fetch(BASE_PATH + collectionPath(collection) + '/import', {
+      method: 'POST',
+      headers: {
+        'X-Ownpanel-Request': '1',
+        'Content-Type': collection.kind === 'calendar' ? 'text/calendar' : 'text/vcard',
+      },
+      body: file,
+      credentials: 'same-origin',
+    })
+  } catch {
+    throw new AccountError(0, OFFLINE)
+  }
+  if (!response.ok) {
+    let message = ''
+    try {
+      const data: unknown = await response.json()
+      if (data && typeof data === 'object' && 'error' in data && typeof data.error === 'string') message = data.error
+    } catch {
+      // Not JSON: use the fallback.
+    }
+    if (response.status === 401) sessionEnded?.()
+    throw new AccountError(response.status, message.trim() || fallback(response.status))
+  }
+  return (await response.json()) as ImportResult
+}

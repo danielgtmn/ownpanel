@@ -214,8 +214,14 @@ type MailClientSetup struct {
 	Client MailClientSettings `json:"client"`
 }
 
+// clientSettings are the settings for programs; calendars and contacts
+// only when the mail host serves them (mailWeb).
 func (s *Service) clientSettings(host string) MailClientSettings {
-	return mailsetup.Settings(host)
+	c := mailsetup.Settings(host)
+	if host == s.MailHost() && s.selfServiceProblem() == "" {
+		c = c.WithDAV()
+	}
+	return c
 }
 
 // errNoMailSetup is the answer of the public setup for everything that is

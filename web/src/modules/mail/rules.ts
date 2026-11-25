@@ -141,7 +141,7 @@ export function sortAliases<T extends Pick<MailAlias, 'catch_all' | 'address'>>(
 export type ClientRow = { label: string; value: string; copy?: boolean }
 
 export function clientRows(client: MailClientSettings): ClientRow[] {
-  return [
+  const rows: ClientRow[] = [
     { label: 'Server (incoming and outgoing)', value: client.server, copy: true },
     { label: 'User name', value: client.user_name_is_address ? 'The full e-mail address' : 'The mailbox name' },
     { label: 'Password', value: 'The password of the mailbox' },
@@ -151,6 +151,8 @@ export function clientRows(client: MailClientSettings): ClientRow[] {
       value: `Port ${client.smtp_port}, SSL/TLS, or port ${client.smtp_starttls_port}, STARTTLS`,
     },
   ]
+  if (client.dav_url) rows.push({ label: 'Calendars and contacts', value: client.dav_url, copy: true })
+  return rows
 }
 
 // ---- DNS records ----
@@ -164,6 +166,10 @@ const KIND_LABEL: Record<string, string> = {
   'srv-imaps': 'Lets mail programs find the server for receiving',
   autoconfig: 'Lets mail programs set themselves up',
   autodiscover: 'Lets Outlook set itself up',
+  'srv-caldav': 'Lets calendar programs find the server',
+  'txt-caldav': 'Tells calendar programs where calendars start',
+  'srv-carddav': 'Lets contacts programs find the server',
+  'txt-carddav': 'Tells contacts programs where address books start',
 }
 
 export function recordPurpose(kind: string): string {

@@ -24,6 +24,14 @@ type ReconcileReport struct {
 	// QueueStray are queue files without a row (removed: never accepted).
 	QueueMissing int
 	QueueStray   int
+	// DAVMissing are calendar and contact rows whose file was gone
+	// (dropped); DAVIndexed files without a row indexed again; DAVStray
+	// files without a row that could not be (removed). NewDAVEpoch is set
+	// when every sync token, ETag and ctag changed.
+	DAVMissing  int
+	DAVIndexed  int
+	DAVStray    int
+	NewDAVEpoch bool
 }
 
 // Reconcile brings index and files in line; call it once at start, before
@@ -128,9 +136,17 @@ func (s *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 			}
 		}
 
-		// Usage counters from the rows, so they can never drift.
+		dav, newEpoch, err := s.reconcileDAV(tx, rep.Restored)
+		if err != nil {
+			return err
+		}
+		rep.DAVMissing, rep.DAVIndexed, rep.DAVStray, rep.NewDAVEpoch = dav.missing, dav.indexed, dav.stray, newEpoch
+
+		// Usage counters from the rows, so they can never drift. Calendars
+		// and contacts count towards the quota too.
 		if _, err := tx.Exec(`UPDATE mailboxes SET
-			used_bytes = (SELECT coalesce(sum(size), 0) FROM messages WHERE messages.storage_id = mailboxes.storage_id),
+			used_bytes = (SELECT coalesce(sum(size), 0) FROM messages WHERE messages.storage_id = mailboxes.storage_id) +
+				(SELECT coalesce(sum(size), 0) FROM dav_objects WHERE dav_objects.storage_id = mailboxes.storage_id),
 			messages = (SELECT count(*) FROM messages WHERE messages.storage_id = mailboxes.storage_id)`); err != nil {
 			return err
 		}
@@ -231,6 +247,9 @@ func (s *Store) DeleteMailbox(ctx context.Context, id string) error {
 			}
 		}
 		if _, err := tx.Exec(`DELETE FROM send_log WHERE key IN (?, ?, ?, ?)`, mailboxSendKeys(id)...); err != nil {
+			return err
+		}
+		if err := s.deleteDAV(tx, ch, id); err != nil {
 			return err
 		}
 		ch.add(id, Change{Kind: MailboxDeleted})
