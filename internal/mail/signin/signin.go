@@ -4,7 +4,8 @@
 //
 //   - Failures are counted per (IP, address) and per IP before any hashing,
 //     never per address alone: that would let anyone lock a person out.
-//     IPv6 addresses count per /64.
+//     IPv6 addresses count per /48. When a table is full, a new IP or pair
+//     is refused (fail closed) until expired entries have been swept.
 //   - A successful sign-in is cached in memory for CacheTTL under an HMAC of
 //     address, password and the stored hash, so mail clients that open many
 //     connections do not cost an argon2id hash each. A new hash in a new
@@ -83,6 +84,9 @@ type Checker struct {
 	dummyOnce sync.Once
 	dummy     string
 
+	// max bounds each table (maxEntries; tests lower it).
+	max int
+
 	mu       sync.Mutex
 	pairs    map[pairKey]*window
 	ips      map[netip.Prefix]*window
@@ -118,6 +122,7 @@ func New(opts Options) *Checker {
 	}
 	c := &Checker{
 		opts:     opts,
+		max:      maxEntries,
 		pairs:    map[pairKey]*window{},
 		ips:      map[netip.Prefix]*window{},
 		cache:    map[[32]byte]time.Time{},
@@ -130,13 +135,13 @@ func New(opts Options) *Checker {
 	return c
 }
 
-// ipKey is the unit IP limits count in: the address for IPv4, the /64 for
-// IPv6 (one customer usually has at least a /64).
+// ipKey is the unit IP limits count in: the address for IPv4, the /48 for
+// IPv6 (one customer often gets a whole /48, and a /64 is cheap to vary).
 func ipKey(ip netip.Addr) netip.Prefix {
 	ip = ip.Unmap()
 	bits := 32
 	if ip.Is6() {
-		bits = 64
+		bits = 48
 	}
 	p, err := ip.Prefix(bits)
 	if err != nil {
@@ -157,7 +162,8 @@ func (c *Checker) Check(dir *directory.Directory, ip netip.Addr, address, passwo
 	// attempts cannot get past the limits; a success refunds it.
 	c.mu.Lock()
 	c.sweepLocked(now)
-	throttled := over(c.ips, ipk, now, IPLimit) || over(c.pairs, pk, now, PairLimit)
+	throttled := over(c.ips, ipk, now, IPLimit) || over(c.pairs, pk, now, PairLimit) ||
+		full(c.ips, ipk, c.max) || full(c.pairs, pk, c.max)
 	if !throttled {
 		charge(c.ips, ipk, now)
 		charge(c.pairs, pk, now)
@@ -176,7 +182,7 @@ func (c *Checker) Check(dir *directory.Directory, ip netip.Addr, address, passwo
 		cached = cached && now.Before(exp)
 		if cached || c.verify(m.PasswordHash, password) {
 			c.mu.Lock()
-			if !cached && len(c.cache) < maxEntries {
+			if !cached && len(c.cache) < c.max {
 				c.cache[ck] = now.Add(CacheTTL)
 			}
 			delete(c.pairs, pk)
@@ -240,12 +246,17 @@ func over[K comparable](m map[K]*window, k K, now time.Time, limit int) bool {
 	return w != nil && now.Sub(w.start) < Window && w.n >= limit
 }
 
+// full tells whether k is new and m has no room for it. Such attempts are
+// refused rather than let through uncounted; the periodic sweep makes room
+// again as windows expire.
+func full[K comparable](m map[K]*window, k K, max int) bool {
+	_, ok := m[k]
+	return !ok && len(m) >= max
+}
+
 func charge[K comparable](m map[K]*window, k K, now time.Time) {
 	w := m[k]
 	if w == nil || now.Sub(w.start) >= Window {
-		if w == nil && len(m) >= maxEntries {
-			return
-		}
 		w = &window{start: now}
 		m[k] = w
 	}
@@ -259,7 +270,7 @@ func (c *Checker) addressFailed(now time.Time, ipk netip.Prefix, m *config.Mailb
 	c.mu.Lock()
 	a := c.byAddr[m.Address]
 	if a == nil || now.Sub(a.start) >= EventWindow {
-		if a == nil && len(c.byAddr) >= maxEntries {
+		if a == nil && len(c.byAddr) >= c.max {
 			c.mu.Unlock()
 			return
 		}

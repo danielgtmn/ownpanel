@@ -106,15 +106,43 @@ func TestThrottle(t *testing.T) {
 		t.Fatalf("after window: %v", err)
 	}
 
-	// Per IP over many addresses; IPv6 counts per /64.
+	// Per IP over many addresses; IPv6 counts per /48.
 	for i := 0; i < IPLimit; i++ {
 		c.Check(dir, ip("2001:db8::1"), "user"+string(rune('a'+i%26))+string(rune('a'+i/26))+"@example.org", "x")
 	}
 	if _, err := c.Check(dir, ip("2001:db8::ffff"), "alice@example.org", "pw"); !errors.Is(err, ErrThrottled) {
 		t.Fatalf("ip limit: %v", err)
 	}
-	if _, err := c.Check(dir, ip("2001:db8:0:1::1"), "alice@example.org", "pw"); err != nil {
-		t.Fatalf("other /64: %v", err)
+	if _, err := c.Check(dir, ip("2001:db8:0:ffff::1"), "alice@example.org", "pw"); !errors.Is(err, ErrThrottled) {
+		t.Fatalf("other /64 in the same /48: %v", err)
+	}
+	if _, err := c.Check(dir, ip("2001:db8:1::1"), "alice@example.org", "pw"); err != nil {
+		t.Fatalf("other /48: %v", err)
+	}
+}
+
+// A full table refuses new IPs instead of letting them guess uncounted,
+// and makes room again once the old windows have expired.
+func TestThrottleFull(t *testing.T) {
+	t.Parallel()
+	clk := &clock{t: time.Unix(1_800_000_000, 0)}
+	c := New(Options{Slots: slots, Now: clk.now})
+	c.max = 3
+	dir := dirWith(t, "pw")
+	for i := 0; i < 3; i++ {
+		c.Check(dir, netip.AddrFrom4([4]byte{192, 0, 2, byte(i)}), "alice@example.org", "wrong")
+	}
+	n := c.hashes.Load()
+	if _, err := c.Check(dir, ip("198.51.100.1"), "alice@example.org", "pw"); !errors.Is(err, ErrThrottled) || c.hashes.Load() != n {
+		t.Fatalf("full table: %v", err)
+	}
+	// Known IPs still count as before.
+	if _, err := c.Check(dir, ip("192.0.2.0"), "alice@example.org", "wrong"); !errors.Is(err, ErrFailed) {
+		t.Fatalf("known IP: %v", err)
+	}
+	clk.add(Window)
+	if _, err := c.Check(dir, ip("198.51.100.1"), "alice@example.org", "pw"); err != nil {
+		t.Fatalf("after sweep: %v", err)
 	}
 }
 
