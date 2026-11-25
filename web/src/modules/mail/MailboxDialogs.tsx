@@ -1,7 +1,7 @@
 import { Button } from '@ui-sdk/react/button'
 import { DialogClose } from '@ui-sdk/react/dialog'
 import { Field, FieldDescription, FieldError, FieldLabel } from '@ui-sdk/react/field'
-import { Input } from '@ui-sdk/react/input'
+import { Input, InputGroup } from '@ui-sdk/react/input'
 import {
   NumberInput,
   NumberInputControl,
@@ -105,7 +105,7 @@ function CreateMailboxForm({
     <form className="form" onSubmit={submit} noValidate>
       <Field name="local_part" invalid={errors.local ? true : undefined}>
         <FieldLabel>Address</FieldLabel>
-        <div className="mail-address-input">
+        <InputGroup className="address-input">
           <Input
             value={local}
             placeholder="info"
@@ -118,10 +118,10 @@ function CreateMailboxForm({
               setErrors((current) => ({ ...current, local: undefined, form: undefined }))
             }}
           />
-          <span className="mail-address-domain" aria-hidden="true">
+          <span className="address-suffix" aria-hidden="true">
             @{domain}
           </span>
-        </div>
+        </InputGroup>
         <FieldDescription>The part before @{domain}. Letters, digits and . - _ +</FieldDescription>
         {errors.local ? <FieldError match>{errors.local}</FieldError> : null}
       </Field>

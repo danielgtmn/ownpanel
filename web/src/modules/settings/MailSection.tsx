@@ -1,5 +1,6 @@
 import { confirm } from '@ui-sdk/react/alert-dialog'
 import { Button } from '@ui-sdk/react/button'
+import { DialogClose } from '@ui-sdk/react/dialog'
 import { Field, FieldDescription, FieldError, FieldLabel } from '@ui-sdk/react/field'
 import { Input } from '@ui-sdk/react/input'
 import {
@@ -12,18 +13,18 @@ import {
 import { Radio, RadioGroup, RadioIndicator } from '@ui-sdk/react/radio'
 import { Switch, SwitchThumb } from '@ui-sdk/react/switch'
 import { Textarea } from '@ui-sdk/react/textarea'
-import { useState, type FormEvent } from 'react'
+import { useState, type FormEvent, type ReactNode } from 'react'
 import { errorMessage, isNotFound } from '../../shared/api/index.ts'
 import { useResource } from '../../shared/hooks/index.ts'
 import {
   announceSaved,
-  LockedField,
+  LOCKED_NOTE,
   normalizeDomain,
   saveSettings,
   validateEmail,
   type PanelSettings,
 } from '../../shared/settings/index.ts'
-import { Section, StatusBadge } from '../../shared/ui/index.ts'
+import { FormDialog, Section, StatusBadge } from '../../shared/ui/index.ts'
 import { getMailHealth, healthLine, validateMailHost } from './mailHealth.ts'
 import {
   JUNK_MAX,
@@ -31,6 +32,7 @@ import {
   MAX_LISTS,
   spamChange,
   spamDraft,
+  spamSummary,
   validateSpamDraft,
   type ListMode,
   type SpamDraft,
@@ -38,14 +40,13 @@ import {
 } from './spamChecks.ts'
 
 type FormProps = { settings: PanelSettings; onSaved: (settings: PanelSettings) => void }
+type DialogFormProps = FormProps & { onDone: () => void }
 
 const HOST_LABEL = 'Name of the mail server'
 
-function MailHostForm({ settings, onSaved }: FormProps) {
+function MailHostForm({ settings, onSaved, onDone }: DialogFormProps) {
   const [draft, setDraft] = useState(settings.mail_host)
   const [error, setError] = useState<string | null>(null)
-
-  if (settings.mail_host_locked) return <LockedField label={HOST_LABEL} value={settings.mail_host} />
 
   async function save() {
     const host = normalizeDomain(draft)
@@ -54,7 +55,10 @@ function MailHostForm({ settings, onSaved }: FormProps) {
       setError(problem)
       return
     }
-    if (host === settings.mail_host) return
+    if (host === settings.mail_host) {
+      onDone()
+      return
+    }
     if (settings.mail_host) {
       const yes = await confirm({
         title: host ? `Rename the mail server to ${host}?` : 'Remove the name of the mail server?',
@@ -71,42 +75,42 @@ function MailHostForm({ settings, onSaved }: FormProps) {
       setDraft(result.settings.mail_host)
       onSaved(result.settings)
       announceSaved(result, host ? `The mail server is now called ${host}.` : 'Removed the name of the mail server.')
+      onDone()
     } catch (caught) {
       setError(errorMessage(caught))
     }
   }
 
   return (
-    <form className="inline-form" onSubmit={(event: FormEvent) => event.preventDefault()} noValidate>
+    <form className="form" onSubmit={(event: FormEvent) => event.preventDefault()} noValidate>
       <Field invalid={error ? true : undefined}>
         <FieldLabel>{HOST_LABEL}</FieldLabel>
-        <div className="inline-control">
-          <Input
-            value={draft}
-            placeholder="mail.example.com"
-            autoComplete="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            onValueChange={(value) => {
-              setDraft(value)
-              setError(null)
-            }}
-          />
-          <Button type="submit" pendingAnnouncement="Saving" onClick={save}>
-            Save name
-          </Button>
-        </div>
-        <FieldDescription>
-          Mail programs connect to this name, and the mail records of your domains point to it. Use a name of its own,
-          like mail.example.com, that points to this server.
-        </FieldDescription>
+        <Input
+          value={draft}
+          placeholder="mail.example.com"
+          autoComplete="off"
+          autoCapitalize="none"
+          spellCheck={false}
+          autoFocus
+          onValueChange={(value) => {
+            setDraft(value)
+            setError(null)
+          }}
+        />
+        <FieldDescription>Use a name of its own, like mail.example.com, that points to this server.</FieldDescription>
         {error ? <FieldError match>{error}</FieldError> : null}
       </Field>
+      <div className="form-actions">
+        <DialogClose>Cancel</DialogClose>
+        <Button type="submit" data-variant="solid" pendingAnnouncement="Saving" onClick={save}>
+          Save name
+        </Button>
+      </div>
     </form>
   )
 }
 
-function PostmasterForm({ settings, onSaved }: FormProps) {
+function PostmasterForm({ settings, onSaved, onDone }: DialogFormProps) {
   const [draft, setDraft] = useState(settings.postmaster_address)
   const [error, setError] = useState<string | null>(null)
 
@@ -117,47 +121,50 @@ function PostmasterForm({ settings, onSaved }: FormProps) {
       setError(problem)
       return
     }
-    if (address === settings.postmaster_address) return
+    if (address === settings.postmaster_address) {
+      onDone()
+      return
+    }
     try {
       const result = await saveSettings({ postmaster_address: address })
       setDraft(result.settings.postmaster_address)
       onSaved(result.settings)
       announceSaved(result, address ? `Reports about mail problems go to ${address}.` : 'Removed the postmaster address.')
+      onDone()
     } catch (caught) {
       setError(errorMessage(caught))
     }
   }
 
   return (
-    <form className="inline-form" onSubmit={(event: FormEvent) => event.preventDefault()} noValidate>
+    <form className="form" onSubmit={(event: FormEvent) => event.preventDefault()} noValidate>
       <Field invalid={error ? true : undefined}>
         <FieldLabel>Postmaster address</FieldLabel>
-        <div className="inline-control">
-          <Input
-            type="email"
-            value={draft}
-            placeholder="you@example.com"
-            autoComplete="email"
-            onValueChange={(value) => {
-              setDraft(value)
-              setError(null)
-            }}
-          />
-          <Button type="submit" pendingAnnouncement="Saving" onClick={save}>
-            Save address
-          </Button>
-        </div>
-        <FieldDescription>
-          Receives mail to postmaster@ and abuse@ of the mail server, where other mail servers send reports about
-          problems.
-        </FieldDescription>
+        <Input
+          type="email"
+          value={draft}
+          placeholder="you@example.com"
+          autoComplete="email"
+          autoFocus
+          onValueChange={(value) => {
+            setDraft(value)
+            setError(null)
+          }}
+        />
+        <FieldDescription>Leave it empty to stop forwarding these reports.</FieldDescription>
         {error ? <FieldError match>{error}</FieldError> : null}
       </Field>
+      <div className="form-actions">
+        <DialogClose>Cancel</DialogClose>
+        <Button type="submit" data-variant="solid" pendingAnnouncement="Saving" onClick={save}>
+          Save address
+        </Button>
+      </div>
     </form>
   )
 }
 
-function SpamChecksForm({ settings, onSaved }: FormProps) {
+function SpamChecksForm({ settings, onSaved, onDone }: DialogFormProps) {
   const [draft, setDraft] = useState<SpamDraft>(() => spamDraft(settings))
   const [errors, setErrors] = useState<SpamErrors>({})
   const [formError, setFormError] = useState<string | null>(null)
@@ -176,20 +183,22 @@ function SpamChecksForm({ settings, onSaved }: FormProps) {
       setErrors(problems)
       return
     }
-    if (unchanged) return
+    if (unchanged) {
+      onDone()
+      return
+    }
     try {
       const result = await saveSettings(change)
-      setDraft(spamDraft(result.settings))
       onSaved(result.settings)
       announceSaved(result, 'Saved the spam checks.')
+      onDone()
     } catch (caught) {
       setFormError(errorMessage(caught))
     }
   }
 
   return (
-    <form className="spam-checks" onSubmit={(event: FormEvent) => event.preventDefault()} noValidate>
-      <h3>Spam checks</h3>
+    <form className="form spam-checks" onSubmit={(event: FormEvent) => event.preventDefault()} noValidate>
       <Field>
         <FieldLabel>Lists of known spam senders</FieldLabel>
         <FieldDescription>Mail from servers on these lists is turned away or counts towards Junk.</FieldDescription>
@@ -283,8 +292,9 @@ function SpamChecksForm({ settings, onSaved }: FormProps) {
           <FieldError match>{formError}</FieldError>
         </Field>
       ) : null}
-      <div className="settings-actions">
-        <Button type="submit" pendingAnnouncement="Saving" disabled={unchanged} onClick={save}>
+      <div className="form-actions">
+        <DialogClose>Cancel</DialogClose>
+        <Button type="submit" data-variant="solid" pendingAnnouncement="Saving" onClick={save}>
           Save spam checks
         </Button>
       </div>
@@ -327,6 +337,37 @@ function MailHealthList({ version }: { version: string }) {
   )
 }
 
+type RowProps = {
+  label: string
+  description: string
+  locked?: boolean
+  dialog: { title: string; description: string }
+  children: ReactNode
+  form: (onDone: () => void) => ReactNode
+}
+
+/** One setting: its current value on the page, changed in a dialog. */
+function SettingRow({ label, description, locked, dialog, children, form }: RowProps) {
+  const [open, setOpen] = useState(false)
+  return (
+    <li className="mail-setting">
+      <div className="mail-setting-main">
+        <h3>{label}</h3>
+        <div className="mail-setting-value">{children}</div>
+        <p className="muted">{locked ? `${LOCKED_NOTE}, so it can't be changed here.` : description}</p>
+      </div>
+      {locked ? null : (
+        <Button onClick={() => setOpen(true)}>
+          Change<span className="visually-hidden"> {label.toLowerCase()}</span>
+        </Button>
+      )}
+      <FormDialog open={open} onOpenChange={setOpen} title={dialog.title} description={dialog.description}>
+        {form(() => setOpen(false))}
+      </FormDialog>
+    </li>
+  )
+}
+
 export function MailSection({ settings, onSaved }: FormProps) {
   return (
     <Section
@@ -334,9 +375,39 @@ export function MailSection({ settings, onSaved }: FormProps) {
       description="The mail server that receives and sends the mail of the domains with e-mail turned on."
     >
       <div className="settings-stack">
-        <MailHostForm settings={settings} onSaved={onSaved} />
-        <PostmasterForm settings={settings} onSaved={onSaved} />
-        <SpamChecksForm settings={settings} onSaved={onSaved} />
+        <ul className="mail-settings" aria-label="Mail server settings">
+          <SettingRow
+            label={HOST_LABEL}
+            description="Mail programs connect to this name, and the mail records of your domains point to it."
+            locked={settings.mail_host_locked}
+            dialog={{
+              title: HOST_LABEL,
+              description: 'Mail programs connect to this name, and the mail records of your domains point to it.',
+            }}
+            form={(onDone) => <MailHostForm settings={settings} onSaved={onSaved} onDone={onDone} />}
+          >
+            {settings.mail_host ? <code>{settings.mail_host}</code> : <span>Not set yet. No domain receives mail until it is.</span>}
+          </SettingRow>
+          <SettingRow
+            label="Postmaster address"
+            description="Other mail servers send reports about problems to postmaster@ and abuse@; they go on to this address."
+            dialog={{
+              title: 'Postmaster address',
+              description: 'Receives mail to postmaster@ and abuse@ of the mail server, where other mail servers report problems.',
+            }}
+            form={(onDone) => <PostmasterForm settings={settings} onSaved={onSaved} onDone={onDone} />}
+          >
+            {settings.postmaster_address ? <span>{settings.postmaster_address}</span> : <span>Not set</span>}
+          </SettingRow>
+          <SettingRow
+            label="Spam checks"
+            description="How incoming mail is checked before it reaches a mailbox."
+            dialog={{ title: 'Spam checks', description: 'How incoming mail is checked before it reaches a mailbox.' }}
+            form={(onDone) => <SpamChecksForm settings={settings} onSaved={onSaved} onDone={onDone} />}
+          >
+            <span>{spamSummary(settings)}</span>
+          </SettingRow>
+        </ul>
         <MailHealthList
           version={`${settings.mail_host}|${settings.postmaster_address}|${settings.mail_blocklists.join(',')}`}
         />

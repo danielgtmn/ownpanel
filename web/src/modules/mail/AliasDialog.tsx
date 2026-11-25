@@ -1,7 +1,7 @@
 import { Button } from '@ui-sdk/react/button'
 import { DialogClose } from '@ui-sdk/react/dialog'
 import { Field, FieldDescription, FieldError, FieldLabel } from '@ui-sdk/react/field'
-import { Input } from '@ui-sdk/react/input'
+import { Input, InputGroup } from '@ui-sdk/react/input'
 import { Radio, RadioGroup, RadioIndicator } from '@ui-sdk/react/radio'
 import { Textarea } from '@ui-sdk/react/textarea'
 import { useState, type FormEvent } from 'react'
@@ -86,7 +86,7 @@ function AliasForm({
       {scope === 'one' ? (
         <Field name="local_part" invalid={errors.local ? true : undefined}>
           <FieldLabel>Address</FieldLabel>
-          <div className="mail-address-input">
+          <InputGroup className="address-input">
             <Input
               value={local}
               placeholder="sales"
@@ -98,10 +98,10 @@ function AliasForm({
                 setErrors((current) => ({ ...current, local: undefined, form: undefined }))
               }}
             />
-            <span className="mail-address-domain" aria-hidden="true">
+            <span className="address-suffix" aria-hidden="true">
               @{domain}
             </span>
-          </div>
+          </InputGroup>
           {errors.local ? <FieldError match>{errors.local}</FieldError> : null}
         </Field>
       ) : null}

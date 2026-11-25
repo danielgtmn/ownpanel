@@ -43,7 +43,7 @@ import {
 import { CreateMailboxDialog, MailboxLimitsDialog, MailboxPasswordDialog } from './MailboxDialogs.tsx'
 import { RecordsSection } from './RecordsSection.tsx'
 import { aliasTitle, clientRows, domainState, sendLimitsText, sortAliases, usageShare, usageText } from './rules.ts'
-import type { LimitsChange, MailAlias, MailDomain, Mailbox } from './types.ts'
+import type { LimitsChange, MailAlias, MailDomain, Mailbox, MailStatus } from './types.ts'
 
 // A change that is saved but not yet passed on to the mail server is not a failure for the person.
 async function saved(run: () => Promise<unknown>, success: string) {
@@ -69,10 +69,12 @@ async function tryTo(run: () => Promise<void>) {
 function StatusSection({
   mail,
   isAdmin,
+  serverNamed,
   onChecked,
 }: {
   mail: MailDomain
   isAdmin: boolean
+  serverNamed: boolean
   onChecked: (next: MailDomain) => void
 }) {
   const state = domainState(mail)
@@ -103,7 +105,7 @@ function StatusSection({
     >
       <div className="mail-waiting">
         <p>{state.sentence}</p>
-        {mail.problem ? <p className="notice">{mail.problem}</p> : null}
+        {mail.problem && serverNamed ? <p className="notice">{mail.problem}</p> : null}
         {mail.checked_at ? <p className="muted">Last checked {formatDateTime(mail.checked_at)}.</p> : null}
         {isAdmin ? (
           <p className="muted">
@@ -254,7 +256,7 @@ function MailboxesSection({ domain, onChange }: { domain: string; onChange: () =
         <ErrorState title="Couldn't load the mailboxes" message={errorMessage(mailboxes.error)} onRetry={mailboxes.retry} />
       ) : null}
       {mailboxes.status === 'ready' && list.length === 0 ? (
-        <EmptyState title="No mailboxes yet" description={`Create one, like info@${domain}.`} action={addButton} />
+        <EmptyState inSection title="No mailboxes yet" description={`Create one, like info@${domain}.`} action={addButton} />
       ) : null}
       {list.length > 0 ? (
         <ul className="record-list" aria-label={`Mailboxes on ${domain}`}>
@@ -327,6 +329,7 @@ function AliasesSection({ domain, onChange }: { domain: string; onChange: () => 
       ) : null}
       {aliases.status === 'ready' && list.length === 0 ? (
         <EmptyState
+          inSection
           title="No forwarding yet"
           description={`Pass mail to sales@${domain} or to every unknown address on to a mailbox.`}
           action={addButton}
@@ -366,17 +369,8 @@ function AliasesSection({ domain, onChange }: { domain: string; onChange: () => 
 
 // ---- settings for mail programs ----
 
-function ClientSection() {
-  const status = useResource(getMailStatus, 'mail-status')
-  if (status.status !== 'ready') return null
-  const data = status.data
-  if (!data.client.server) {
-    return (
-      <Section title="Settings for mail programs">
-        <p className="notice">The name of the mail server is not set yet; an administrator sets it in the settings.</p>
-      </Section>
-    )
-  }
+function ClientSection({ data }: { data: MailStatus }) {
+  if (!data.client.server) return null
   return (
     <Section
       title="Settings for mail programs"
@@ -498,6 +492,7 @@ function DangerSection({ mail }: { mail: MailDomain }) {
 export function MailDomainPage({ domain }: { domain: string }) {
   const { isAdmin } = useSession()
   const resource = useResource(() => getMailDomain(domain), `mail-domain:${domain}`)
+  const status = useResource(getMailStatus, 'mail-status')
   const [checked, setChecked] = useState<MailDomain | null>(null)
   usePageTitle(`E-mail of ${domain}`)
 
@@ -523,6 +518,8 @@ export function MailDomainPage({ domain }: { domain: string }) {
   }
 
   const mail = checked && checked.domain === resource.data.domain && !resource.data.active ? checked : resource.data
+  // Until the status is known, assume the server has a name rather than flashing a warning.
+  const serverNamed = status.status !== 'ready' || Boolean(status.data.client.server)
   const state = domainState(mail)
   const reload = () => {
     setChecked(null)
@@ -537,9 +534,19 @@ export function MailDomainPage({ domain }: { domain: string }) {
         description="E-mail: mailboxes and forwarding for addresses on this domain."
         meta={<StatusBadge tone={state.tone}>{state.label}</StatusBadge>}
       />
+      {serverNamed ? null : (
+        <div className="notice mail-unnamed" role="status">
+          <p>
+            E-mail can't work yet: the mail server has no name.{' '}
+            {isAdmin ? 'Set one in the settings.' : 'An administrator sets it in the settings.'}
+          </p>
+          {isAdmin ? <a href={hrefFor('settings')}>Open settings</a> : null}
+        </div>
+      )}
       <StatusSection
         mail={mail}
         isAdmin={isAdmin}
+        serverNamed={serverNamed}
         onChecked={(next) => {
           if (next.active) reload()
           else setChecked(next)
@@ -547,8 +554,8 @@ export function MailDomainPage({ domain }: { domain: string }) {
       />
       <MailboxesSection domain={mail.domain} onChange={reload} />
       <AliasesSection domain={mail.domain} onChange={reload} />
-      <RecordsSection domain={mail.domain} onApplied={reload} />
-      <ClientSection />
+      {serverNamed ? <RecordsSection domain={mail.domain} onApplied={reload} /> : null}
+      {status.status === 'ready' ? <ClientSection data={status.data} /> : null}
       <DangerSection mail={mail} />
     </>
   )
