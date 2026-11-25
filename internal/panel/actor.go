@@ -25,8 +25,8 @@ type Actor struct {
 
 	sessionID  string // hash of the session, to keep it on password change
 	authUserID string // the sign-in user (sessions only)
-	tokenName string // for the activity log
-	tokenHash string // to re-check the token later (upload links)
+	tokenName  string // for the activity log
+	tokenHash  string // to re-check the token later (upload links)
 }
 
 // System is the panel itself, e.g. the background reconcile loop.
