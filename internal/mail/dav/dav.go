@@ -481,4 +481,3 @@ func (h *Handler) fail(w http.ResponseWriter, err error) {
 	h.log.Error("mail: calendar or contacts request failed", "err", err)
 	http.Error(w, "Something went wrong on the server. Try again in a moment.", http.StatusInternalServerError)
 }
-
