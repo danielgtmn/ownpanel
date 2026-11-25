@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -458,15 +459,24 @@ func (d *Deliverer) compile(src string) (*sieve.Script, error) {
 }
 
 // store appends the copies; the first error ends it.
+//
+// In a shared mailbox (G3) every reader has their own read state, kept
+// apart from the message's flags; a filter's \Seen would be nobody's and
+// would only show up if the mailbox became personal again. It is left out
+// there: a new message is unread for everyone. Other flags stay.
 func (d *Deliverer) store(ctx context.Context, m *Message, box *config.Mailbox, stores []store) error {
 	for _, s := range stores {
 		msg, err := m.Open()
 		if err != nil {
 			return err
 		}
+		flags := validFlags(s.flags)
+		if box.Shared() {
+			flags = slices.DeleteFunc(flags, func(f string) bool { return f == storage.FlagSeen })
+		}
 		rp := "Return-Path: <" + sanitize(m.EnvelopeFrom) + ">\r\n"
 		_, err = d.opts.Store.Append(ctx, box.StorageID, s.folder, io.MultiReader(strings.NewReader(rp), msg),
-			storage.AppendOptions{Flags: validFlags(s.flags)})
+			storage.AppendOptions{Flags: flags})
 		if err != nil {
 			return err
 		}
