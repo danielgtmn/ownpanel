@@ -64,6 +64,20 @@ export function validateSpamDraft(draft: SpamDraft): SpamErrors {
   return errors
 }
 
+/** The spam checks in one sentence, for the settings page. */
+export function spamSummary(settings: PanelSettings): string {
+  const draft = spamDraft(settings)
+  const lists =
+    draft.mode === 'default'
+      ? 'Checks the recommended list of spam senders'
+      : draft.mode === 'off'
+        ? "Doesn't check lists of spam senders"
+        : `Checks ${settings.mail_blocklists.length === 1 ? '1 own list' : `${settings.mail_blocklists.length} own lists`} of spam senders`
+  const score = `Junk from ${settings.mail_junk_score} points`
+  const hold = draft.greylisting ? 'first mail from unknown servers is held back' : 'first mail from unknown servers is not held back'
+  return `${lists}. ${score}; ${hold}.`
+}
+
 // Only what differs from the saved settings is sent.
 export function spamChange(draft: SpamDraft, settings: PanelSettings): SettingsChange {
   const saved = spamDraft(settings)
