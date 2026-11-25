@@ -240,8 +240,13 @@ type githubRelease struct {
 	Draft       bool      `json:"draft"`
 	Prerelease  bool      `json:"prerelease"`
 	PublishedAt time.Time `json:"published_at"`
-	HTMLURL     string    `json:"html_url"`
-	Assets      []struct {
+	// CreatedAt is the date of the release's commit (GitHub's definition).
+	// The nightly is one release that every build replaces: its
+	// published_at stays at the first publication, created_at moves with
+	// each build.
+	CreatedAt time.Time `json:"created_at"`
+	HTMLURL   string    `json:"html_url"`
+	Assets    []struct {
 		Name string `json:"name"`
 	} `json:"assets"`
 }
@@ -336,8 +341,9 @@ func pickReleases(list []githubRelease, arch string) (AvailableReleases, map[str
 			if v == "" || !complete(r, v) {
 				continue
 			}
-			dates[v] = r.PublishedAt
-			out.Nightly = &AvailableRelease{Version: v, PublishedAt: r.PublishedAt, NotesURL: r.HTMLURL}
+			built := nightlyBuilt(r)
+			dates[v] = built
+			out.Nightly = &AvailableRelease{Version: v, PublishedAt: built, NotesURL: r.HTMLURL}
 			continue
 		}
 		if r.Prerelease || !stableVersionRe.MatchString(r.TagName) {
@@ -352,6 +358,21 @@ func pickReleases(list []githubRelease, arch string) (AvailableReleases, map[str
 		}
 	}
 	return out, dates, nil
+}
+
+// nightlyBuilt is when the current nightly build was made: created_at, as
+// published_at is still the day the rolling release first appeared. Without
+// created_at, the day in the build's name, else published_at.
+func nightlyBuilt(r githubRelease) time.Time {
+	if !r.CreatedAt.IsZero() {
+		return r.CreatedAt
+	}
+	if m := nightlyVersionRe.FindStringSubmatch(nightlyInTitleRe.FindString(r.Name)); m != nil {
+		if t, err := time.Parse("20060102", m[1]); err == nil {
+			return t
+		}
+	}
+	return r.PublishedAt
 }
 
 // compareStable compares two stable versions like v1.2.3.
@@ -632,7 +653,13 @@ func (s *Service) RequestUpdate(ctx context.Context, a Actor, r UpdateRequest) (
 		return UpdateInfo{}, errorf(Conflict, "an update is already under way")
 	}
 	installedChannel := u.installedChannel()
-	latest, dates, err := u.releases(ctx, now)
+	// A channel request installs whatever is newest when the updater runs;
+	// look again (unless that was less than a minute ago) so the version
+	// shown, recorded and checked for going back is that one, not one up
+	// to 30 minutes old. The nightly in particular is replaced by every
+	// build.
+	fresh := u.lookup(ctx, now, r.Channel != "")
+	latest, dates, err := fresh.latest, fresh.dates, fresh.err
 	target, channel := r.Version, r.Channel
 	if r.Channel != "" {
 		if err != nil {
