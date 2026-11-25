@@ -228,11 +228,14 @@ colleagues.
   sent only when the mailbox's address (or a forwarding address that
   delivers to it) is in To or Cc, and never to mailing lists, automatic
   messages, bulk mail, the empty sender, `MAILER-DAEMON`, `owner-…`,
-  `…-request`, `LISTSERV`, its own address, mail judged as spam or mail
-  whose sender could not be confirmed (failed SPF, DKIM or DMARC). Replies
-  are signed for the domain and count against the mailbox's sending limit;
-  when the limit is reached, no reply is sent (the mailbox is not blocked
-  for it).
+  `…-request`, `LISTSERV`, its own address, or mail judged as spam. It
+  goes only to senders whose address is confirmed: SPF passed for the
+  sender's domain, or a DKIM signature of that domain passed (mail between
+  mailboxes of this server always counts). Senders of domains without SPF
+  or DKIM get no reply, so forged senders never receive one. Replies are
+  signed for the domain and count against the mailbox's sending limit;
+  when the limit is reached, or sending is blocked for the mailbox, no
+  reply is sent (the mailbox is not blocked for it).
 - **Forwarding:** every message also (or only) goes to another address.
 - **Filters:** rules of conditions (from, to or cc, subject, mailing list;
   contains or is; all or any of them) and actions (move to a folder, mark
@@ -242,11 +245,17 @@ colleagues.
 Mail judged as spam still lands in **Junk** unless a filter moves it
 somewhere else; it is never forwarded and never answered. A filter that
 fails, or a folder that no longer exists, keeps the message in the inbox:
-filters never lose mail.
+filters never lose mail. Forwards and replies leave only once every
+mailbox the message is for has stored it, so a message the sender has to
+send again is never forwarded twice. If a mailbox of this server that a
+filter forwards to cannot store the message, the whole message is refused
+for now and the sending server tries again.
 
 Forwarding by filters follows the same rules as forwarding addresses
-(rewritten return address, the domain's hourly limit) and in addition: at
-most 5 addresses per message, never to the mailbox's own addresses, and not
+(rewritten return address, the domain's hourly limit) and in addition:
+they count against the mailbox's own hourly and daily limits, nothing is
+forwarded while sending is blocked for the mailbox, at most 5 addresses per
+message, never to the mailbox's own addresses, and not
 for mail that this mailbox already forwarded once (two mailboxes that
 forward to each other stop after one round). The panel records an activity
 entry when a message was not forwarded and says why.

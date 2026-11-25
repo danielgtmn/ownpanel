@@ -9,6 +9,7 @@ import (
 	"io"
 	"mime"
 	"net/mail"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -80,12 +81,14 @@ type Env struct {
 	// FolderExists tells whether a folder exists (mailboxexists); nil:
 	// none does.
 	FolderExists func(name string) bool
-	// Duplicate tells whether id was seen within period and records it
-	// (unless last and it was seen: then the time is moved). nil: never.
-	Duplicate func(id string, period time.Duration, last bool) bool
+	// Duplicate tells whether id was seen and is still remembered; it must
+	// not record anything (the caller records Result.Duplicates once the
+	// message is stored, RFC 7352). nil: never.
+	Duplicate func(id string) bool
 	// Include returns another script of the mailbox by name; ok false when
-	// there is none.
-	Include func(name string) (s *Script, ok bool, err error)
+	// there is none. ctx is the run's (it ends with the run's time limit);
+	// each name is asked for at most once per run.
+	Include func(ctx context.Context, name string) (s *Script, ok bool, err error)
 	// CharsetReader decodes header words in other charsets than UTF-8
 	// and US-ASCII; nil leaves them encoded.
 	CharsetReader func(charset string, input io.Reader) (io.Reader, error)
@@ -138,9 +141,20 @@ type Vacation struct {
 	Reason    string
 }
 
+// DuplicateMark is an id the duplicate test looked at: the caller records
+// it once the message was delivered, for Period; Last moves the time of an
+// id seen before (RFC 7352 :last).
+type DuplicateMark struct {
+	ID     string
+	Period time.Duration
+	Last   bool
+}
+
 // Result is the outcome of a run.
 type Result struct {
 	Actions []Action
+	// Duplicates are to be recorded once the message is stored.
+	Duplicates []DuplicateMark
 	// ImplicitKeep: no action cancelled the implicit keep; it stores the
 	// message with KeepFlags (when HasFlags).
 	ImplicitKeep bool
@@ -168,6 +182,7 @@ func (s *Script) Run(ctx context.Context, env *Env) (*Result, error) {
 		included: map[string]bool{},
 		res:      &Result{ImplicitKeep: true},
 		regexes:  map[string]*regexCache{},
+		includes: map[string]includeResult{},
 	}
 	if r.max <= 0 {
 		r.max = DefaultMaxSteps
@@ -198,9 +213,16 @@ type scope struct {
 	global map[string]bool // names declared global in this script
 }
 
-type regexCache struct {
-	re  *compiledRegex
+type includeResult struct {
+	s   *Script
+	ok  bool
 	err error
+}
+
+type regexCache struct {
+	re    *regexp.Regexp
+	insts int
+	err   error
 }
 
 type runner struct {
@@ -221,6 +243,7 @@ type runner struct {
 	flagsUsed bool
 	res       *Result
 	regexes   map[string]*regexCache
+	includes  map[string]includeResult
 }
 
 func (r *runner) step(n int) error {
@@ -404,7 +427,12 @@ func (r *runner) include(sc *scope, c *cmdInclude) error {
 		}
 		return r.fail(c, "script %q not found", name)
 	}
-	s, ok, err := r.env.Include(name)
+	inc, cached := r.includes[name]
+	if !cached {
+		inc.s, inc.ok, inc.err = r.env.Include(r.ctx, name)
+		r.includes[name] = inc
+	}
+	s, ok, err := inc.s, inc.ok, inc.err
 	if err != nil {
 		return r.fail(c, "script %q: %v", name, err)
 	}
@@ -740,7 +768,11 @@ func (r *runner) duplicate(sc *scope, t *testDuplicate) bool {
 	}
 	period = min(period, MaxDuplicatePeriod)
 	h := sha256.Sum256([]byte(r.expand(sc, t.handle) + "\x00" + t.header + "\x00" + id))
-	return r.env.Duplicate(hex.EncodeToString(h[:16]), period, t.last)
+	key := hex.EncodeToString(h[:16])
+	if len(r.res.Duplicates) < maxActions {
+		r.res.Duplicates = append(r.res.Duplicates, DuplicateMark{ID: key, Period: period, Last: t.last})
+	}
+	return r.env.Duplicate(key)
 }
 
 // parseAddresses splits a header value into addresses (local@domain).

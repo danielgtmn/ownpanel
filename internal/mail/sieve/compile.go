@@ -1,7 +1,6 @@
 package sieve
 
 import (
-	"regexp"
 	"slices"
 	"strings"
 )
@@ -439,8 +438,8 @@ func (c *compiler) checkKeys(line int, m matcher, keys []string) error {
 			if c.exts["variables"] && strings.Contains(k, "${") {
 				continue
 			}
-			if _, err := regexp.Compile(k); err != nil {
-				return errorAt(line, "regular expression %q is not valid", k)
+			if _, _, err := compileRegex(k); err != nil {
+				return errorAt(line, "%s", err.(*Error).Msg)
 			}
 		}
 	}

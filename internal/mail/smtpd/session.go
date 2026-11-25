@@ -428,12 +428,12 @@ func (ss *session) Data(r io.Reader) error {
 	prefix.WriteString(v.score.Header())
 	host := ss.dir.Hostname()
 	for _, fl := range fields {
-		if strings.EqualFold(fl.name, filter.ScoreHeaderName) ||
-			strings.EqualFold(fl.name, "Authentication-Results") && auth.AuthServID(fl.value()) == host {
+		if strings.EqualFold(fl.Name, filter.ScoreHeaderName) ||
+			strings.EqualFold(fl.Name, "Authentication-Results") && auth.AuthServID(fl.Value()) == host {
 			continue
 		}
-		prefix.Write(fl.raw)
-		if !bytes.HasSuffix(fl.raw, []byte("\n")) {
+		prefix.Write(fl.Raw)
+		if !bytes.HasSuffix(fl.Raw, []byte("\n")) {
 			prefix.WriteString("\r\n")
 		}
 	}
@@ -475,10 +475,25 @@ func (ss *session) Data(r io.Reader) error {
 
 	dm := ss.deliverMessage(v, size, func() (io.Reader, error) { return message("") })
 	delivered, full, failed := 0, 0, 0
+	// Every mailbox stores first; what leaves the server (forwards and
+	// replies of filters) follows only once the message is accepted, so a
+	// retry after a failure never repeats it.
+	var pending []*deliver.Pending
+	accepted := false
+	defer func() {
+		for _, p := range pending {
+			if accepted {
+				p.Finish(ctx)
+			} else {
+				p.Abort(ctx)
+			}
+		}
+	}()
 	for _, m := range ss.boxes {
-		err := ss.s.opts.Deliver.Deliver(ctx, dm, deliver.Recipient{Mailbox: m, Rcpt: ss.rcptOf[m.StorageID]})
+		p, err := ss.s.opts.Deliver.Store(ctx, dm, deliver.Recipient{Mailbox: m, Rcpt: ss.rcptOf[m.StorageID]})
 		switch {
 		case err == nil:
+			pending = append(pending, p)
 			delivered++
 		case errors.Is(err, storage.ErrOverQuota):
 			full++
@@ -537,6 +552,7 @@ func (ss *session) Data(r io.Reader) error {
 	if delivered == 0 && queued == 0 && len(ss.boxes) > 0 && full == len(ss.boxes) {
 		return errMailboxFull
 	}
+	accepted = true
 	for _, e := range ss.notes {
 		if err := store.AddEvent(ctx, e); err != nil {
 			ss.s.log.Error("smtp: record event", "err", err)
@@ -681,7 +697,8 @@ func sameOrg(a, b string) bool {
 // whether filters may forward it or reply to it.
 func (ss *session) deliverMessage(v verdict, size int64, open func() (io.Reader, error)) *deliver.Message {
 	dm := &deliver.Message{Dir: ss.dir, Open: open, Size: size, EnvelopeFrom: ss.from, Junk: v.junk}
-	if _, d, ok := config.SplitAddress(directory.Normalize(ss.from)); ok && ss.ours(d) && ss.spfPassFor(d) {
+	_, fromDomain, hasDomain := config.SplitAddress(directory.Normalize(ss.from))
+	if hasDomain && ss.ours(fromDomain) && ss.spfPassFor(fromDomain) {
 		dm.SenderVerified = true
 	}
 	for _, r := range v.dmarc {
@@ -693,6 +710,16 @@ func (ss *session) deliverMessage(v verdict, size int64, open func() (io.Reader,
 		dkimFail = dkimFail || d.Result == auth.Fail || d.Result == auth.PermError
 	}
 	dm.AuthFail = v.spf.Result == auth.Fail || dkimFail && !dkimPass
+	// Confirmed sender: SPF passed for the envelope sender's domain, or a
+	// DKIM signature of the same organisational domain passed.
+	if hasDomain {
+		dm.SenderAuthenticated = ss.spfPassFor(fromDomain)
+		for _, d := range v.dkim {
+			if d.Result == auth.Pass && sameOrg(d.Domain, fromDomain) {
+				dm.SenderAuthenticated = true
+			}
+		}
+	}
 	dm.SpamTest, dm.SpamPercent = deliver.SpamValues(v.score.Points, ss.dir.Config().Filter.WithDefaults().JunkScore, v.junk)
 	return dm
 }

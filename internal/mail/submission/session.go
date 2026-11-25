@@ -307,11 +307,26 @@ func (ss *session) Data(r io.Reader) error {
 	// Mail between mailboxes runs the recipients' filters (and
 	// out-of-office replies) like mail from outside; it comes from a
 	// signed-in mailbox, so it passed every check.
-	dm := &deliver.Message{Dir: ss.dir, Open: message, Size: ss.size(f, prefix, sig), EnvelopeFrom: ss.from, SenderVerified: true}
+	dm := &deliver.Message{Dir: ss.dir, Open: message, Size: ss.size(f, prefix, sig), EnvelopeFrom: ss.from,
+		SenderVerified: true, SenderAuthenticated: true}
+	// Every mailbox stores first; forwards and replies of filters follow
+	// only once the message is accepted.
+	var pending []*deliver.Pending
+	accepted := false
+	defer func() {
+		for _, p := range pending {
+			if accepted {
+				p.Finish(ctx)
+			} else {
+				p.Abort(ctx)
+			}
+		}
+	}()
 	for _, m := range ss.local {
-		err := ss.s.opts.Deliver.Deliver(ctx, dm, deliver.Recipient{Mailbox: m, Rcpt: ss.rcptOf[m.StorageID]})
+		p, err := ss.s.opts.Deliver.Store(ctx, dm, deliver.Recipient{Mailbox: m, Rcpt: ss.rcptOf[m.StorageID]})
 		switch {
 		case err == nil:
+			pending = append(pending, p)
 		case errors.Is(err, storage.ErrOverQuota):
 			full = append(full, queue.Failure{Recipient: m.Address, Status: "5.2.2", Diagnostic: "552 5.2.2 the mailbox of the recipient is full"})
 		default:
@@ -338,6 +353,7 @@ func (ss *session) Data(r io.Reader) error {
 	if len(full) > 0 {
 		ss.s.opts.Queue.Bounce(ctx, ss.from, ss.box.StorageID, rawHeader, full)
 	}
+	accepted = true
 	ss.s.log.Info("submission: message accepted", "storage_id", ss.box.StorageID,
 		"local", len(ss.local)-len(full), "external", len(ss.external), "signed", sig != "")
 	return nil

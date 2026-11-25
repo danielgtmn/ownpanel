@@ -120,6 +120,11 @@ type Message struct {
 	Junk      bool
 	DMARCFail bool
 	AuthFail  bool
+	// SenderAuthenticated: the envelope sender is confirmed (SPF passed
+	// for its domain, a DKIM signature of its domain passed, or it is a
+	// mailbox here that signed in). Out-of-office replies go only to such
+	// senders, so forged senders get no backscatter.
+	SenderAuthenticated bool
 	// SpamTest and SpamPercent are the spamtest values (SpamValues).
 	SpamTest    string
 	SpamPercent string
@@ -163,15 +168,58 @@ type store struct {
 	flags  []string
 }
 
-// Deliver stores the message for one mailbox after running its filters.
-// It returns storage.ErrOverQuota when the mailbox is full and other
-// errors when it could not store; side effects (forwards, replies) happen
-// only once the message is stored.
+// Pending is a delivery whose copies are stored. Finish then does what
+// leaves the mailbox (forwards outside, out-of-office replies, recording
+// duplicate ids); Abort takes back what was reserved for it when the
+// message is refused after all (another mailbox could not store it and
+// the sender will try again). Exactly one of them must be called.
+type Pending struct {
+	d   *Deliverer
+	m   *Message
+	r   Recipient
+	vac *sieve.Vacation
+	// dups are recorded once the message is delivered (RFC 7352).
+	dups []sieve.DuplicateMark
+	// external targets of forwards, counted against the limits in res.
+	external []string
+	res      *reservation
+	prefix   []byte
+	// stored: a copy was stored here or at a local forward target, so a
+	// forward outside that fails loses nothing.
+	stored     bool
+	keepFolder string
+	nested     []*Pending
+	done       bool
+}
+
+// reservation is one message counted against sending limits at a time.
+type reservation struct {
+	limits []storage.SendLimit
+	at     time.Time
+}
+
+// Deliver stores the message for one mailbox (Store) and then carries out
+// the rest (Finish). Callers that deliver to several mailboxes use Store
+// for all of them first.
 func (d *Deliverer) Deliver(ctx context.Context, m *Message, r Recipient) error {
+	p, err := d.Store(ctx, m, r)
+	if err != nil {
+		return err
+	}
+	p.Finish(ctx)
+	return nil
+}
+
+// Store runs the mailbox's filters and stores the copies they ask for,
+// also in local mailboxes the message is forwarded to. It returns
+// storage.ErrOverQuota when the mailbox is full and other errors when
+// something could not be stored; then nothing has left the server and
+// nothing stays reserved.
+func (d *Deliverer) Store(ctx context.Context, m *Message, r Recipient) (*Pending, error) {
 	box := r.Mailbox
-	keepFolder := storage.Inbox
+	p := &Pending{d: d, m: m, r: r, keepFolder: storage.Inbox}
 	if m.Junk {
-		keepFolder = d.junkFolder(ctx, box.StorageID)
+		p.keepFolder = d.junkFolder(ctx, box.StorageID)
 	}
 	res := d.run(ctx, m, r)
 	var stores []store
@@ -185,51 +233,135 @@ func (d *Deliverer) Deliver(ctx context.Context, m *Message, r Recipient) error 
 		stores = append(stores, store{folder: folder, flags: flags})
 	}
 	if res == nil {
-		add(keepFolder, nil)
-		return d.store(ctx, m, box, stores)
+		add(p.keepFolder, nil)
+		if err := d.store(ctx, m, box, stores); err != nil {
+			return nil, err
+		}
+		p.stored = true
+		return p, nil
 	}
+	p.dups = res.Duplicates
 	keep := res.ImplicitKeep
 	var redirects []string
-	var vac *sieve.Vacation
 	for _, a := range res.Actions {
 		switch a.Kind {
 		case sieve.ActKeep:
-			add(keepFolder, a.Flags)
+			add(p.keepFolder, a.Flags)
 		case sieve.ActFileinto:
 			folder, ok := d.folder(ctx, box.StorageID, a.Folder, a.Create)
 			if !ok {
-				folder = keepFolder
+				folder = p.keepFolder
 			}
 			add(folder, a.Flags)
 		case sieve.ActRedirect:
 			redirects = append(redirects, a.Address)
 		case sieve.ActVacation:
-			vac = a.Vacation
+			p.vac = a.Vacation
 		}
 	}
 	// Forwards that may not happen keep the message instead.
-	allowed, refused := d.checkRedirects(m, box, redirects)
+	allowed, refused := d.checkRedirects(ctx, m, box, redirects)
+	local, external, refusedLocal := d.splitTargets(m, box, allowed)
+	refused = refused || refusedLocal
+	if len(external) > 0 {
+		if res, ok := d.reserveForward(ctx, m, box, external); ok {
+			p.external, p.res = external, res
+		} else {
+			refused = true
+		}
+	}
 	if refused && !res.ImplicitKeep && len(stores) == 0 && !hasDiscard(res) {
 		keep = true
 	}
 	if keep {
-		add(keepFolder, res.KeepFlags)
+		add(p.keepFolder, res.KeepFlags)
 	}
 	if err := d.store(ctx, m, box, stores); err != nil {
-		return err
+		p.Abort(ctx)
+		return nil, err
 	}
-	if len(allowed) > 0 {
-		if !d.forward(ctx, m, box, allowed) && len(stores) == 0 {
-			// Could not forward and nothing kept: keep it after all.
-			if err := d.store(ctx, m, box, []store{{folder: keepFolder}}); err != nil {
-				return err
+	p.stored = len(stores) > 0
+	if len(local) > 0 {
+		p.prefix = forwardPrefix(m.Dir, box)
+		nm := withPrefix(m, p.prefix)
+		for _, lr := range local {
+			np, err := d.Store(ctx, nm, lr)
+			switch {
+			case err == nil:
+				p.nested = append(p.nested, np)
+				p.stored = true
+			case errors.Is(err, storage.ErrOverQuota):
+				d.opts.Event(config.Event{Kind: config.EventBounced, StorageID: lr.Mailbox.StorageID, Address: lr.Mailbox.Address,
+					Detail: fmt.Sprintf("a message forwarded by a filter of %s was not stored: the mailbox is full", box.Address)})
+			default:
+				// The sender tries again; nothing went out yet.
+				p.Abort(ctx)
+				return nil, err
 			}
 		}
 	}
-	if vac != nil {
-		d.vacation(ctx, m, r, vac)
+	if !p.stored && len(p.external) == 0 && !hasDiscard(res) && (len(redirects) > 0 || keep) {
+		// Every target refused or full: keep it here after all.
+		if err := d.store(ctx, m, box, []store{{folder: p.keepFolder}}); err != nil {
+			p.Abort(ctx)
+			return nil, err
+		}
+		p.stored = true
 	}
-	return nil
+	return p, nil
+}
+
+// Finish does what leaves the mailbox once every copy is stored.
+func (p *Pending) Finish(ctx context.Context) {
+	if p == nil || p.done {
+		return
+	}
+	p.done = true
+	d, box := p.d, p.r.Mailbox
+	now := d.opts.Now()
+	for _, dm := range p.dups {
+		if _, err := d.opts.Store.SieveDuplicate(ctx, box.StorageID, dm.ID, dm.Period, dm.Last, now); err != nil {
+			d.log.Error("deliver: record duplicate", "storage_id", box.StorageID, "err", err)
+		}
+	}
+	if len(p.external) > 0 {
+		if !d.enqueue(ctx, p.m, box, forwardPrefix(p.m.Dir, box), p.external) {
+			release(ctx, d.opts.Store, p.res, d.log)
+			if !p.stored {
+				// Could not be queued and nothing kept: keep it after all.
+				if err := d.store(ctx, p.m, box, []store{{folder: p.keepFolder}}); err != nil {
+					d.log.Error("deliver: keep a message that could not be forwarded", "storage_id", box.StorageID, "err", err)
+				}
+			}
+		}
+	}
+	if p.vac != nil {
+		d.vacation(ctx, p.m, p.r, p.vac)
+	}
+	for _, np := range p.nested {
+		np.Finish(ctx)
+	}
+}
+
+// Abort takes back what Store reserved.
+func (p *Pending) Abort(ctx context.Context) {
+	if p == nil || p.done {
+		return
+	}
+	p.done = true
+	release(ctx, p.d.opts.Store, p.res, p.d.log)
+	for _, np := range p.nested {
+		np.Abort(ctx)
+	}
+}
+
+func release(ctx context.Context, st *storage.Store, r *reservation, log *slog.Logger) {
+	if r == nil || len(r.limits) == 0 {
+		return
+	}
+	if err := st.ReleaseSend(ctx, r.limits, r.at); err != nil {
+		log.Error("deliver: release send count", "err", err)
+	}
 }
 
 func hasDiscard(res *sieve.Result) bool {
@@ -272,15 +404,17 @@ func (d *Deliverer) run(ctx context.Context, m *Message, r Recipient) *sieve.Res
 			_, ok := d.existingFolder(ctx, id, f)
 			return ok
 		},
-		Duplicate: func(key string, period time.Duration, last bool) bool {
-			seen, err := st.SieveDuplicate(ctx, id, key, period, last, now)
+		// Only a look: the ids are recorded once the message is stored
+		// (Pending.Finish).
+		Duplicate: func(key string) bool {
+			seen, err := st.SieveDuplicateSeen(ctx, id, key, now)
 			if err != nil {
 				d.log.Error("deliver: duplicate", "storage_id", id, "err", err)
 			}
 			return seen
 		},
-		Include: func(n string) (*sieve.Script, bool, error) {
-			src, _, err := st.SieveScript(ctx, id, n)
+		Include: func(rctx context.Context, n string) (*sieve.Script, bool, error) {
+			src, _, err := st.SieveScript(rctx, id, n)
 			if errors.Is(err, storage.ErrNoScript) {
 				return nil, false, nil
 			}
@@ -473,7 +607,7 @@ func withPrefix(m *Message, prefix []byte) *Message {
 			return io.MultiReader(bytes.NewReader(prefix), r), nil
 		},
 		EnvelopeFrom: m.EnvelopeFrom, SenderVerified: m.SenderVerified,
-		Junk: m.Junk, DMARCFail: m.DMARCFail, AuthFail: m.AuthFail,
+		Junk: m.Junk, DMARCFail: m.DMARCFail, AuthFail: m.AuthFail, SenderAuthenticated: m.SenderAuthenticated,
 		SpamTest: m.SpamTest, SpamPercent: m.SpamPercent,
 		depth: m.depth + 1,
 	}

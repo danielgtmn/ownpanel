@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -39,6 +40,8 @@ type env struct {
 	cfg      *config.Config
 	dir      atomic.Pointer[directory.Directory]
 	appToken string
+	// signIns counts what the sending limiter was told.
+	signIns atomic.Int32
 }
 
 func start(t *testing.T) *env {
@@ -72,6 +75,11 @@ func start(t *testing.T) *env {
 		SignIn:    signin.New(signin.Options{}),
 		TLSConfig: &tls.Config{Certificates: []tls.Certificate{kp}},
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		SignedIn: func(_ context.Context, b config.Mailbox, ip netip.Addr) {
+			if b.StorageID == idAlice && ip.IsLoopback() {
+				e.signIns.Add(1)
+			}
+		},
 	})
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -549,4 +557,22 @@ func FuzzParseCommand(f *testing.F) {
 		p = parser{r: bufio.NewReaderSize(bytes.NewReader(data), maxLine)}
 		p.readResponse()
 	})
+}
+
+// Successful sign-ins are counted by network like those of submission, so
+// a mailbox signed in from too many networks is blocked.
+func TestSignInsCounted(t *testing.T) {
+	e := start(t)
+	c := e.dial()
+	c.starttls()
+	if f := c.login(alice, "wrong password"); strings.HasPrefix(f, "OK") {
+		t.Fatal("wrong password accepted")
+	}
+	if n := e.signIns.Load(); n != 0 {
+		t.Fatalf("failed sign-in counted: %d", n)
+	}
+	e.signedIn()
+	if n := e.signIns.Load(); n != 1 {
+		t.Fatalf("sign-ins counted: %d", n)
+	}
 }

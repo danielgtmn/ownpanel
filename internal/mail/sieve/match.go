@@ -1,14 +1,14 @@
 package sieve
 
 import (
+	"fmt"
 	"math/big"
 	"regexp"
+	"regexp/syntax"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 )
-
-type compiledRegex = regexp.Regexp
 
 // match tells whether any value matches any key (for :count: whether the
 // number of values matches any key) and sets the match variables on a
@@ -32,8 +32,21 @@ func (r *runner) match(sc *scope, m matcher, values, keys []string) (bool, error
 	}
 	for _, v := range values {
 		for _, k := range expanded {
-			// Long values cost more.
-			if err := r.step(1 + len(v)/4096); err != nil {
+			// Long values cost more; wildcards and regular expressions see
+			// at most maxPatternInput bytes of a value.
+			cost := 1 + len(v)/4096
+			if m.kind == "regex" || m.kind == "matches" {
+				v = truncateUTF8(v, maxPatternInput)
+			}
+			if m.kind == "regex" {
+				re, err := r.regex(k, m.comparator == "i;ascii-casemap")
+				if err != nil {
+					return false, err
+				}
+				// RE2 runs in time linear in value × program size.
+				cost = 1 + len(v)*re.insts/regexCostDivisor
+			}
+			if err := r.step(cost); err != nil {
 				return false, err
 			}
 			ok, caps, err := r.matchOne(sc, m, v, k)
@@ -70,7 +83,7 @@ func (r *runner) matchOne(sc *scope, m matcher, v, k string) (bool, []string, er
 		if err != nil {
 			return false, nil, err
 		}
-		sub := re.FindStringSubmatch(v)
+		sub := re.re.FindStringSubmatch(v)
 		if sub == nil {
 			return false, nil, nil
 		}
@@ -82,26 +95,74 @@ func (r *runner) matchOne(sc *scope, m matcher, v, k string) (bool, []string, er
 	return false, nil, nil
 }
 
-func (r *runner) regex(pattern string, fold bool) (*regexp.Regexp, error) {
-	if len(pattern) > MaxRegexBytes {
-		return nil, &Error{Msg: "regular expression too long"}
-	}
+func (r *runner) regex(pattern string, fold bool) (*regexCache, error) {
 	key := pattern
 	if fold {
 		key = "(?i)" + pattern
 	}
 	if c, ok := r.regexes[key]; ok {
-		return c.re, c.err
+		return c, c.err
 	}
 	if len(r.regexes) > 64 {
 		return nil, &Error{Msg: "too many different regular expressions"}
 	}
-	re, err := regexp.Compile(key)
-	if err != nil {
-		err = &Error{Msg: "regular expression " + strconv.Quote(pattern) + " is not valid"}
+	re, insts, err := compileRegex(key)
+	c := &regexCache{re: re, insts: insts, err: err}
+	r.regexes[key] = c
+	return c, err
+}
+
+// Bounds of regular expressions and of what they cost.
+const (
+	// maxPatternInput: :regex and :matches look at most at this much of a
+	// value.
+	maxPatternInput = 64 << 10
+	// maxRegexInsts bounds the compiled program of a regular expression,
+	// maxRegexRepeat a counted repetition ({n}).
+	maxRegexInsts  = 2000
+	maxRegexRepeat = 50
+	// regexCostDivisor: a match costs value bytes × program size /
+	// regexCostDivisor steps.
+	regexCostDivisor = 256
+)
+
+// compileRegex compiles a regular expression within the bounds above and
+// returns it with the size of its program.
+func compileRegex(pattern string) (*regexp.Regexp, int, error) {
+	bad := func(why string) error {
+		return &Error{Msg: "regular expression " + strconv.Quote(pattern) + " " + why}
 	}
-	r.regexes[key] = &regexCache{re: re, err: err}
-	return re, err
+	if len(pattern) > MaxRegexBytes+4 {
+		return nil, 0, bad("is too long")
+	}
+	tree, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return nil, 0, bad("is not valid")
+	}
+	if repeatTooLarge(tree) {
+		return nil, 0, bad(fmt.Sprintf("repeats something more than %d times", maxRegexRepeat))
+	}
+	prog, err := syntax.Compile(tree.Simplify())
+	if err != nil || len(prog.Inst) > maxRegexInsts {
+		return nil, 0, bad("is too complex")
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, 0, bad("is not valid")
+	}
+	return re, len(prog.Inst), nil
+}
+
+func repeatTooLarge(re *syntax.Regexp) bool {
+	if re.Op == syntax.OpRepeat && (re.Min > maxRegexRepeat || re.Max > maxRegexRepeat) {
+		return true
+	}
+	for _, sub := range re.Sub {
+		if repeatTooLarge(sub) {
+			return true
+		}
+	}
+	return false
 }
 
 func relational(c int, op string) bool {

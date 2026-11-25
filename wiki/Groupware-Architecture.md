@@ -425,6 +425,28 @@ subset: **own interpreter**, as expected.
   run), outside targets through the queue with SRS (a verified sender of
   ours is kept) and the domain's hourly limit; refusals are
   `delivery.not-forwarded` events.
+- **Two steps:** every recipient mailbox stores first (`Deliverer.Store`,
+  local forward targets included); forwards outside, replies and the
+  `duplicate` ids (RFC 7352: only for delivered mail) follow only once the
+  message is accepted (`Pending.Finish`), else reservations are taken back
+  (`Abort`). A local forward target that cannot store refuses the whole
+  message temporarily. Filters and port 25 read the header with the same
+  tolerant parser (`internal/mail/header`).
+- **Deviation (stricter):** out-of-office replies go only to confirmed
+  senders: SPF pass for the envelope sender's domain, or a passing DKIM
+  signature of the same organisational domain (mail between mailboxes
+  counts as confirmed). SPF none/neutral/softfail without such a signature
+  gets no reply, so forged senders of domains without SPF or DMARC get no
+  backscatter. Redirects and replies are refused while sending is blocked
+  for the mailbox, and forwards count against the mailbox's hourly and
+  daily limits as well as the domain's. `vacation :mime` keeps only the
+  `Content-*` fields of the reason. Regular expressions: values are cut to
+  64 KiB for `:regex`/`:matches`, programs over 2000 instructions and
+  repetitions over 50 are refused, and a match costs value × program size
+  steps. ManageSieve sign-ins count towards the sign-in network limit like
+  submission's. The simple settings are written with a compare-and-set
+  on the active script, and a generated script whose settings do not pass
+  the checks is not editable.
 - **Vacation** replies exactly under the rules listed above; once per
   (sender, handle) and period in `mail.db` (`sieve_replies`; 1 to 90 days,
   default 7; the record is taken back if the reply could not be queued).

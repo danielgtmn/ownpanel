@@ -15,8 +15,10 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"net/netip"
 	"sync"
 
+	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/mail/directory"
 	"github.com/danielgtmn/ownpanel/internal/mail/signin"
 	"github.com/danielgtmn/ownpanel/internal/mail/smtpd"
@@ -36,6 +38,10 @@ type Options struct {
 	// TLSConfig provides the certificates for STARTTLS.
 	TLSConfig *tls.Config
 	Logger    *slog.Logger
+	// SignedIn is told about every successful sign-in, so the sending
+	// limiter counts its network like those of submission
+	// (submission.Limiter.SignedIn); nil: nothing is counted.
+	SignedIn func(ctx context.Context, box config.Mailbox, ip netip.Addr)
 
 	MaxConnections int
 }

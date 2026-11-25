@@ -338,7 +338,7 @@ func TestInclude(t *testing.T) {
 		"loop":   `require "include"; include "loop";`,
 		"broken": `fileinto "x";`, // missing require: compile error
 	}
-	env := &Env{Include: func(name string) (*Script, bool, error) {
+	env := &Env{Include: func(_ context.Context, name string) (*Script, bool, error) {
 		src, ok := scripts[name]
 		if !ok {
 			return nil, false, nil
@@ -378,18 +378,30 @@ fileinto "main";`
 
 func TestDuplicate(t *testing.T) {
 	seen := map[string]bool{}
-	env := &Env{Duplicate: func(id string, period time.Duration, last bool) bool {
-		if period != time.Hour {
-			t.Errorf("period %v", period)
+	env := &Env{Duplicate: func(id string) bool { return seen[id] }}
+	// The run only looks; the caller records the ids it reports once the
+	// message is delivered (RFC 7352), so a failed delivery never makes
+	// the retry a "duplicate".
+	commit := func(r *Result) {
+		for _, d := range r.Duplicates {
+			if d.Period != time.Hour || d.Last {
+				t.Errorf("mark %+v", d)
+			}
+			seen[d.ID] = true
 		}
-		s := seen[id]
-		seen[id] = true
-		return s
-	}}
-	src := `require ["duplicate", "fileinto"]; if duplicate :seconds 3600 { fileinto "dup"; }`
-	if got := folders(run(t, src, env)); len(got) != 0 {
-		t.Fatal("first is no duplicate")
 	}
+	src := `require ["duplicate", "fileinto"]; if duplicate :seconds 3600 { fileinto "dup"; }`
+	r := run(t, src, env)
+	if len(folders(r)) != 0 || len(r.Duplicates) != 1 {
+		t.Fatalf("first is no duplicate: %+v", r)
+	}
+	if len(seen) != 0 {
+		t.Fatal("recorded during the run")
+	}
+	if got := folders(run(t, src, env)); len(got) != 0 {
+		t.Fatal("not delivered yet: no duplicate")
+	}
+	commit(r)
 	if got := folders(run(t, src, env)); len(got) != 1 {
 		t.Fatal("second is a duplicate")
 	}
@@ -560,4 +572,51 @@ func FuzzCompile(f *testing.F) {
 		defer cancel()
 		s.Run(ctx, &Env{Message: testMsg(), MaxSteps: 10_000})
 	})
+}
+
+// Regular expressions cannot hold up delivery: large programs and counted
+// repetitions are refused, values are cut to maxPatternInput, and the
+// steps charged grow with value × program size.
+func TestRegexCost(t *testing.T) {
+	for _, p := range []string{`(a|aa){1000}x`, `a{51}`, `(x+){60}`, strings.Repeat(`(a|b|c|d)`, 400)} {
+		if _, err := Compile(`require "regex"; if header :regex "x" "` + p + `" { stop; }`); err == nil {
+			t.Errorf("%.40s accepted", p)
+		}
+	}
+	m := testMsg()
+	m.h["x-big"] = []string{strings.Repeat("a", 1<<20)}
+	src := `require ["regex", "fileinto"]; if header :regex "x-big" "(a|aa){50}x" { fileinto "x"; }`
+	s, err := Compile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	_, err = s.Run(context.Background(), &Env{Message: m})
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("took %v", d)
+	}
+	if !errors.Is(err, ErrSteps) {
+		t.Fatalf("a large match must run out of steps, got %v", err)
+	}
+	// Ordinary expressions on ordinary values still work.
+	if !matches(t, `, "regex"`, `header :regex "subject" "Project$"`, nil) {
+		t.Fatal("simple regex")
+	}
+}
+
+// An included script is fetched once per run, with the run's context.
+func TestIncludeFetchedOncePerRun(t *testing.T) {
+	calls := 0
+	env := &Env{Include: func(ctx context.Context, name string) (*Script, bool, error) {
+		calls++
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("no run context")
+		}
+		s, err := Compile(`require "fileinto"; fileinto "lib";`)
+		return s, true, err
+	}}
+	got := folders(run(t, `require ["include", "fileinto"]; include "lib"; include "lib"; include "lib";`, env))
+	if len(got) != 3 || calls != 1 {
+		t.Fatalf("folders %v, fetched %d times", got, calls)
+	}
 }

@@ -465,6 +465,9 @@ func (s *session) authenticate(cmd command) error {
 	s.mu.Lock()
 	s.g, s.authed = g, true
 	s.mu.Unlock()
+	if s.srv.opts.SignedIn != nil {
+		s.srv.opts.SignedIn(s.ctx, g.Mailbox, s.ip)
+	}
 	return s.reply("OK", "", "Signed in")
 }
 

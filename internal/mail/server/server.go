@@ -516,6 +516,7 @@ func (s *Server) startManageSieve() service {
 		SignIn:    s.signIn,
 		TLSConfig: s.tls,
 		Logger:    s.log,
+		SignedIn:  s.limits.SignedIn,
 	})
 }
 

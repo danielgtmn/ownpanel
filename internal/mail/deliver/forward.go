@@ -16,7 +16,7 @@ import (
 
 // checkRedirects decides which redirect targets may be used. refused is
 // set when one was not allowed (an event says why).
-func (d *Deliverer) checkRedirects(m *Message, box *config.Mailbox, targets []string) (allowed []string, refused bool) {
+func (d *Deliverer) checkRedirects(ctx context.Context, m *Message, box *config.Mailbox, targets []string) (allowed []string, refused bool) {
 	if len(targets) == 0 {
 		return nil, false
 	}
@@ -31,6 +31,8 @@ func (d *Deliverer) checkRedirects(m *Message, box *config.Mailbox, targets []st
 		why = "it failed the sender's DMARC check"
 	case box.NoForwarding:
 		why = "this mailbox may not forward mail"
+	case d.blocked(ctx, box):
+		why = "sending is blocked for this mailbox"
 	case slices.ContainsFunc(marks, func(v string) bool { return strings.TrimSpace(v) == mark }),
 		slices.ContainsFunc(h.Header("delivered-to"), func(v string) bool { return strings.EqualFold(strings.TrimSpace(v), box.Address) }):
 		why = "it was forwarded by this mailbox before (a loop)"
@@ -62,19 +64,26 @@ func (d *Deliverer) checkRedirects(m *Message, box *config.Mailbox, targets []st
 	return allowed, refused
 }
 
+// blocked tells whether the service stopped the mailbox from sending; a
+// blocked mailbox forwards and replies to nothing either.
+func (d *Deliverer) blocked(ctx context.Context, box *config.Mailbox) bool {
+	b, err := d.opts.Store.Blocked(ctx, box.StorageID)
+	if err != nil {
+		d.log.Error("deliver: block state", "err", err)
+		return true // when in doubt, nothing leaves
+	}
+	return b.Blocked
+}
+
 func (d *Deliverer) notForwarded(box *config.Mailbox, targets []string, why string) {
 	d.opts.Event(config.Event{Kind: config.EventNotForwarded, StorageID: box.StorageID, Address: box.Address,
 		Detail: fmt.Sprintf("a filter of %s did not forward a message to %s: %s", box.Address, strings.Join(targets, ", "), why)})
 }
 
-// forward sends the message to the targets: local addresses get it
-// directly (their own filters run), outside addresses through the queue.
-// It returns whether it went anywhere.
-func (d *Deliverer) forward(ctx context.Context, m *Message, box *config.Mailbox, targets []string) bool {
+// splitTargets resolves forward targets: mailboxes here get the message
+// directly (their own filters run), the rest goes out through the queue.
+func (d *Deliverer) splitTargets(m *Message, box *config.Mailbox, targets []string) (local []Recipient, external []string, refused bool) {
 	dir := m.Dir
-	prefix := []byte("Delivered-To: " + box.Address + "\r\n" + LoopHeader + ": " + loopMark(dir.Hostname(), box.StorageID) + "\r\n")
-	var external []string
-	var local []Recipient
 	for _, t := range targets {
 		_, dom, _ := config.SplitAddress(t)
 		if _, ok := dir.Domain(dom); !ok && dom != dir.Hostname() {
@@ -84,6 +93,7 @@ func (d *Deliverer) forward(ctx context.Context, m *Message, box *config.Mailbox
 		route, out := dir.Resolve(t)
 		if out == directory.Unknown || out == directory.NoPostmaster {
 			d.notForwarded(box, []string{t}, "no such address here")
+			refused = true
 			continue
 		}
 		for _, mb := range route.Mailboxes {
@@ -97,45 +107,77 @@ func (d *Deliverer) forward(ctx context.Context, m *Message, box *config.Mailbox
 			}
 		}
 	}
-	went := false
-	if len(local) > 0 {
-		nm := withPrefix(m, prefix)
-		for _, r := range local {
-			if err := d.Deliver(ctx, nm, r); err != nil {
-				d.log.Warn("deliver: forward to a local mailbox failed", "storage_id", r.Mailbox.StorageID, "err", err)
-				continue
-			}
-			went = true
-		}
-	}
-	if len(external) > 0 && d.enqueue(ctx, m, box, prefix, external) {
-		went = true
-	}
-	return went
+	return local, external, refused
 }
 
-// enqueue sends a forwarded copy outside, counted once against the
-// mailbox's domain's hourly limit.
-func (d *Deliverer) enqueue(ctx context.Context, m *Message, box *config.Mailbox, prefix []byte, targets []string) bool {
-	if d.opts.Queue == nil {
-		d.notForwarded(box, targets, "sending outside is not available")
-		return false
+// forwardPrefix is what a forwarded copy starts with: Delivered-To and the
+// mailbox's loop mark.
+func forwardPrefix(dir *directory.Directory, box *config.Mailbox) []byte {
+	return []byte("Delivered-To: " + box.Address + "\r\n" + LoopHeader + ": " + loopMark(dir.Hostname(), box.StorageID) + "\r\n")
+}
+
+// sendLimits are the mailbox's hourly and daily limits and its domain's
+// hourly limit, as for mail it sends.
+func sendLimits(dir *directory.Directory, box *config.Mailbox, now time.Time) []storage.SendLimit {
+	perHour, perDay := box.SendPerHour, box.SendPerDay
+	if perHour <= 0 {
+		perHour = config.DefaultSendPerHour
+	}
+	if perDay <= 0 {
+		perDay = config.DefaultSendPerDay
 	}
 	_, dom, _ := config.SplitAddress(box.Address)
-	max := config.DefaultDomainSendPerHour
-	if dd, ok := m.Dir.Domain(dom); ok && dd.SendPerHour > 0 {
-		max = dd.SendPerHour
+	domHour := config.DefaultDomainSendPerHour
+	if dd, ok := dir.Domain(dom); ok && dd.SendPerHour > 0 {
+		domHour = dd.SendPerHour
 	}
+	return []storage.SendLimit{
+		{Key: storage.KeySends + box.StorageID, Since: now.Add(-time.Hour), Max: perHour},
+		{Key: storage.KeySends + box.StorageID, Since: now.Add(-24 * time.Hour), Max: perDay},
+		{Key: storage.KeyDomainSends + dom, Since: now.Add(-time.Hour), Max: domHour},
+	}
+}
+
+// reserve counts one message against the mailbox's sending limits. ok is
+// false (and limit names the limit) when one is reached; reaching it never
+// counts towards blocking the mailbox, so outside mail cannot get a
+// mailbox blocked.
+func (d *Deliverer) reserve(ctx context.Context, dir *directory.Directory, box *config.Mailbox) (res *reservation, ok bool, limit string) {
 	now := d.opts.Now()
-	limits := []storage.SendLimit{{Key: storage.KeyDomainSends + dom, Since: now.Add(-time.Hour), Max: max}}
+	limits := sendLimits(dir, box, now)
 	i, err := d.opts.Store.ReserveSend(ctx, limits, now)
 	if err != nil {
-		d.log.Error("deliver: count forward", "err", err)
-		limits = nil // send anyway, nothing to take back
-	} else if i >= 0 {
-		d.notForwarded(box, targets, fmt.Sprintf("the domain %s reached its limit of %d messages per hour", dom, max))
-		return false
+		d.log.Error("deliver: count send", "err", err)
+		return nil, true, "" // counting failed: go on, nothing to take back
 	}
+	switch i {
+	case -1:
+		return &reservation{limits: limits, at: now}, true, ""
+	case 0:
+		return nil, false, fmt.Sprintf("its limit of %d messages per hour", limits[0].Max)
+	case 1:
+		return nil, false, fmt.Sprintf("its limit of %d messages per day", limits[1].Max)
+	}
+	_, dom, _ := config.SplitAddress(box.Address)
+	return nil, false, fmt.Sprintf("the limit of %d messages per hour of the domain %s", limits[2].Max, dom)
+}
+
+// reserveForward counts a forward outside against the limits.
+func (d *Deliverer) reserveForward(ctx context.Context, m *Message, box *config.Mailbox, targets []string) (*reservation, bool) {
+	if d.opts.Queue == nil {
+		d.notForwarded(box, targets, "sending outside is not available")
+		return nil, false
+	}
+	res, ok, limit := d.reserve(ctx, m.Dir, box)
+	if !ok {
+		d.notForwarded(box, targets, "the mailbox reached "+limit)
+	}
+	return res, ok
+}
+
+// enqueue sends a forwarded copy outside.
+func (d *Deliverer) enqueue(ctx context.Context, m *Message, box *config.Mailbox, prefix []byte, targets []string) bool {
+	_, dom, _ := config.SplitAddress(box.Address)
 	sender, storageID := d.forwardSender(m, dom)
 	msg, err := m.Open()
 	if err == nil {
@@ -143,9 +185,6 @@ func (d *Deliverer) enqueue(ctx context.Context, m *Message, box *config.Mailbox
 	}
 	if err != nil {
 		d.log.Error("deliver: enqueue forward", "err", err)
-		if limits != nil {
-			d.opts.Store.ReleaseSend(ctx, limits, now)
-		}
 		return false
 	}
 	d.log.Info("deliver: forwarded by a filter", "storage_id", box.StorageID, "targets", len(targets))

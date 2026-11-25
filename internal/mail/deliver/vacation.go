@@ -17,6 +17,7 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/mail/auth"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/mail/directory"
+	"github.com/danielgtmn/ownpanel/internal/mail/header"
 	"github.com/danielgtmn/ownpanel/internal/mail/sieve"
 	"github.com/danielgtmn/ownpanel/internal/mail/storage"
 )
@@ -31,6 +32,7 @@ const (
 	skipNotToMe    = "not addressed to the mailbox"
 	skipRepliedYet = "replied within the period"
 	skipLimit      = "sending limit"
+	skipBlocked    = "sending is blocked for the mailbox"
 )
 
 // vacationSkip tells why no reply may be sent, or "" if one may (before
@@ -40,7 +42,9 @@ func vacationSkip(m *Message, own []string) string {
 	switch {
 	case m.Junk:
 		return skipJunk
-	case m.DMARCFail || m.AuthFail:
+	case m.DMARCFail || m.AuthFail || !m.SenderAuthenticated:
+		// Only confirmed senders get a reply: a forged sender of a domain
+		// without SPF or DMARC must not get backscatter.
 		return skipAuth
 	}
 	sender := directory.Normalize(m.EnvelopeFrom)
@@ -98,7 +102,11 @@ func (d *Deliverer) vacation(ctx context.Context, m *Message, r Recipient, v *si
 			own = append(own, a)
 		}
 	}
-	if why := vacationSkip(m, own); why != "" {
+	why := vacationSkip(m, own)
+	if why == "" && d.blocked(ctx, box) {
+		why = skipBlocked
+	}
+	if why != "" {
 		d.log.Debug("deliver: no out-of-office reply", "storage_id", box.StorageID, "why", why)
 		return
 	}
@@ -123,7 +131,7 @@ func (d *Deliverer) vacation(ctx context.Context, m *Message, r Recipient, v *si
 
 var errLimit = errors.New(skipLimit)
 
-func (d *Deliverer) sendReply(ctx context.Context, m *Message, box *config.Mailbox, v *sieve.Vacation, to string) error {
+func (d *Deliverer) sendReply(ctx context.Context, m *Message, box *config.Mailbox, v *sieve.Vacation, to string) (err error) {
 	dir := m.Dir
 	fromAddr, fromName := box.Address, box.DisplayName
 	if v.From != "" {
@@ -134,9 +142,15 @@ func (d *Deliverer) sendReply(ctx context.Context, m *Message, box *config.Mailb
 			}
 		}
 	}
-	if !d.reserveReply(ctx, dir, box) {
+	res, ok, _ := d.reserve(ctx, dir, box)
+	if !ok {
 		return errLimit
 	}
+	defer func() {
+		if err != nil {
+			release(ctx, d.opts.Store, res, d.log)
+		}
+	}()
 	h := m.msg()
 	subject := v.Subject
 	if subject == "" {
@@ -184,36 +198,6 @@ func (d *Deliverer) sendReply(ctx context.Context, m *Message, box *config.Mailb
 	return d.enqueueReply(ctx, msg, []string{to})
 }
 
-// reserveReply counts a reply against the mailbox's and its domain's
-// sending limits, like a message it sends. Reaching a limit only skips the
-// reply: unlike sending, it never counts towards blocking the mailbox, so
-// mail from many senders cannot get a mailbox blocked.
-func (d *Deliverer) reserveReply(ctx context.Context, dir *directory.Directory, box *config.Mailbox) bool {
-	now := d.opts.Now()
-	perHour, perDay := box.SendPerHour, box.SendPerDay
-	if perHour <= 0 {
-		perHour = config.DefaultSendPerHour
-	}
-	if perDay <= 0 {
-		perDay = config.DefaultSendPerDay
-	}
-	_, dom, _ := config.SplitAddress(box.Address)
-	domHour := config.DefaultDomainSendPerHour
-	if dd, ok := dir.Domain(dom); ok && dd.SendPerHour > 0 {
-		domHour = dd.SendPerHour
-	}
-	i, err := d.opts.Store.ReserveSend(ctx, []storage.SendLimit{
-		{Key: storage.KeySends + box.StorageID, Since: now.Add(-time.Hour), Max: perHour},
-		{Key: storage.KeySends + box.StorageID, Since: now.Add(-24 * time.Hour), Max: perDay},
-		{Key: storage.KeyDomainSends + dom, Since: now.Add(-time.Hour), Max: domHour},
-	}, now)
-	if err != nil {
-		d.log.Error("deliver: count reply", "err", err)
-		return true
-	}
-	return i < 0
-}
-
 func (d *Deliverer) enqueueReply(ctx context.Context, msg []byte, rcpts []string) error {
 	if d.opts.Queue == nil {
 		return errors.New("sending outside is not available")
@@ -253,9 +237,11 @@ func buildReply(host, from, fromName, to, subject string, v *sieve.Vacation, h *
 	}
 	b.WriteString("MIME-Version: 1.0\r\n")
 	if v.MIME {
-		// The reason is a MIME entity: its own header and body.
-		b.WriteString(strings.ReplaceAll(strings.ReplaceAll(v.Reason, "\r\n", "\n"), "\n", "\r\n"))
-		return b.Bytes(), nil
+		if entity, ok := mimeReason(v.Reason); ok {
+			b.WriteString(entity)
+			return b.Bytes(), nil
+		}
+		// Not a MIME entity after all: sent as text.
 	}
 	b.WriteString("Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n")
 	qp := quotedprintable.NewWriter(&b)
@@ -268,6 +254,55 @@ func buildReply(host, from, fromName, to, subject string, v *sieve.Vacation, h *
 	}
 	b.WriteString("\r\n")
 	return b.Bytes(), nil
+}
+
+// mimeReason rebuilds the reason of "vacation :mime" (a MIME entity: header
+// fields, an empty line, the body). Only Content-* fields are kept, one
+// line each, so a script cannot add From, Sender, Bcc or Reply-To to a
+// reply that is signed for the domain. ok is false without the empty line.
+func mimeReason(reason string) (string, bool) {
+	text := strings.ReplaceAll(reason, "\r\n", "\n")
+	head, body, found := strings.Cut(text, "\n\n")
+	if !found {
+		return "", false
+	}
+	fields, _, _, err := header.Read(strings.NewReader(head+"\n\n"), int64(len(head))+2)
+	if err != nil {
+		return "", false
+	}
+	var b strings.Builder
+	hasType := false
+	for _, f := range fields {
+		name := strings.ToLower(f.Name)
+		if !strings.HasPrefix(name, "content-") || !isToken(f.Name) {
+			continue
+		}
+		v := oneLine(f.Value())
+		if v == "" {
+			continue
+		}
+		hasType = hasType || name == "content-type"
+		b.WriteString(f.Name + ": " + v + "\r\n")
+	}
+	if !hasType {
+		b.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
+	}
+	b.WriteString("\r\n")
+	b.WriteString(strings.ReplaceAll(body, "\n", "\r\n"))
+	if !strings.HasSuffix(body, "\n") {
+		b.WriteString("\r\n")
+	}
+	return b.String(), true
+}
+
+// isToken: a field name of printable ASCII without colon or blanks.
+func isToken(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c <= ' ' || c >= 0x7f || c == ':' {
+			return false
+		}
+	}
+	return s != ""
 }
 
 func isPlain(s string) bool {

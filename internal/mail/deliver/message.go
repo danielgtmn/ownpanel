@@ -5,12 +5,13 @@ import (
 	"bytes"
 	"io"
 	"mime"
-	"net/textproto"
 	"strings"
 	"sync"
 
 	"github.com/emersion/go-message"
 	"github.com/emersion/go-message/charset"
+
+	"github.com/danielgtmn/ownpanel/internal/mail/header"
 )
 
 // maxBodyBytes bounds what the body test reads of a message (decoded text
@@ -47,10 +48,12 @@ func (p *parsed) headers() map[string][]string {
 		if err != nil {
 			return
 		}
-		tr := textproto.NewReader(bufio.NewReader(io.LimitReader(r, maxHeaderBytes)))
-		h, _ := tr.ReadMIMEHeader()
-		for k, vs := range h {
-			p.header[strings.ToLower(k)] = vs
+		// The same fields port 25 saw (package header): a field name other
+		// parsers refuse does not hide the fields after it.
+		fields, _, _, _ := header.Read(r, maxHeaderBytes)
+		for _, f := range fields {
+			k := strings.ToLower(f.Name)
+			p.header[k] = append(p.header[k], f.Value())
 		}
 	})
 	return p.header
