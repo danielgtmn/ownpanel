@@ -165,25 +165,68 @@ func (ss *sinkSession) Data(r io.Reader) error {
 	return nil
 }
 
-// Resolver answers MX and address lookups from maps; names not in them do
-// not exist.
+// Resolver answers DNS lookups from maps; names not in them do not exist.
+// Names in Fail answer with a temporary error. It satisfies the resolver
+// interfaces of the queue and of package auth. Set the maps before use;
+// they are only read.
 type Resolver struct {
-	MX map[string][]*net.MX
-	IP map[string][]net.IPAddr
+	MX  map[string][]*net.MX
+	IP  map[string][]net.IPAddr
+	TXT map[string][]string
+	// PTR maps an IP address (as net.IP.String) to host names.
+	PTR  map[string][]string
+	Fail map[string]bool
+}
+
+func notFound(name string) error {
+	return &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
+}
+
+func (r *Resolver) fail(name string) error {
+	if r.Fail[name] {
+		return &net.DNSError{Err: "server misbehaving", Name: name, IsTemporary: true}
+	}
+	return nil
 }
 
 func (r *Resolver) LookupMX(_ context.Context, name string) ([]*net.MX, error) {
+	if err := r.fail(name); err != nil {
+		return nil, err
+	}
 	if mx, ok := r.MX[name]; ok {
 		return mx, nil
 	}
-	return nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
+	return nil, notFound(name)
 }
 
 func (r *Resolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
+	if err := r.fail(host); err != nil {
+		return nil, err
+	}
 	if ip, ok := r.IP[host]; ok {
 		return ip, nil
 	}
-	return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+	return nil, notFound(host)
+}
+
+func (r *Resolver) LookupTXT(_ context.Context, name string) ([]string, error) {
+	if err := r.fail(name); err != nil {
+		return nil, err
+	}
+	if t, ok := r.TXT[name]; ok {
+		return t, nil
+	}
+	return nil, notFound(name)
+}
+
+func (r *Resolver) LookupAddr(_ context.Context, addr string) ([]string, error) {
+	if err := r.fail(addr); err != nil {
+		return nil, err
+	}
+	if n, ok := r.PTR[addr]; ok {
+		return n, nil
+	}
+	return nil, notFound(addr)
 }
 
 // Localhost is the address list of 127.0.0.1.

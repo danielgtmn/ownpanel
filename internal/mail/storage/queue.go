@@ -311,6 +311,9 @@ const (
 	// KeyNotices + storage id: limit events already recorded (value: the
 	// kind of limit), so there is at most one per hour.
 	KeyNotices = "notice:"
+	// KeyBlocklistRefused + zone: a blocklist refused our queries (an
+	// event is recorded at most once a day).
+	KeyBlocklistRefused = "blrefused:"
 )
 
 // SendLimit is at most Max entries of Key since Since.

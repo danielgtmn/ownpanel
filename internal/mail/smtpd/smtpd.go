@@ -1,6 +1,13 @@
 // Package smtpd receives mail from other servers on port 25 and stores it
 // for the configured mailboxes. It accepts only recipients this server is
 // responsible for and answers "250" only once the message is durable.
+//
+// Every message is checked (package auth: SPF, DKIM, DMARC; package
+// filter: blocklists, greylisting, content score, attachments) and gets an
+// Authentication-Results and an X-Ownpanel-Score header; Junk goes to the
+// Junk folder. External alias targets are forwarded through the queue with
+// an SRS envelope sender, and bounces to our SRS addresses go back to the
+// original sender.
 package smtpd
 
 import (
@@ -10,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -17,7 +25,10 @@ import (
 
 	"github.com/emersion/go-smtp"
 
+	"github.com/danielgtmn/ownpanel/internal/mail/auth"
 	"github.com/danielgtmn/ownpanel/internal/mail/directory"
+	"github.com/danielgtmn/ownpanel/internal/mail/filter"
+	"github.com/danielgtmn/ownpanel/internal/mail/queue"
 	"github.com/danielgtmn/ownpanel/internal/mail/storage"
 )
 
@@ -55,6 +66,21 @@ type Options struct {
 	// ImplicitTLS starts every connection with TLS (port 465); TLSConfig
 	// must be set. Refused connections are closed without a reply then.
 	ImplicitTLS bool
+
+	// Filter runs blocklists, greylisting and the content checks; nil
+	// means one with the system resolver.
+	Filter *filter.Filter
+	// Queue takes forwarded mail and bounces routed back to SRS
+	// addresses. Without it, addresses that forward outside are refused.
+	Queue *queue.Queue
+	// SRS rewrites the envelope sender of forwarded mail; nil means one
+	// with a random key (bounces then fail after a restart).
+	SRS *auth.SRS
+	// Now is the clock (tests); nil means time.Now.
+	Now func() time.Time
+	// ClientIP returns the address a connection comes from (tests); nil
+	// means the connection's remote address.
+	ClientIP func(net.Addr) netip.Addr
 }
 
 // Server is the port 25 server. It runs go-smtp servers behind its own
@@ -99,6 +125,24 @@ func New(opts Options) *Server {
 	}
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
+	}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	if opts.Filter == nil {
+		opts.Filter = filter.New(filter.Options{Store: opts.Store, Logger: opts.Logger})
+	}
+	if opts.SRS == nil {
+		opts.SRS = auth.NewSRS(randomKey(), opts.Now)
+	}
+	if opts.ClientIP == nil {
+		opts.ClientIP = func(a net.Addr) netip.Addr {
+			ap, err := netip.ParseAddrPort(a.String())
+			if err != nil {
+				return netip.Addr{}
+			}
+			return ap.Addr().Unmap()
+		}
 	}
 	return &Server{opts: opts, log: opts.Logger, done: make(chan struct{})}
 }

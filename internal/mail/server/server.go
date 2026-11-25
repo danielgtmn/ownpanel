@@ -23,6 +23,7 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/mail/auth"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/mail/directory"
+	"github.com/danielgtmn/ownpanel/internal/mail/filter"
 	"github.com/danielgtmn/ownpanel/internal/mail/imapd"
 	"github.com/danielgtmn/ownpanel/internal/mail/queue"
 	"github.com/danielgtmn/ownpanel/internal/mail/signin"
@@ -58,6 +59,10 @@ type Options struct {
 	QueueResolver queue.Resolver
 	QueueDial     func(ctx context.Context, network, address string) (net.Conn, error)
 	QueuePort     string
+	// Resolver answers the DNS lookups of the checks of incoming mail
+	// (SPF, DKIM, DMARC, blocklists, reverse DNS); nil means the system
+	// resolver (tests replace it).
+	Resolver auth.Resolver
 }
 
 // configFile is the last configuration loaded, used at start like Caddy's
@@ -85,6 +90,8 @@ type Server struct {
 	limits *submission.Limiter
 	signer *auth.Signer
 	queue  *queue.Queue
+	filter *filter.Filter
+	srs    *auth.SRS
 
 	lisMu       sync.Mutex
 	smtp        listenerState
@@ -161,7 +168,15 @@ func New(opts Options) (*Server, error) {
 	}
 	s.limits = submission.NewLimiter(store, nil, s.event, s.log)
 	s.signer = auth.NewSigner()
+	srsKey, err := auth.LoadSRSKey(opts.DataDir)
+	if err != nil {
+		store.Close()
+		return nil, fmt.Errorf("SRS key: %w", err)
+	}
+	s.srs = auth.NewSRS(srsKey, nil)
+	s.filter = filter.New(filter.Options{Resolver: opts.Resolver, Store: store, Event: s.event, Logger: s.log})
 	s.queue = queue.New(queue.Options{
+		ReturnTo:  s.returnTo,
 		Store:     store,
 		Directory: s.Directory,
 		Resolver:  opts.QueueResolver,
@@ -176,6 +191,24 @@ func New(opts Options) (*Server, error) {
 		s.log.Error("mail: last configuration not loaded", "err", err)
 	}
 	return s, nil
+}
+
+// returnTo maps an SRS address of ours to the original sender, for
+// bounces of forwarded mail.
+func (s *Server) returnTo(sender string) (string, bool) {
+	local, dom, ok := config.SplitAddress(directory.Normalize(sender))
+	if !ok || !auth.IsSRS(local) {
+		return "", false
+	}
+	dir := s.Directory()
+	if _, ok := dir.Domain(dom); !ok && dom != dir.Hostname() {
+		return "", false
+	}
+	orig, err := s.srs.Reverse(sender)
+	if err != nil {
+		return "", false
+	}
+	return orig, true
 }
 
 func (s *Server) quota(storageID string) int64 {
@@ -369,6 +402,9 @@ func (s *Server) startSMTP() service {
 		TLSConfig: s.tls,
 		Logger:    s.log,
 		FreeBytes: s.opts.FreeBytes,
+		Filter:    s.filter,
+		Queue:     s.queue,
+		SRS:       s.srs,
 	})
 }
 
@@ -512,6 +548,7 @@ func (s *Server) Run(ctx context.Context) error {
 	s.syncListeners()
 	s.store.PruneEvents(ctx)
 	s.limits.Prune(ctx)
+	s.filter.Prune(ctx)
 	s.queue.Start()
 
 	retry := time.NewTicker(30 * time.Second)
@@ -536,6 +573,9 @@ func (s *Server) Run(ctx context.Context) error {
 			}
 			if err := s.limits.Prune(context.Background()); err != nil {
 				s.log.Error("mail: prune send log", "err", err)
+			}
+			if err := s.filter.Prune(context.Background()); err != nil {
+				s.log.Error("mail: prune greylist", "err", err)
 			}
 		}
 	}

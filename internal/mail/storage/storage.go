@@ -217,6 +217,15 @@ CREATE TABLE send_log (
 );
 CREATE INDEX send_log_key ON send_log(key, at);
 `,
+	// 3: greylisting triplets.
+	`
+CREATE TABLE greylist (
+	key    TEXT PRIMARY KEY,
+	first  INTEGER NOT NULL,
+	passed INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX greylist_first ON greylist(first);
+`,
 }
 
 func migrate(db *sql.DB) error {

@@ -81,8 +81,12 @@ type Options struct {
 	// Now is the clock (tests); nil means time.Now.
 	Now func() time.Time
 	// Event records an event for the panel; nil drops them.
-	Event  func(config.Event)
-	Logger *slog.Logger
+	Event func(config.Event)
+	// ReturnTo maps the envelope sender of a message without a local
+	// mailbox (forwarded mail with an SRS sender) to the original sender a
+	// bounce is sent to over the internet; nil, or false, sends none.
+	ReturnTo func(sender string) (string, bool)
+	Logger   *slog.Logger
 }
 
 // Queue is the outbound queue. Call Start to deliver in the background.

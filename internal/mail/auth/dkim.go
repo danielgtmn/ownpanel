@@ -1,6 +1,7 @@
 // Package auth is message authentication of the mail service: DKIM
-// signing of outgoing mail now; SPF, DKIM and DMARC verification of
-// incoming mail and SRS come in a later phase.
+// signing of outgoing mail; SPF, DKIM and DMARC verdicts for incoming mail
+// (verify.go); and the Sender Rewriting Scheme for forwarded mail
+// (srs.go).
 package auth
 
 import (

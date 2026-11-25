@@ -44,6 +44,46 @@ type Config struct {
 	PostmasterAddress string `json:"postmaster_address"`
 	// Limits apply to the whole service; zero values mean the defaults.
 	Limits Limits `json:"limits"`
+	// Filter configures the checks of incoming mail; zero values mean the
+	// defaults.
+	Filter Filter `json:"filter"`
+}
+
+// Filter configures the checks of incoming mail on port 25.
+type Filter struct {
+	// Blocklists are DNS blocklist zones the client's IPv4 address is
+	// looked up in. nil (or a missing field) means DefaultBlocklists; an
+	// empty list turns blocklists off. A Spamhaus DQS zone
+	// ("<key>.zen.dq.spamhaus.net") is given here like any other zone.
+	Blocklists []string `json:"blocklists"`
+	// JunkScore is the score from which a message goes to Junk instead of
+	// INBOX; 0 means DefaultJunkScore.
+	JunkScore float64 `json:"junk_score"`
+	// Greylisting delays the first message of an unknown (network, sender,
+	// recipient) from servers without reverse DNS or without an SPF pass.
+	// Off by default.
+	Greylisting bool `json:"greylisting"`
+}
+
+// Defaults for a zero Filter.
+const (
+	DefaultJunkScore = 5.0
+	// MaxBlocklists bounds the blocklist zones.
+	MaxBlocklists = 10
+)
+
+// DefaultBlocklists are used when Filter.Blocklists is nil.
+var DefaultBlocklists = []string{"zen.spamhaus.org"}
+
+// WithDefaults returns f with zero values replaced by the defaults.
+func (f Filter) WithDefaults() Filter {
+	if f.Blocklists == nil {
+		f.Blocklists = DefaultBlocklists
+	}
+	if f.JunkScore <= 0 {
+		f.JunkScore = DefaultJunkScore
+	}
+	return f
 }
 
 // Certificate is a certificate chain and its private key in PEM.
@@ -268,6 +308,17 @@ func (c *Config) Validate() error {
 	}
 	if c.Limits.MaxMessageBytes < 0 || c.Limits.MaxRecipients < 0 || c.Limits.ConnectionsPerIP < 0 {
 		return errors.New("negative limit")
+	}
+	if len(c.Filter.Blocklists) > MaxBlocklists {
+		return fmt.Errorf("at most %d blocklists", MaxBlocklists)
+	}
+	for _, z := range c.Filter.Blocklists {
+		if !ValidDomain(z) {
+			return fmt.Errorf("blocklist %q is not a valid zone", z)
+		}
+	}
+	if c.Filter.JunkScore < 0 || c.Filter.JunkScore > 1000 {
+		return errors.New("junk score out of range")
 	}
 	return nil
 }

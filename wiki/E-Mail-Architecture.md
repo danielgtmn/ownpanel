@@ -50,7 +50,9 @@ configuration over a local admin socket.
                             user ownpanel-mail                                 user ownpanel
                             /var/lib/ownpanel-mail/                            /var/lib/ownpanel/
                               config.json  last pushed config                    ownpanel.db  mail domains, mailboxes,
-                              mail.db      index, queue, block state                          aliases, DKIM keys (encrypted)
+                              mail.db      index, queue, block state,                         aliases, DKIM keys (encrypted)
+                                           greylisting
+                              srs.key      SRS key (0600)
                               messages/    one file per message                  mail-tls/    ACME account and certificates
                               queue/       outgoing messages
 ```
@@ -106,7 +108,9 @@ mode 0750, socket 0660; the user `ownpanel` is a member of the group
 **Mail service data** `/var/lib/ownpanel-mail` (`StateDirectory`, owner
 `ownpanel-mail`, 0700): `config.json` (0600, rewritten only when it changed),
 `mail.db` (SQLite WAL, one writer, `synchronous=FULL`), `messages/<storage_id>/…`,
-`queue/…`. Data is keyed by `storage_id`, so a reused row id or a restored
+`queue/…`, `srs.key` (32 random bytes, 0600, created on first start; the
+backup copies it with the rest, so SRS addresses stay valid after a
+restore). Data is keyed by `storage_id`, so a reused row id or a restored
 older panel database can never expose another mailbox's mail. Data of a
 mailbox missing from the configuration is kept and reported, never deleted by
 a config load.
@@ -240,8 +244,9 @@ have no panel account and cannot change their own password yet (*later*).
 - `RCPT TO` is accepted only for a mailbox, an alias or the catch-all of a
   configured domain, `postmaster@`/`abuse@` of every domain and of
   `mail_host`, and `SRS0=` addresses whose signature checks out and are at
-  most 21 days old (bounces of forwarded mail). Everything else is refused at
-  once (no backscatter). The null sender `<>` is accepted.
+  most 21 days old (bounces of forwarded mail; only with the null sender,
+  anything else to an SRS address gets `550 5.7.1`). Everything else is
+  refused at once (no backscatter). The null sender `<>` is accepted.
 - `postmaster@`/`abuse@` go to the alias of that name if one exists,
   otherwise to the domain's oldest mailbox. With no mailbox, and for
   `mail_host`, they go to the address in the setting `postmaster_address`
@@ -278,7 +283,43 @@ Mail forwarded outside gets an SRS envelope sender
 (`SRS0=<hash>=<tt>=<domain>=<local>@<alias domain>`, HMAC key in the service's
 data); bounces to SRS addresses are routed back to the original sender. Mail
 judged Junk is not forwarded. Alias expansion stops at depth 10 and removes
-duplicates. External targets count against the alias owner's send limits.
+duplicates.
+
+How it is built (phase 1c):
+
+- **Port 25** accepts addresses whose aliases only forward outside. The
+  external targets of all recipients in one alias domain become one queued
+  message; local mailboxes get their copy as usual.
+- **Envelope sender:** the null sender stays null; a sender in one of our
+  domains (or `mail_host`) is kept, and bounces go to its mailbox if it is
+  one; everyone else gets `SRS0=<hash>=<tt>=<domain>=<local>@<alias domain>`.
+  `tt` is the day (days since 1970 mod 1024) in two base32 characters as in
+  the common SRS scheme; the hash is the first 40 bits of HMAC-SHA256 over
+  `tt=domain=local` (lowercase), in lowercase base32 (8 characters). Hash and
+  address are compared without case, because servers on the way may change
+  it. SRS addresses are accepted for 21 days. An original sender that is
+  itself an SRS address is wrapped again (no SRS1).
+- **The message** keeps its original `From` and body; only header fields are
+  prepended (`Received`, `Authentication-Results`, `X-Ownpanel-Score`), so
+  the original DKIM signature still verifies. Forged
+  `Authentication-Results` of our host name and incoming `X-Ownpanel-Score`
+  fields are removed (see Filtering).
+- **Not forwarded:** mail judged Junk (score or DMARC `quarantine`); the
+  local copies go to Junk and an event `delivery.not-forwarded` names the
+  alias and targets. The same holds for bounces to SRS addresses.
+- **Limits** (deviation: an alias belongs to a domain, not a mailbox):
+  forwarded mail counts once per message against the **alias domain's**
+  `send_per_hour` (the same counter submission uses). When it is reached,
+  the forward is dropped with a `delivery.not-forwarded` event if the
+  message also reached a local mailbox, and refused with `451 4.7.1` if it
+  had nowhere else to go. Bounces routed back to an SRS address are not
+  counted.
+- **Bounces of forwards:** when the outside server refuses a forwarded
+  message for good, the queue sends a delivery status notification (from
+  the null sender) to the original sender decoded from the SRS address.
+- **Submission:** external targets of a local alias go into the outbound
+  queue with the rest of the message; the sender is the signed-in mailbox,
+  so there is no SRS, and the message counts once like any other.
 
 ## Sending — [#26](https://github.com/danielgtmn/ownpanel/issues/26)
 
@@ -331,14 +372,91 @@ suggested once DMARC reports are read (*later*).
   SBL/XBL listings are refused. Answers in `127.255.255.0/24` mean the query
   was refused (common through public resolvers) and count as a lookup error,
   shown under Mail health. Optional Spamhaus DQS key.
-- Greylisting: off by default; when on, only for senders without an aligned
-  SPF/DKIM pass or without PTR; triplets use the /24 (IPv4) or /64 (IPv6).
+- Greylisting: off by default; when on, only for senders without an SPF
+  pass or without PTR; triplets use the /24 (IPv4) or /64 (IPv6).
 - Content score: missing `Message-ID`/`Date`, malformed headers, no PTR,
   display-name spoofing of the recipient's own domain.
 - Dangerous attachments (executables, scripts, Office macros) are refused.
 - Score above the Junk threshold: delivered to `Junk`. Per-mailbox Junk
   threshold and greylisting switch: *later* (one default for now).
 - Virus scanning: *later*; it would need a scanner product this design avoids.
+
+How it is built (phase 1c, `internal/mail/auth` and `internal/mail/filter`;
+all DNS goes through one resolver interface, replaced in tests):
+
+- **Order on port 25.** At `MAIL FROM` (once per connection) the client's
+  IPv4 address is looked up in the blocklists; IPv6 addresses are not looked
+  up yet. At `RCPT TO`: blocklist refusal, recipient, greylisting. At the end
+  of `DATA`: SPF, DKIM, DMARC, attachments, score. Loopback and private
+  client addresses skip blocklists and the PTR check.
+- **SPF** checks `MAIL FROM` (the HELO name for the null sender) with
+  `blitiri.com.ar/go/spf`. **DKIM** verifies at most 5 signatures.
+  **DMARC** reads `_dmarc.<From domain>`, else `_dmarc.<organizational
+  domain>` (public suffix list), whose `sp=` then applies; it passes when SPF
+  (the HELO identity for the null sender, RFC 7489 3.1.2) or a DKIM
+  signature passes for a domain aligned per `aspf`/`adkim` (relaxed: same
+  organizational domain; strict: equal). A `pct` below 100 lowers the policy
+  one step for all mail (reject → quarantine → none) instead of sampling.
+  Several From addresses: each distinct domain (at most 5) is evaluated, and
+  any `reject` failure refuses. Lookup errors give `temperror` and never a
+  refusal (a DNS error on the way to a possible pass also gives
+  `temperror`, not `fail`).
+- **Answers:** DMARC `p=reject` failure `550 5.7.1` at `DATA`; SBL/CSS/XBL/
+  DROP (`127.0.0.2`–`.7`, `.9` of a Spamhaus zone, including DQS zones under
+  `spamhaus.net`) `554 5.7.1` for every recipient (the connection stays
+  open; the text names the list); dangerous attachment `554 5.7.1`;
+  greylisted `451 4.7.1`; header over 1 MB `552 5.3.4`.
+- **Headers on delivery** (prepended in this order): `Return-Path` (local
+  copies only), `Received`, one `Authentication-Results: <mail_host>;
+  spf=…; dkim=…; dmarc=…`, and `X-Ownpanel-Score: 3.5 (no-ptr spf-softfail)`.
+  Incoming `Authentication-Results` whose authserv-id is our host name and
+  every incoming `X-Ownpanel-Score` are removed (anti-spoofing); other
+  servers' results are kept.
+- **Score points** (threshold `junk_score`, default 5; reaching it means
+  Junk): `no-message-id` 1, `no-date`/`bad-date` 1, `no-from`/`bad-from`/
+  `multiple-from` 2.5 each, `no-ptr` 1.5 (only when the lookup answered),
+  `spoofed-name` 3 (display name contains `@<recipient's domain>` while the
+  From domain is not ours), `spf-softfail` 1, `spf-fail` 2.5, `dkim-fail`
+  1.5 (a failing signature and none passing), `listed:<zone>` 3 per listing
+  that does not refuse (PBL `127.0.0.10`/`.11`, other lists), `mime-broken`
+  1 (structure could not be read; never a refusal on its own). DMARC
+  `quarantine` sends to Junk whatever the score and adds `dmarc-quarantine`.
+  Junk goes to the folder marked `\Junk` (INBOX if there is none).
+- **Attachments:** the MIME structure is read with `go-message` (depth 5, 500
+  parts); file names come from `Content-Disposition` `filename` and
+  `Content-Type` `name` (RFC 2231 and encoded words decoded, a lenient
+  fallback for malformed parameters). Refused extensions: `exe scr com bat
+  cmd pif js jse vbs vbe wsf wsh ps1 msi msp jar lnk hta cpl reg scf iso img
+  vhd vhdx docm dotm xlsm xltm xlam pptm potm ppam ppsm sldm` (trailing dots
+  and spaces ignored). `.zip` attachments up to 10 MB are looked into one
+  level (names only, nothing unpacked, at most 1000 entries); attached
+  messages (`message/rfc822`) are walked like the rest.
+- **Greylisting** (deviation: DKIM is not known yet at `RCPT`, so "aligned
+  SPF/DKIM pass" became "SPF pass"): only for clients without reverse DNS
+  or without an SPF pass. Triplet: network (/24, /64), envelope sender,
+  recipient, in `mail.db`. The first attempt and retries within 5 minutes
+  get `451 4.7.1`; a retry after 5 minutes (within 24 hours) passes, and
+  the triplet then passes for 30 days after its last message. Old triplets
+  are pruned daily.
+- **Blocklist refusals** (answers in `127.255.255.0/24`) record the event
+  `blocklist.refused` at most once a day per zone; the zone is then simply
+  not used for that message.
+
+### Configuration and events (phase 1c)
+
+The panel pushes these in `config.Config` (`"filter"`); zero values mean the
+defaults, so an older panel keeps working:
+
+| Field | JSON | Default |
+|---|---|---|
+| `Filter.Blocklists` | `filter.blocklists` | `null` (missing) means `["zen.spamhaus.org"]`; `[]` turns blocklists off; at most 10 zones. A Spamhaus DQS key is given as the zone `<key>.zen.dq.spamhaus.net`. |
+| `Filter.JunkScore` | `filter.junk_score` | `0` means 5.0 |
+| `Filter.Greylisting` | `filter.greylisting` | `false` |
+
+New event kinds: `blocklist.refused` (a blocklist refused this server's
+queries; Mail health), `delivery.not-forwarded` (a message was not forwarded
+outside: Junk, or the domain's limit). `delivery.bounced` is no longer used
+for "forwarding not available".
 
 ## Deliverability — [#29](https://github.com/danielgtmn/ownpanel/issues/29)
 
@@ -398,6 +516,8 @@ One server, SQLite and files: a few hundred mailboxes. Several servers are
 
 Each phase is a pull request that is tested end to end. The sections above
 describe the result after phase 1c; items marked *later* come after it.
+
+Phases 1a, 1b and 1c are built.
 
 1. **1a — receive and read:** the service, admin socket, sync, `mail_host`,
    certificate, domains (with MX activation), mailboxes (API, MCP, UI), port

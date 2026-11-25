@@ -79,6 +79,15 @@ const (
 	// one event per mailbox and kind of limit per hour).
 	EventSendLimit      = "mailbox.send-limit"
 	EventListenerFailed = "listener.failed"
+	// EventBlocklistRefused: a DNS blocklist refused to answer this
+	// server's queries (answers in 127.255.255.0/24, typical through public
+	// resolvers); at most one event per blocklist and day. Mail health
+	// shows it.
+	EventBlocklistRefused = "blocklist.refused"
+	// EventNotForwarded: a message was delivered (or accepted) but not
+	// forwarded to an outside address: it was judged Junk, or the domain
+	// reached its sending limit.
+	EventNotForwarded = "delivery.not-forwarded"
 )
 
 // Event is something the panel should record in its activity log. Detail is

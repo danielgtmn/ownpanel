@@ -98,8 +98,7 @@ const (
 	Deliver Outcome = iota
 	// Unknown: no such recipient here (550 5.1.1).
 	Unknown
-	// ForwardOnly: the address only forwards outside, which is not
-	// available yet (550, nothing is accepted and then dropped).
+	// ForwardOnly: the address only forwards outside (Route.External).
 	ForwardOnly
 	// NoPostmaster: postmaster@/abuse@ without anyone to receive it
 	// (temporary error).
@@ -109,7 +108,8 @@ const (
 // Route is where mail for one recipient goes.
 type Route struct {
 	Mailboxes []*config.Mailbox
-	// External targets reached through aliases; not delivered yet.
+	// External targets reached through aliases: forwarded through the
+	// queue.
 	External []string
 	// Dropped targets that lead nowhere (unknown local addresses, loops
 	// deeper than MaxAliasDepth).

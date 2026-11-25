@@ -6,17 +6,23 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
+	"net/netip"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/emersion/go-smtp"
 
+	"github.com/danielgtmn/ownpanel/internal/mail/auth"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/mail/directory"
+	"github.com/danielgtmn/ownpanel/internal/mail/filter"
 	"github.com/danielgtmn/ownpanel/internal/mail/mailtest"
+	"github.com/danielgtmn/ownpanel/internal/mail/queue"
 	"github.com/danielgtmn/ownpanel/internal/mail/storage"
 )
 
@@ -32,6 +38,32 @@ type env struct {
 	store *storage.Store
 	dir   atomic.Pointer[directory.Directory]
 	free  atomic.Int64
+
+	res   *mailtest.Resolver
+	sink  *mailtest.Sink
+	q     *queue.Queue
+	srs   *auth.SRS
+	clock *clock
+	// client is the address connections claim to come from ("" = real).
+	client atomic.Pointer[netip.Addr]
+}
+
+// clock is a settable time for tests.
+type clock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *clock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *clock) Add(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
 }
 
 func testConfig(t *testing.T) *config.Config {
@@ -41,7 +73,7 @@ func testConfig(t *testing.T) *config.Config {
 		Domains:      []config.Domain{{Name: "example.org"}, {Name: "empty.test"}},
 		Mailboxes: []config.Mailbox{
 			{StorageID: idAlice, Address: "alice@example.org", PasswordHash: mailtest.Hash},
-			{StorageID: idBob, Address: "bob@example.org", PasswordHash: mailtest.Hash, QuotaBytes: 4500},
+			{StorageID: idBob, Address: "bob@example.org", PasswordHash: mailtest.Hash, QuotaBytes: 6000},
 			{StorageID: idFull, Address: "full@example.org", PasswordHash: mailtest.Hash, QuotaBytes: 10},
 		},
 		Aliases: []config.Alias{
@@ -58,7 +90,9 @@ func start(t *testing.T, cfg *config.Config) *env {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	e := &env{}
+	// The clock runs a minute ahead: the storage stamps queued messages
+	// with the real time, and they must be due for the queue.
+	e := &env{clock: &clock{t: time.Now().Add(time.Minute)}}
 	e.dir.Store(directory.New(cfg))
 	e.free.Store(10 << 30)
 	st, err := storage.Open(t.TempDir(), storage.Options{Quota: func(id string) int64 {
@@ -75,11 +109,45 @@ func start(t *testing.T, cfg *config.Config) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
+	e.sink = mailtest.NewSink(t, mailtest.SinkPlain)
+	e.res = &mailtest.Resolver{
+		MX: map[string][]*net.MX{
+			"elsewhere.test": {{Host: "mx.elsewhere.test", Pref: 10}},
+			"sender.test":    {{Host: "mx.elsewhere.test", Pref: 10}},
+		},
+		IP:   map[string][]net.IPAddr{"mx.elsewhere.test": mailtest.Localhost},
+		TXT:  map[string][]string{},
+		PTR:  map[string][]string{},
+		Fail: map[string]bool{},
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	event := func(ev config.Event) { st.AddEvent(context.Background(), ev) }
+	e.srs = auth.NewSRS([]byte("0123456789abcdef0123456789abcdef"), e.clock.Now)
+	e.q = queue.New(queue.Options{
+		Store: st, Directory: e.dir.Load, Resolver: e.res, Port: e.sink.Port,
+		Now: e.clock.Now, Event: event, Logger: logger,
+		ReturnTo: func(sender string) (string, bool) {
+			orig, err := e.srs.Reverse(sender)
+			return orig, err == nil
+		},
+	})
 	e.srv = New(Options{
 		Store:     st,
 		Directory: e.dir.Load,
 		TLSConfig: &tls.Config{Certificates: []tls.Certificate{kp}},
 		FreeBytes: func() (int64, error) { return e.free.Load(), nil },
+		Filter:    filter.New(filter.Options{Resolver: e.res, Store: st, Now: e.clock.Now, Event: event, Logger: logger}),
+		Queue:     e.q,
+		SRS:       e.srs,
+		Now:       e.clock.Now,
+		Logger:    logger,
+		ClientIP: func(a net.Addr) netip.Addr {
+			if c := e.client.Load(); c != nil {
+				return *c
+			}
+			ap, _ := netip.ParseAddrPort(a.String())
+			return ap.Addr().Unmap()
+		},
 	})
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -93,9 +161,16 @@ func start(t *testing.T, cfg *config.Config) *env {
 		if err := <-served; err != nil {
 			t.Errorf("serve: %v", err)
 		}
+		e.q.Shutdown(context.Background())
 		st.Close()
 	})
 	return e
+}
+
+// from makes connections claim to come from ip.
+func (e *env) from(ip string) {
+	a := netip.MustParseAddr(ip)
+	e.client.Store(&a)
 }
 
 func dial(t *testing.T, addr string, startTLS bool) *smtp.Client {
@@ -220,7 +295,7 @@ func TestRecipients(t *testing.T) {
 	for addr, want := range map[string]int{
 		"nobody@example.org":          550,
 		"someone@elsewhere.test":      550, // no relaying
-		"out@example.org":             550, // forwarding only
+		"out@example.org":             0,   // forwards outside
 		"alice@example.org":           0,
 		"postmaster@example.org":      0, // alias → bob
 		"abuse@example.org":           0, // oldest mailbox → alice
@@ -259,8 +334,16 @@ func TestAliasDelivery(t *testing.T) {
 	if len(inbox(t, e, idAlice)) != 1 || len(inbox(t, e, idBob)) != 1 {
 		t.Fatal("alias expansion")
 	}
-	ev, _ := e.store.Events(context.Background(), 0)
-	if len(ev) != 1 || ev[0].Kind != config.EventBounced || !strings.Contains(ev[0].Detail, "friend@elsewhere.test") {
+	// The external target is forwarded with an SRS sender.
+	e.q.Flush()
+	got := e.sink.Messages()
+	if len(got) != 1 || len(got[0].To) != 1 || got[0].To[0] != "friend@elsewhere.test" {
+		t.Fatalf("forwarded %+v", got)
+	}
+	if orig, err := e.srs.Reverse(got[0].From); err != nil || orig != "x@sender.test" || !strings.HasSuffix(got[0].From, "@example.org") {
+		t.Fatalf("envelope sender %q: %q %v", got[0].From, orig, err)
+	}
+	if ev, _ := e.store.Events(context.Background(), 0); len(ev) != 0 {
 		t.Fatalf("events %+v", ev)
 	}
 }

@@ -55,6 +55,7 @@ func run(t *testing.T, data, sock string, mods ...func(*Options)) *instance {
 		IMAPSAddr:       "127.0.0.1:0",
 		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 		FreeBytes:       func() (int64, error) { return 10 << 30, nil },
+		Resolver:        &mailtest.Resolver{},
 		Outbound: func(context.Context) config.OutboundCheck {
 			return config.OutboundCheck{OK: true, Target: "mx.test:25"}
 		},
@@ -328,7 +329,7 @@ func TestListenerStates(t *testing.T) {
 	}
 	defer busy.Close()
 	data, sock := t.TempDir(), socketDir(t)
-	srv, err := New(Options{DataDir: data, AdminSocket: filepath.Join(sock, "a.sock"), SMTPAddr: busy.Addr().String(),
+	srv, err := New(Options{DataDir: data, AdminSocket: filepath.Join(sock, "a.sock"), SMTPAddr: busy.Addr().String(), Resolver: &mailtest.Resolver{},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	if err != nil {
 		t.Fatal(err)
@@ -385,7 +386,7 @@ func TestStaleSocket(t *testing.T) {
 	// A second instance on a live socket refuses to start.
 	in = run(t, t.TempDir(), sock)
 	defer in.stop(t)
-	srv, err := New(Options{DataDir: t.TempDir(), AdminSocket: path, SMTPAddr: "127.0.0.1:0", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	srv, err := New(Options{DataDir: t.TempDir(), AdminSocket: path, SMTPAddr: "127.0.0.1:0", Resolver: &mailtest.Resolver{}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	if err != nil {
 		t.Fatal(err)
 	}

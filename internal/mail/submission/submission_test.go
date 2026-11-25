@@ -468,9 +468,9 @@ func TestLocalAndExternalDelivery(t *testing.T) {
 			t.Errorf("local copy lacks %q:\n%s", want, m)
 		}
 	}
-	// The external target of fwd@ is not forwarded yet: an event.
-	if ev, _ := e.store.Events(context.Background(), 0); len(ev) != 1 || ev[0].Kind != config.EventBounced ||
-		!strings.Contains(ev[0].Detail, "friend@remote.test") {
+	// The external target of fwd@ goes out with the other external
+	// recipients (deduplicated with the direct one).
+	if ev, _ := e.store.Events(context.Background(), 0); len(ev) != 0 {
 		t.Fatalf("events %+v", ev)
 	}
 
@@ -720,5 +720,22 @@ func TestCRLFWriter(t *testing.T) {
 		if b.String() != want {
 			t.Errorf("%q: %q", in, b.String())
 		}
+	}
+}
+
+func TestForwardOnlyAlias(t *testing.T) {
+	e := start(t)
+	cfg := testConfig(t)
+	cfg.Aliases = append(cfg.Aliases, config.Alias{Address: "out@example.org", Targets: []string{"away@remote.test"}})
+	e.dir.Store(directory.New(cfg))
+	c := e.client(alice)
+	if err := send(c, alice, []string{"out@example.org"}, message(alice, "out@example.org", "hi")); err != nil {
+		t.Fatal(err)
+	}
+	e.q.Flush()
+	got := e.sink.Messages()
+	// The sender is our own mailbox: no SRS.
+	if len(got) != 1 || got[0].From != alice || len(got[0].To) != 1 || got[0].To[0] != "away@remote.test" {
+		t.Fatalf("sink %+v", got)
 	}
 }

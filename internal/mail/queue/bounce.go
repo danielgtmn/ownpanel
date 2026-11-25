@@ -38,7 +38,9 @@ func (q *Queue) bounce(ctx context.Context, m storage.QueuedMessage, failed []Fa
 
 // Bounce delivers a delivery status notification about failed recipients
 // into the INBOX of the sender's local mailbox and records an event.
-// Nothing is sent for the null sender or without a local mailbox.
+// Without a local mailbox, the notification is queued to the address
+// Options.ReturnTo gives for the sender (forwarded mail). Nothing is sent
+// for the null sender.
 // originalHeader is the header of the failed message (may be nil).
 func (q *Queue) Bounce(ctx context.Context, sender, storageID string, originalHeader []byte, failed []Failure) {
 	if len(failed) == 0 {
@@ -54,10 +56,26 @@ func (q *Queue) Bounce(ctx context.Context, sender, storageID string, originalHe
 		q.opts.Event(config.Event{Kind: config.EventBounced, StorageID: storageID, Address: sender, Detail: detail})
 	}
 	q.log.Info("mail queue: bounced", "recipients", len(failed), "status", failed[0].Status)
-	if sender == "" || storageID == "" {
+	if sender == "" {
 		return // no bounce for bounces
 	}
 	dir := q.opts.Directory()
+	if storageID == "" {
+		// Forwarded mail: the bounce goes back to the original sender,
+		// from the null sender (so it is never bounced itself).
+		if q.opts.ReturnTo == nil {
+			return
+		}
+		orig, ok := q.opts.ReturnTo(sender)
+		if !ok {
+			return
+		}
+		msg := BuildDSN(dir.Hostname(), orig, q.now(), originalHeader, failed)
+		if err := q.Enqueue(ctx, bytes.NewReader(msg), "", "", []string{orig}); err != nil {
+			q.log.Error("mail queue: enqueue bounce", "err", err)
+		}
+		return
+	}
 	if _, ok := dir.MailboxByStorageID(storageID); !ok {
 		q.log.Warn("mail queue: bounce dropped, mailbox no longer exists", "storage_id", storageID)
 		return

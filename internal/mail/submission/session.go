@@ -41,7 +41,6 @@ var (
 	errRateLimited   = &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 7, 1}, Message: "Sending limit reached, try again later"}
 	errBadRcpt       = &smtp.SMTPError{Code: 553, EnhancedCode: smtp.EnhancedCode{5, 1, 3}, Message: "Recipient address not valid"}
 	errUnknownRcpt   = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 1, 1}, Message: "No such recipient here"}
-	errForwardOnly   = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 1, 1}, Message: "This address forwards elsewhere; forwarding is not available yet"}
 	errNoPostmaster  = &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Postmaster mailbox not set up yet, try again later"}
 	errAllFull       = &smtp.SMTPError{Code: 452, EnhancedCode: smtp.EnhancedCode{4, 2, 2}, Message: "Mailbox full, try again later"}
 	errDiskFull      = &smtp.SMTPError{Code: 452, EnhancedCode: smtp.EnhancedCode{4, 3, 1}, Message: "Insufficient system storage, try again later"}
@@ -63,7 +62,6 @@ type session struct {
 	from     string
 	local    []*config.Mailbox
 	external []string
-	notes    []config.Event
 }
 
 func newSession(s *Server, c *smtp.Conn) *session {
@@ -73,7 +71,7 @@ func newSession(s *Server, c *smtp.Conn) *session {
 
 func (ss *session) Reset() {
 	ss.dir, ss.from = nil, ""
-	ss.local, ss.external, ss.notes = nil, nil, nil
+	ss.local, ss.external = nil, nil
 }
 
 func (ss *session) Logout() error { return nil }
@@ -173,8 +171,6 @@ func (ss *session) Rcpt(to string, _ *smtp.RcptOptions) error {
 	switch out {
 	case directory.Unknown:
 		return errUnknownRcpt
-	case directory.ForwardOnly:
-		return errForwardOnly
 	case directory.NoPostmaster:
 		return errNoPostmaster
 	}
@@ -183,11 +179,13 @@ func (ss *session) Rcpt(to string, _ *smtp.RcptOptions) error {
 			ss.local = append(ss.local, m)
 		}
 	}
-	// External targets of local aliases are not forwarded in this phase
-	// (the same as on port 25).
+	// External targets of local aliases go out with the rest: the sender
+	// is a mailbox of ours, so no SRS is needed, and the message counts
+	// once against the mailbox's and its domain's limits like any other.
 	for _, t := range route.External {
-		ss.notes = append(ss.notes, config.Event{Kind: config.EventBounced, StorageID: ss.box.StorageID, Address: addr,
-			Detail: fmt.Sprintf("message to %s was not forwarded to %s: forwarding is not available yet", addr, t)})
+		if !slices.Contains(ss.external, t) {
+			ss.external = append(ss.external, t)
+		}
 	}
 	return nil
 }
@@ -326,11 +324,6 @@ func (ss *session) Data(r io.Reader) error {
 	}
 	if len(full) > 0 {
 		ss.s.opts.Queue.Bounce(ctx, ss.from, ss.box.StorageID, rawHeader, full)
-	}
-	for _, e := range ss.notes {
-		if err := store.AddEvent(ctx, e); err != nil {
-			ss.s.log.Error("submission: record event", "err", err)
-		}
 	}
 	ss.s.log.Info("submission: message accepted", "storage_id", ss.box.StorageID,
 		"local", len(ss.local)-len(full), "external", len(ss.external), "signed", sig != "")
