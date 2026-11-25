@@ -102,6 +102,9 @@ type session struct {
 	reports     []string       // original senders of bounces to SRS addresses
 	reportDoms  []string       // the domains of those SRS addresses
 	notes       []config.Event // recorded once the message is accepted
+	// toGroup: a recipient is a group restricted by its sender policy, so
+	// the envelope sender must be authenticated exactly (exactSender).
+	toGroup bool
 }
 
 func (s *Server) newSession(c *smtp.Conn) (smtp.Session, error) {
@@ -128,6 +131,7 @@ func (ss *session) Reset() {
 	ss.reports = nil
 	ss.reportDoms = nil
 	ss.notes = nil
+	ss.toGroup = false
 }
 
 func (ss *session) Logout() error { return nil }
@@ -223,8 +227,11 @@ func (ss *session) Rcpt(to string, _ *smtp.RcptOptions) error {
 	// the envelope sender must be one of them. It is one of our addresses
 	// then, so the message is only accepted with an SPF or DKIM pass
 	// aligned with it (unauthenticatedOwn at DATA).
-	if g, ok := ss.dir.Group(addr); ok && !ss.dir.GroupAllows(g, directory.Normalize(ss.from)) {
-		return errGroupDenied
+	if g, ok := ss.dir.Group(addr); ok {
+		if !ss.dir.GroupAllows(g, directory.Normalize(ss.from)) {
+			return errGroupDenied
+		}
+		ss.toGroup = ss.toGroup || g.SenderPolicy == config.SenderOrganisation || g.SenderPolicy == config.SenderMembers
 	}
 	if err := ss.greylist(addr); err != nil {
 		return err
@@ -419,6 +426,10 @@ func (ss *session) Data(r io.Reader) error {
 	v, err := ss.check(ctx, f, fields)
 	if err != nil {
 		return err
+	}
+	if ss.toGroup && !ss.exactSender(v) {
+		ss.s.log.Info("smtp: group refused a sender not authenticated exactly", "remote", ss.remote)
+		return errGroupDenied
 	}
 
 	// What every copy starts with: trace, verdicts, the header without
@@ -670,6 +681,30 @@ func (ss *session) unauthenticatedOwn(v verdict, fromDomains []string) string {
 		}
 	}
 	return ""
+}
+
+// exactSender tells whether SPF or a DKIM signature passed for exactly the
+// envelope sender's domain. Restricted groups need that: the relaxed
+// alignment of unauthenticatedOwn would let a sibling domain under the
+// same registrable domain (another customer's) speak for the sender.
+// Loopback clients are exempt as there.
+func (ss *session) exactSender(v verdict) bool {
+	if ss.ip.IsLoopback() {
+		return true
+	}
+	_, d, ok := config.SplitAddress(directory.Normalize(ss.from))
+	if !ok {
+		return false
+	}
+	if ss.spfPassFor(d) {
+		return true
+	}
+	for _, r := range v.dkim {
+		if r.Result == auth.Pass && strings.EqualFold(strings.TrimSuffix(r.Domain, "."), d) {
+			return true
+		}
+	}
+	return false
 }
 
 // sameOrg tells whether a and b share their organizational domain.
