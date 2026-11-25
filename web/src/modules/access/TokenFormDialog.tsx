@@ -172,7 +172,11 @@ function TokenForm({ onSubmit }: { onSubmit: (token: NewToken) => Promise<void> 
             ))}
           </SelectContent>
         </Select>
-        <FieldDescription>After that, programs using it are turned away. Create a new token then.</FieldDescription>
+        <FieldDescription>
+          {expiry === 'never'
+            ? 'Works until you delete it. A token that expires limits the damage if it leaks.'
+            : 'After that, programs using it are turned away. Create a new token then.'}
+        </FieldDescription>
       </Field>
 
       {errors.form ? (
