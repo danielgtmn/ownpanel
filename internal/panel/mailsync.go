@@ -114,7 +114,7 @@ func (s *Service) buildMailConfig(ctx context.Context) (*config.Config, error) {
 				DisplayName: m.DisplayName, AppPasswords: byMailbox[m.ID], AppPasswordsOnly: m.AppPasswordsOnly,
 				Revision: m.Revision, PasswordSetAt: unixOrZero(m.AdminPasswordAt),
 				DisplayNameSetAt: unixOrZero(m.AdminDisplayNameAt), AppPasswordsOnlySetAt: unixOrZero(m.AdminAppPasswordsOnlyAt),
-				Grants: grantsOf[m.ID],
+				Grants: grantsOf[m.ID], GrantsSetAt: unixOrZero(m.AdminGrantsAt),
 			}
 			// Personal is pushed as "", so configurations without shared
 			// mailboxes stay as they were.

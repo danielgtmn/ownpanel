@@ -190,6 +190,10 @@ type Mailbox struct {
 	// KeepSentCopy (shared mailboxes only): mail sent as or on behalf of
 	// the mailbox is also stored in its Sent folder.
 	KeepSentCopy bool `json:"keep_sent_copy,omitempty"`
+	// GrantsSetAt is when the panel last changed Grants itself (Unix
+	// seconds, 0: never), like PasswordSetAt: a self-delegation the
+	// mailbox made at or before that time no longer counts.
+	GrantsSetAt int64 `json:"grants_set_at,omitempty"`
 }
 
 // Alias delivers mail for Address to Targets.
@@ -470,7 +474,7 @@ func validateMailbox(m Mailbox) error {
 		return fmt.Errorf("mailbox %s: %w", m.Address, err)
 	}
 	if m.QuotaBytes < 0 || m.SendPerHour < 0 || m.SendPerDay < 0 || m.Revision < 0 ||
-		m.PasswordSetAt < 0 || m.DisplayNameSetAt < 0 || m.AppPasswordsOnlySetAt < 0 {
+		m.PasswordSetAt < 0 || m.DisplayNameSetAt < 0 || m.AppPasswordsOnlySetAt < 0 || m.GrantsSetAt < 0 {
 		return fmt.Errorf("mailbox %s: negative limit", m.Address)
 	}
 	if !ValidDisplayName(m.DisplayName) {

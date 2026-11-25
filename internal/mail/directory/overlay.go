@@ -123,6 +123,9 @@ func (o *Overlay) PruneFor(m config.Mailbox) {
 	if o.AppPasswordsOnly != nil && setByPanel(o.AppPasswordsOnly.At, m.AppPasswordsOnlySetAt) {
 		o.AppPasswordsOnly = nil
 	}
+	if o.Grants != nil && setByPanel(o.Grants.At, m.GrantsSetAt) {
+		o.Grants = nil
+	}
 }
 
 // MergeInto applies the overlay to m (the mailbox as pushed).

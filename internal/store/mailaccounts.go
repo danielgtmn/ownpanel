@@ -402,10 +402,14 @@ func (s *Store) ApplyMailboxChange(ctx context.Context, storageID string, ch Mai
 		if ch.Grants != nil {
 			// Only a personal mailbox delegates itself: the grants of a
 			// shared one are the panel's.
+			// The panel's change at or after the mailbox's wins (a removal
+			// of access must not come back with a late event).
 			if m.Kind == "shared" {
 				r.Overridden = true
-			} else if err := replaceGrants(tx, m.ID, *ch.Grants, s.now()); err != nil {
-				return err
+			} else if taken(m.AdminGrantsAt) {
+				if err := replaceGrants(tx, m.ID, *ch.Grants, s.now()); err != nil {
+					return err
+				}
 			}
 		}
 		if ch.RevokeAppPassword != "" {

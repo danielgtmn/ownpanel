@@ -96,24 +96,35 @@ func (s *Store) SetMailboxGrant(ctx context.Context, mailboxID, granteeID int64,
 				return conflictf("a mailbox can be shared with at most %d mailboxes", limit)
 			}
 		}
-		_, err := tx.Exec(`INSERT INTO mailbox_grants (mailbox_id, grantee_id, rights, created_at) VALUES (?, ?, ?, ?)
+		if _, err := tx.Exec(`INSERT INTO mailbox_grants (mailbox_id, grantee_id, rights, created_at) VALUES (?, ?, ?, ?)
 			ON CONFLICT (mailbox_id, grantee_id) DO UPDATE SET rights = excluded.rights`,
-			mailboxID, granteeID, strings.Join(rights, " "), s.now())
-		return err
+			mailboxID, granteeID, strings.Join(rights, " "), s.now()); err != nil {
+			return err
+		}
+		return grantsChangedByPanel(tx, s.now(), `id = ?`, mailboxID)
 	})
 	return existed, err
 }
 
+// grantsChangedByPanel records that the panel changed the grants of the
+// mailboxes matching where (admin_grants_at).
+func grantsChangedByPanel(tx *sql.Tx, now int64, where string, args ...any) error {
+	_, err := tx.Exec(`UPDATE mailboxes SET admin_grants_at = ? WHERE `+where, append([]any{now}, args...)...)
+	return err
+}
+
 // DeleteMailboxGrant removes a grant.
 func (s *Store) DeleteMailboxGrant(ctx context.Context, mailboxID, granteeID int64) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM mailbox_grants WHERE mailbox_id = ? AND grantee_id = ?`, mailboxID, granteeID)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return notFoundf("this mailbox has no access")
-	}
-	return nil
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.Exec(`DELETE FROM mailbox_grants WHERE mailbox_id = ? AND grantee_id = ?`, mailboxID, granteeID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return notFoundf("this mailbox has no access")
+		}
+		return grantsChangedByPanel(tx, s.now(), `id = ?`, mailboxID)
+	})
 }
 
 // MakeMailboxShared turns a personal mailbox into a shared one: its
@@ -130,6 +141,10 @@ func (s *Store) MakeMailboxShared(ctx context.Context, id int64) error {
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			return notFoundf("mailbox not found")
+		}
+		// The mailboxes whose grants change get the panel's time first.
+		if err := grantsChangedByPanel(tx, now, `id IN (SELECT mailbox_id FROM mailbox_grants WHERE grantee_id = ?)`, id); err != nil {
+			return err
 		}
 		for _, q := range []string{
 			`DELETE FROM mailbox_app_passwords WHERE mailbox_id = ?`,

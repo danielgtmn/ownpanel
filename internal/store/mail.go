@@ -71,6 +71,9 @@ type Mailbox struct {
 	// mailboxes keep a copy of mail sent for them.
 	Kind         string
 	KeepSentCopy bool
+	// AdminGrantsAt is when the panel last changed who has access to the
+	// mailbox (zero: never).
+	AdminGrantsAt time.Time
 }
 
 // MailAlias delivers mail for LocalPart@Domain to Targets. LocalPart "*" is
@@ -262,16 +265,16 @@ func (s *Store) DKIMKeys(ctx context.Context, domain string) ([]DKIMKey, error) 
 
 const mailboxCols = `m.id, m.storage_id, m.domain, m.local_part, m.password_hash, m.quota_bytes, m.send_per_hour, m.send_per_day,
 	m.created_at, d.owner_id, coalesce(u.name, ''), m.display_name, m.app_passwords_only, m.revision,
-	m.admin_password_at, m.admin_display_name_at, m.admin_app_passwords_only_at, m.kind, m.keep_sent_copy`
+	m.admin_password_at, m.admin_display_name_at, m.admin_app_passwords_only_at, m.kind, m.keep_sent_copy, m.admin_grants_at`
 
 const mailboxFrom = ` FROM mailboxes m JOIN mail_domains d ON d.domain = m.domain LEFT JOIN users u ON u.id = d.owner_id`
 
 func scanMailbox(row interface{ Scan(...any) error }) (Mailbox, error) {
 	var m Mailbox
-	var created, adminPassword, adminDisplayName, adminAppPasswordsOnly int64
+	var created, adminPassword, adminDisplayName, adminAppPasswordsOnly, adminGrants int64
 	err := row.Scan(&m.ID, &m.StorageID, &m.Domain, &m.LocalPart, &m.PasswordHash, &m.QuotaBytes, &m.SendPerHour, &m.SendPerDay,
 		&created, &m.OwnerID, &m.Owner, &m.DisplayName, &m.AppPasswordsOnly, &m.Revision,
-		&adminPassword, &adminDisplayName, &adminAppPasswordsOnly, &m.Kind, &m.KeepSentCopy)
+		&adminPassword, &adminDisplayName, &adminAppPasswordsOnly, &m.Kind, &m.KeepSentCopy, &adminGrants)
 	if err != nil {
 		if noRows(err) {
 			return Mailbox{}, notFoundf("mailbox not found")
@@ -282,7 +285,7 @@ func scanMailbox(row interface{ Scan(...any) error }) (Mailbox, error) {
 	for _, f := range []struct {
 		v   int64
 		dst *time.Time
-	}{{adminPassword, &m.AdminPasswordAt}, {adminDisplayName, &m.AdminDisplayNameAt}, {adminAppPasswordsOnly, &m.AdminAppPasswordsOnlyAt}} {
+	}{{adminPassword, &m.AdminPasswordAt}, {adminDisplayName, &m.AdminDisplayNameAt}, {adminAppPasswordsOnly, &m.AdminAppPasswordsOnlyAt}, {adminGrants, &m.AdminGrantsAt}} {
 		if f.v > 0 {
 			*f.dst = unix(f.v)
 		}
