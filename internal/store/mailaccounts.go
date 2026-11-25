@@ -365,6 +365,13 @@ func (s *Store) ApplyMailboxChange(ctx context.Context, storageID string, ch Mai
 			r.Overridden = true
 			return false
 		}
+		// A shared mailbox has no password and no app passwords: a change
+		// the mailbox made while it was personal, reported late, is ignored.
+		shared := m.Kind == "shared"
+		if shared && (ch.PasswordHash != nil || ch.AppPasswordsOnly != nil || ch.AddAppPassword != nil) {
+			r.Overridden = true
+			ch.PasswordHash, ch.AppPasswordsOnly, ch.AddAppPassword = nil, nil, nil
+		}
 		if ch.PasswordHash != nil && taken(m.AdminPasswordAt) {
 			m.PasswordHash = *ch.PasswordHash
 		}

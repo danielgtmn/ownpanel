@@ -577,6 +577,12 @@ func (c *Config) DropInvalid() []string {
 			note("mailbox %q: display name not valid; removed", m.Address)
 			m.DisplayName = ""
 		}
+		if m.Shared() && (m.PasswordHash != "" || len(m.AppPasswords) > 0 || m.AppPasswordsOnly) {
+			// Nobody signs in to a shared mailbox: what would let someone is
+			// removed, the mailbox stays (it still receives mail).
+			note("mailbox %q: a shared mailbox has no password or app passwords; removed", m.Address)
+			m.PasswordHash, m.AppPasswords, m.AppPasswordsOnly = "", nil, false
+		}
 		if m.KeepSentCopy && !m.Shared() {
 			note("mailbox %q: keeping copies of sent mail is only for shared mailboxes; turned off", m.Address)
 			m.KeepSentCopy = false
