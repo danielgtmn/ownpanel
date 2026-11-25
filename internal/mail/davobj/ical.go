@@ -203,6 +203,27 @@ type timing struct {
 	capped bool
 	capAt  time.Time
 	count  int
+	// unexpanded: a rule that is not expanded (unsafeRule); its
+	// occurrences may fall anywhere from the start until lastStart (zero:
+	// for ever).
+	unexpanded bool
+	lastStart  time.Time
+}
+
+// unsafeRule tells whether a rule must never be handed to rrule-go:
+// sub-daily rules with BYHOUR, BYMINUTE or BYSECOND loop for ever there
+// when the interval never reaches them (FREQ=HOURLY;INTERVAL=2;BYHOUR=1),
+// without looking at UNTIL or COUNT; MINUTELY and SECONDLY rules produce
+// too many occurrences to be worth expanding at all. Such rules count as
+// happening at any time from their start on (until UNTIL, if given).
+func unsafeRule(o *rrule.ROption) bool {
+	switch o.Freq {
+	case rrule.MINUTELY, rrule.SECONDLY:
+		return true
+	case rrule.HOURLY:
+		return len(o.Byhour) > 0 || len(o.Byminute) > 0 || len(o.Bysecond) > 0
+	}
+	return false
 }
 
 // horizonYears bounds recurrence expansion: occurrences more than this
@@ -305,6 +326,10 @@ func timingOf(c *ical.Component, tz *tzSet) (timing, error) {
 			return t, invalid(ValidCalendarData, "the recurrence rule cannot be read")
 		}
 		opt.Dtstart = t.start
+		if unsafeRule(opt) {
+			t.unexpanded, t.lastStart = true, opt.Until
+			return t, nil
+		}
 		t.capAt = t.start.AddDate(horizonYears, 0, 0)
 		if opt.Until.IsZero() || opt.Until.After(t.capAt) {
 			opt.Until, t.capped = t.capAt, true
@@ -348,6 +373,12 @@ func spanOf(c *ical.Component, tz *tzSet) (span, error) {
 		return span{NoStart, NoEnd}, nil
 	}
 	sp := span{t.start.Unix(), t.end.Unix()}
+	if t.unexpanded {
+		sp.end = NoEnd
+		if !t.lastStart.IsZero() {
+			sp.end = max(t.end.Unix(), t.lastStart.Add(t.duration()).Unix())
+		}
+	}
 	if t.recur != nil {
 		next := t.recur.Iterator()
 		last, n := t.start, 0
@@ -408,6 +439,13 @@ func overlaps(c *ical.Component, tz *tzSet, qs, qe time.Time) bool {
 			return (qs.IsZero() || !s.Before(qs)) && (qe.IsZero() || s.Before(qe))
 		}
 		return (qe.IsZero() || s.Before(qe)) && (qs.IsZero() || e.After(qs))
+	}
+	if t.unexpanded {
+		// Any time from the start (to the last possible start).
+		if !qe.IsZero() && !t.start.Before(qe) {
+			return false
+		}
+		return t.lastStart.IsZero() || qs.IsZero() || t.lastStart.Add(t.duration()).After(qs) || !t.lastStart.Before(qs)
 	}
 	if t.recur == nil {
 		return hit(t.start, t.end)
