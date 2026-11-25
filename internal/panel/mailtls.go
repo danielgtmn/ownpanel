@@ -179,6 +179,11 @@ func (s *Service) refreshMailCerts(ctx context.Context, issue bool) bool {
 				HostPolicy: autocert.HostWhitelist(host),
 				Email:      email,
 			}
+			// autocert offers HTTP-01 only once HTTPHandler has been called;
+			// MailChallengeHandler calls it only when a challenge comes in,
+			// which never happens before the CA is offered HTTP-01. Without
+			// this, only TLS-ALPN-01 is tried, which cannot succeed here.
+			c.mgr.HTTPHandler(nil)
 		}
 	}
 	before := fingerprint(c.certs)

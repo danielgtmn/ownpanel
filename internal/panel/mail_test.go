@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -937,6 +938,12 @@ func TestMailCertificates(t *testing.T) {
 	svc.refreshMailCerts(ctx, true)
 	if res.count() != 1 || svc.certs.manager() == nil || !svc.mailCertsLoaded() || len(svc.mailCertificates()) != 0 {
 		t.Fatalf("ACME: %d lookups", res.count())
+	}
+	// HTTP-01 must be offered from the start, before any challenge request
+	// (autocert keeps this in an unexported field; port 443 is Caddy's, so
+	// TLS-ALPN-01 alone can never succeed).
+	if !reflect.ValueOf(svc.certs.manager()).Elem().FieldByName("tryHTTP01").Bool() {
+		t.Fatal("the certificate manager does not offer the HTTP-01 challenge")
 	}
 	svc.refreshMailCerts(ctx, true)
 	if res.count() != 1 {
