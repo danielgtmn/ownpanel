@@ -1,6 +1,7 @@
 package submission
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -397,7 +398,16 @@ func TestSenderRules(t *testing.T) {
 		// An alias through another alias.
 		{"info@other.test", "info@other.test", 0},
 		// Envelope fine, header From another address of hers.
-		{alice, "team@example.org, alice@example.org", 0},
+		{alice, "team@example.org", 0},
+		// Several From addresses need a Sender, which must be hers too.
+		{alice, "team@example.org, alice@example.org\r\nSender: alice@example.org", 0},
+		{alice, "team@example.org, alice@example.org", 550},
+		{alice, "team@example.org, alice@example.org\r\nSender: bob@example.org", 550},
+		{alice, "alice@example.org\r\nSender: bob@example.org", 550},
+		{alice, "alice@example.org\r\nSender: alice@example.org, team@example.org", 550},
+		// Exactly one From field.
+		{alice, "alice@example.org\r\nFrom: team@example.org", 550},
+		{alice, "alice@example.org\r\nFrom: bob@example.org", 550},
 		// The catch-all delivers to alice but does not count.
 		{"random@example.org", alice, 550},
 		// An alias that does not deliver to alice.
@@ -419,7 +429,7 @@ func TestSenderRules(t *testing.T) {
 		}
 		c.Reset()
 	}
-	if n := len(e.inbox(idBob)); n != 5 {
+	if n := len(e.inbox(idBob)); n != 6 {
 		t.Fatalf("bob has %d messages", n)
 	}
 
@@ -435,6 +445,29 @@ func TestSenderRules(t *testing.T) {
 	c2 := e.client(bob)
 	if err := send(c2, bob, []string{alice}, message(bob, alice, "to blocked")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReadHeaderLimit(t *testing.T) {
+	pad := "X-Pad: " + strings.Repeat("a", 1000) + "\r\n"
+	n := maxHeaderBytes/len(pad) + 1
+	// A second From hidden behind a huge header must not get through.
+	huge := "From: a@example.org\r\n" + strings.Repeat(pad, n) + "From: b@example.org\r\n\r\nbody\r\n"
+	if _, _, err := readHeader(strings.NewReader(huge)); !errors.Is(err, errHeaderTooLarge) {
+		t.Fatalf("huge header: %v", err)
+	}
+	// Without an end within the limit.
+	if _, _, err := readHeader(strings.NewReader("From: a@example.org\r\n" + strings.Repeat(pad, n))); !errors.Is(err, errHeaderTooLarge) {
+		t.Fatalf("huge header without body: %v", err)
+	}
+	// A big header within the limit, followed by a big body, is fine.
+	ok := "From: a@example.org\r\n" + strings.Repeat(pad, n-10) + "\r\n" + strings.Repeat("body\r\n", 1<<20)
+	h, raw, err := readHeader(strings.NewReader(ok))
+	if err != nil || h.Get("From") != "a@example.org" || !bytes.HasSuffix(raw, []byte(pad)) {
+		t.Fatalf("big header: %v", err)
+	}
+	if errHeaderTooBig.Code != 552 || errHeaderTooBig.EnhancedCode != (smtp.EnhancedCode{5, 3, 4}) {
+		t.Fatal("answer")
 	}
 }
 

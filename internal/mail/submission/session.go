@@ -38,6 +38,11 @@ var (
 	errSenderDenied  = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 7, 1}, Message: "This mailbox may not send as this address"}
 	errFromDenied    = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 7, 1}, Message: "The From address of the message may not be used by this mailbox"}
 	errNoFrom        = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 6, 0}, Message: "The message has no readable From header"}
+	errManyFrom      = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 6, 0}, Message: "The message must have exactly one From header"}
+	errNeedSender    = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 6, 0}, Message: "A From header with several addresses needs a Sender header"}
+	errBadSender     = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 6, 0}, Message: "The Sender header must hold exactly one address"}
+	errSenderHdr     = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 7, 1}, Message: "The Sender address of the message may not be used by this mailbox"}
+	errHeaderTooBig  = &smtp.SMTPError{Code: 552, EnhancedCode: smtp.EnhancedCode{5, 3, 4}, Message: "Message header too large"}
 	errRateLimited   = &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 7, 1}, Message: "Sending limit reached, try again later"}
 	errBadRcpt       = &smtp.SMTPError{Code: 553, EnhancedCode: smtp.EnhancedCode{5, 1, 3}, Message: "Recipient address not valid"}
 	errUnknownRcpt   = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 1, 1}, Message: "No such recipient here"}
@@ -256,6 +261,9 @@ func (ss *session) Data(r io.Reader) error {
 		return errLocal
 	}
 	hdr, rawHeader, err := readHeader(f)
+	if errors.Is(err, errHeaderTooLarge) {
+		return errHeaderTooBig
+	}
 	if err != nil {
 		return errNoFrom
 	}
@@ -330,27 +338,46 @@ func (ss *session) Data(r io.Reader) error {
 	return nil
 }
 
-// checkFrom checks every address of the header From against the sign-in
-// and returns the domain of the first one (the one that signs).
+// checkFrom checks the header From (exactly one field) and, when present,
+// Sender (exactly one field with one address) against the sign-in, as RFC
+// 5322 3.6.2 wants them: several From addresses need a Sender. Every
+// address must be one the mailbox may send as. It returns the domain of the
+// first From address (the one that signs).
 func (ss *session) checkFrom(hdr textproto.MIMEHeader) (string, error) {
 	values := hdr.Values("From")
 	if len(values) == 0 {
 		return "", errNoFrom
 	}
-	domain := ""
-	for _, v := range values {
-		list, err := (&mail.AddressParser{}).ParseList(v)
-		if err != nil || len(list) == 0 {
-			return "", errNoFrom
+	if len(values) > 1 {
+		return "", errManyFrom
+	}
+	list, err := (&mail.AddressParser{}).ParseList(values[0])
+	if err != nil || len(list) == 0 {
+		return "", errNoFrom
+	}
+	senders := hdr.Values("Sender")
+	switch {
+	case len(senders) > 1:
+		return "", errBadSender
+	case len(senders) == 1:
+		sl, err := (&mail.AddressParser{}).ParseList(senders[0])
+		if err != nil || len(sl) != 1 {
+			return "", errBadSender
 		}
-		for _, a := range list {
-			addr := directory.Normalize(a.Address)
-			if !ss.dir.MaySendAs(ss.box, addr) {
-				return "", errFromDenied
-			}
-			if domain == "" {
-				_, domain, _ = config.SplitAddress(addr)
-			}
+		if !ss.dir.MaySendAs(ss.box, directory.Normalize(sl[0].Address)) {
+			return "", errSenderHdr
+		}
+	case len(list) > 1:
+		return "", errNeedSender
+	}
+	domain := ""
+	for _, a := range list {
+		addr := directory.Normalize(a.Address)
+		if !ss.dir.MaySendAs(ss.box, addr) {
+			return "", errFromDenied
+		}
+		if domain == "" {
+			_, domain, _ = config.SplitAddress(addr)
 		}
 	}
 	return domain, nil
@@ -413,21 +440,29 @@ func tlsVersion(v uint16) string {
 	return "TLS"
 }
 
-// maxHeaderBytes bounds the header read to check From.
-const maxHeaderBytes = 256 << 10
+// maxHeaderBytes bounds the header section of a submitted message; larger
+// ones are refused, so the From check always sees the whole header.
+const maxHeaderBytes = 1 << 20
+
+var errHeaderTooLarge = errors.New("header too large")
 
 // readHeader parses the header of the message in r and returns it with its
-// raw bytes.
+// raw bytes. A header section longer than maxHeaderBytes is
+// errHeaderTooLarge. r has CRLF line endings (crlfWriter).
 func readHeader(r io.Reader) (textproto.MIMEHeader, []byte, error) {
 	var raw bytes.Buffer
-	br := bufio.NewReader(io.TeeReader(io.LimitReader(r, maxHeaderBytes), &raw))
+	br := bufio.NewReader(io.TeeReader(io.LimitReader(r, maxHeaderBytes+1), &raw))
 	h, err := textproto.NewReader(br).ReadMIMEHeader()
+	b := raw.Bytes()
+	end := bytes.Index(b, []byte("\r\n\r\n"))
+	if end+4 > maxHeaderBytes || end < 0 && len(b) > maxHeaderBytes {
+		return nil, nil, errHeaderTooLarge
+	}
 	if err != nil && !(errors.Is(err, io.EOF) && len(h) > 0) {
 		return nil, nil, err
 	}
-	b := raw.Bytes()
-	if i := bytes.Index(b, []byte("\r\n\r\n")); i >= 0 {
-		b = b[:i+2]
+	if end >= 0 {
+		b = b[:end+2]
 	}
 	return h, b, nil
 }
