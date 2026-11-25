@@ -2,7 +2,7 @@
 
 This page installs ownpanel on a Linux server with systemd: one command downloads a release, checks it, installs `ownpaneld` and Caddy as services and prints how to open the panel.
 
-> The installer has been tested in systemd containers (Ubuntu 24.04, arm64), not yet on a real server. Try it on a throwaway machine first.
+> The installer, the setup steps, publishing, updates and backup/restore have been tested on a real server (Ubuntu 24.04, amd64) and in systemd containers (arm64). ownpanel is still early: try it on a throwaway machine first.
 
 ## What you need
 
@@ -110,7 +110,7 @@ Caddy's admin API is a Unix socket, never a TCP port, because on TCP every local
 - The user `ownpanel` is a member of the group `caddy`, so ownpaneld can connect. Other local users can neither enter the directory nor open the socket.
 - Caddy's own data directories are 0700, so the group membership gives `ownpanel` nothing else.
 
-The units also set `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=full` and `ProtectHome=true`; Caddy gets `CAP_NET_BIND_SERVICE` to bind ports 80 and 443. Caddy is started with `--resume`, so after a restart it serves the last config until ownpaneld pushes the current one.
+Both units set `PrivateTmp`, `ProtectSystem=full` and `ProtectHome=true`; `ownpaneld.service` also sets `NoNewPrivileges`. Caddy gets `CAP_NET_BIND_SERVICE` to bind ports 80 and 443. Caddy is started with `--resume`, so after a restart it serves the last config until ownpaneld pushes the current one.
 
 ## Flags
 
