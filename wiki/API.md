@@ -150,3 +150,5 @@ curl --fail-with-body -X POST \
 ```
 
 Use a `write` token limited to the one site, so a leaked token can publish to that site but cannot create or delete sites.
+
+The request is synchronous: the `201` answer comes after the new version is live, and its `current_release` is the new version's id. On GitHub Actions, the [[GitHub Action|GitHub-Action]] does this for you.
