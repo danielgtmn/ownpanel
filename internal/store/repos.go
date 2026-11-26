@@ -324,6 +324,36 @@ type siteRunRow struct {
 	CreatedAt    time.Time
 	StartedAt    *time.Time
 	FinishedAt   *time.Time
+	// Release is the version a succeeded run published.
+	Release string
+}
+
+// siteRunLogRow is the log of a run's build (#115), as the panel shows it:
+// size-limited by the panel, the values of the site's secret variables
+// blanked out. Removed with its run (and so kept only for the runs the
+// panel keeps).
+type siteRunLogRow struct {
+	ID        string
+	RunID     string `db:",ref=site_runs,cascade,unique"`
+	Log       string
+	Truncated bool
+	CreatedAt time.Time
+}
+
+// siteBuildSettingsRow is how a site is built (#114): at most one per site,
+// removed with the site, independent of its source (unlinking keeps it).
+// Variables holds the site's environment variables (names, values, which
+// are secret) as JSON sealed by the panel (internal/panel/buildsettings.go
+// names the purpose); never stored in the clear.
+type siteBuildSettingsRow struct {
+	ID        string
+	SiteName  string `db:",ref=sites,cascade,unique"`
+	Command   string
+	Output    string
+	Image     string
+	Variables []byte
+	UpdatedBy *string `db:",ref=users,setnull,index"`
+	UpdatedAt time.Time
 }
 
 // githubDeliveryRow is a GitHub delivery already handled, so one that
@@ -382,6 +412,8 @@ type repos struct {
 	githubInsts  *ablage.Repository[githubInstallationRow]
 	sources      *ablage.Repository[siteSourceRow]
 	runs         *ablage.Repository[siteRunRow]
+	runLogs      *ablage.Repository[siteRunLogRow]
+	buildSets    *ablage.Repository[siteBuildSettingsRow]
 	deliveries   *ablage.Repository[githubDeliveryRow]
 	reposGone    *ablage.Repository[githubRepositoryGoneRow]
 	format       *ablage.Repository[formatRow]
@@ -444,6 +476,10 @@ func newRepos(st ablage.Store) (repos, error) {
 	r.runs, err = ablage.NewRepository[siteRunRow](st, "site_runs", ablage.WithIndex("site_name", "status"),
 		ablage.WithIndex("status", "site_name"))
 	add(err)
+	r.runLogs, err = ablage.NewRepository[siteRunLogRow](st, "site_run_logs")
+	add(err)
+	r.buildSets, err = ablage.NewRepository[siteBuildSettingsRow](st, "site_build_settings")
+	add(err)
 	r.deliveries, err = ablage.NewRepository[githubDeliveryRow](st, "github_deliveries")
 	add(err)
 	r.reposGone, err = ablage.NewRepository[githubRepositoryGoneRow](st, "github_repositories_gone")
@@ -480,6 +516,8 @@ func (r repos) with(tx ablage.Store) repos {
 		githubInsts:  r.githubInsts.With(tx),
 		sources:      r.sources.With(tx),
 		runs:         r.runs.With(tx),
+		runLogs:      r.runLogs.With(tx),
+		buildSets:    r.buildSets.With(tx),
 		deliveries:   r.deliveries.With(tx),
 		reposGone:    r.reposGone.With(tx),
 		format:       r.format.With(tx),

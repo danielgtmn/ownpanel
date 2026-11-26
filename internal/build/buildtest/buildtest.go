@@ -33,8 +33,10 @@ type Result struct {
 	ExitCode int
 	// Output is the output archive after success.
 	Output []byte
-	// Log is the build's log.
-	Log string
+	// Log is the build's log. With Hold, Running is what the log holds
+	// while the build runs; Log follows it once the build ended.
+	Log     string
+	Running string
 	// Hold, when set, keeps the build running until it is closed (or the
 	// build is cancelled).
 	Hold chan struct{}
@@ -283,17 +285,44 @@ func (f *Fake) handler() http.Handler {
 	})
 	mux.HandleFunc("GET /builds/{id}/log", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
-		defer f.mu.Unlock()
 		fb := get(w, r)
 		if fb == nil {
+			f.mu.Unlock()
 			return
 		}
 		off, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-		log := fb.res.Log
-		if off > len(log) {
-			off = len(log)
+		text := func() string {
+			if build.Finished(fb.b.State) {
+				return fb.res.Running + fb.res.Log
+			}
+			return fb.res.Running
 		}
+		log := text()
+		running := !build.Finished(fb.b.State)
+		f.mu.Unlock()
+		off = min(off, len(log))
 		io.WriteString(w, log[off:])
+		if r.URL.Query().Get("follow") == "" || !running {
+			return
+		}
+		// Follow: the rest once the build has ended.
+		w.(http.Flusher).Flush()
+		off = len(log)
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(5 * time.Millisecond):
+			}
+			f.mu.Lock()
+			done := build.Finished(fb.b.State)
+			log = text()
+			f.mu.Unlock()
+			if done {
+				io.WriteString(w, log[min(off, len(log)):])
+				return
+			}
+		}
 	})
 	mux.HandleFunc("GET /builds/{id}/output", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -335,7 +364,7 @@ func (f *Fake) finish(fb *fakeBuild) {
 	res := fb.res
 	fb.b.State, fb.b.Reason, fb.b.Message, fb.b.ExitCode = res.State, res.Reason, res.Message, res.ExitCode
 	fb.b.FinishedAt = now()
-	fb.b.LogBytes = int64(len(res.Log))
+	fb.b.LogBytes = int64(len(res.Running + res.Log))
 }
 
 // SiteArchive packs files into a tar.gz.

@@ -264,6 +264,9 @@ func serve(args []string) error {
 	// Builds the build service knows from before this start have lost
 	// their caller: stop and remove them.
 	go svc.RemoveStaleBuilds(ctx)
+	// Build the queued runs of sites (pushes, "Build now"); runs a stop
+	// left running are marked failed first.
+	go svc.RunBuilds(ctx)
 
 	// Initial sync, then heal drift (e.g. Caddy restarted).
 	go svc.Run(ctx, *interval)

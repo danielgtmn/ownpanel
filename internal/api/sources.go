@@ -76,3 +76,74 @@ func (s *Server) sourceBranches(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, out)
 }
+
+// Builds from the repository: settings, a proposal from the repository's
+// files, "Build now", cancelling and the log of a run.
+func (s *Server) siteBuildRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/sites/{name}/build-settings", s.getBuildSettings)
+	mux.HandleFunc("PUT /api/sites/{name}/build-settings", s.putBuildSettings)
+	mux.HandleFunc("GET /api/sites/{name}/build-settings/proposal", s.proposeBuildSettings)
+	mux.HandleFunc("POST /api/sites/{name}/runs", s.startSiteBuild)
+	mux.HandleFunc("POST /api/sites/{name}/runs/{id}/cancel", s.cancelSiteRun)
+	mux.HandleFunc("GET /api/sites/{name}/runs/{id}/log", s.siteRunLog)
+}
+
+func (s *Server) getBuildSettings(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Panel.GetSiteBuildSettings(r.Context(), actorOf(r), r.PathValue("name"))
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) putBuildSettings(w http.ResponseWriter, r *http.Request) {
+	var body panel.SiteBuildSettingsInput
+	if !decodeJSON(w, r, &body, `{"command": "npm ci\nnpm run build", "output": "dist", "image": "node-24", "variables": [{"name": "API_KEY", "value": "…", "secret": true}]}`) {
+		return
+	}
+	out, err := s.Panel.SetSiteBuildSettings(r.Context(), actorOf(r), r.PathValue("name"), body)
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) proposeBuildSettings(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Panel.DetectBuildSettings(r.Context(), actorOf(r), r.PathValue("name"))
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) startSiteBuild(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Panel.StartSiteBuild(r.Context(), actorOf(r), r.PathValue("name"))
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+func (s *Server) cancelSiteRun(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Panel.CancelSiteRun(r.Context(), actorOf(r), r.PathValue("name"), r.PathValue("id"))
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) siteRunLog(w http.ResponseWriter, r *http.Request) {
+	// An offset that is not a number starts at the beginning.
+	off, _ := strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)
+	out, err := s.Panel.SiteRunLog(r.Context(), actorOf(r), r.PathValue("name"), r.PathValue("id"), off)
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}

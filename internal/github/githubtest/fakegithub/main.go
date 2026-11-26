@@ -14,7 +14,14 @@
 // a signed push delivery of the App installed on the repository's account
 // (the body, and the headers GitHub would send as X-Dev-<header>): send
 // the body to the panel's /api/github/webhook with those headers, without
-// the prefix (scripts/github-push.sh does it).
+// the prefix (scripts/github-push.sh does it). The push names the
+// branch's newest commit from POST /_dev/commit, if there is one.
+//
+// POST /_dev/commit?repo=acme/website&branch=main with a tar.gz of a folder
+// as the body records the folder as a new commit on the branch (its files
+// are what a build of the commit gets) and answers the commit's id:
+//
+//	tar -czf - -C my-site . | curl --data-binary @- 'http://127.0.0.1:9101/_dev/commit?repo=acme/website'
 package main
 
 import (

@@ -91,6 +91,9 @@ type SourceRef struct {
 	Site string
 	// Commit is the full id of the commit to build.
 	Commit string
+	// RepositoryID, when not 0, is the repository the commit is from: the
+	// fetch fails if the site is linked to another one by now.
+	RepositoryID int64
 }
 
 // SourceFetcher returns the source tree of a commit (#122/#125 implement it
@@ -237,7 +240,14 @@ func (s *Service) BuildCommit(ctx context.Context, a Actor, ref SourceRef, setti
 	}
 	tree, strip, err := s.build.sources.FetchSource(ctx, ref)
 	if err != nil {
-		return BuildResult{}, &Error{Kind: Unavailable, Msg: "the source could not be fetched", Err: err}
+		// The panel's own fetcher fails with the panel's errors, whose
+		// messages never carry a secret; anything else stays unsaid.
+		msg := "the source could not be fetched"
+		var pe *Error
+		if errors.As(err, &pe) && pe.Msg != "" {
+			msg += ": " + pe.Msg
+		}
+		return BuildResult{}, &Error{Kind: Unavailable, Msg: msg, Err: err}
 	}
 	defer tree.Close()
 	return s.BuildSite(ctx, a, BuildRequest{Site: ref.Site, Tree: tree, Strip: strip, Settings: settings, Live: live, RunID: runID})
@@ -303,6 +313,11 @@ type buildRun struct {
 	spec    build.Spec
 	update  RunUpdate
 	created bool
+	// The log of a run's build, kept with the run (runner.go).
+	log        *runLog
+	logStop    context.CancelFunc
+	logDone    chan struct{}
+	logNotKept bool
 }
 
 func (r *buildRun) report() {
@@ -326,6 +341,7 @@ func (r *buildRun) remove() {
 func (r *buildRun) end(status, reason, message string, err error) (BuildResult, error) {
 	r.update.Status, r.update.Reason, r.update.Message = status, reason, message
 	r.update.FinishedAt = r.s.now()
+	r.keepLog()
 	r.report()
 	res := BuildResult{Status: status, Reason: reason, Message: message, ExitCode: r.update.ExitCode}
 	if status != RunSkipped {
@@ -410,6 +426,7 @@ func (r *buildRun) run(ctx context.Context, t *lineTicket) (BuildResult, error) 
 		e := serviceError(err)
 		return r.end(RunFailed, "", e.Error(), e)
 	}
+	r.followLog()
 	b, err := r.wait(wctx)
 	if err != nil {
 		// Stop it now; remove does the rest.
