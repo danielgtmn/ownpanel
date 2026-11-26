@@ -88,7 +88,7 @@ function RecordRow({ set, zone, zoneReadOnly, onEdit, onDelete }: RowProps) {
 }
 
 type LoadedProps = {
-  connectionId: number
+  connectionId: string
   zoneInfo: Zone
   records: RecordSet[]
   reload: () => Promise<void>
@@ -247,7 +247,7 @@ function Loaded({ connectionId, zoneInfo, records, reload }: LoadedProps) {
 }
 
 // A domain that isn't managed here: offered when one of the person's accounts has it.
-function NotManaged({ connectionId, zone, onAdopted }: { connectionId: number | null; zone: string; onAdopted: () => Promise<void> }) {
+function NotManaged({ connectionId, zone, onAdopted }: { connectionId: string | null; zone: string; onAdopted: () => Promise<void> }) {
   usePageTitle(zone)
   const available = useResource(
     async () => (connectionId === null ? [] : zonesNamed((await listAvailableZones()).zones, zone).filter((z) => z.connection_id === connectionId)),
@@ -289,7 +289,7 @@ function NotManaged({ connectionId, zone, onAdopted }: { connectionId: number | 
   )
 }
 
-export function ZonePage({ connectionId, zone }: { connectionId: number | null; zone: string }) {
+export function ZonePage({ connectionId, zone }: { connectionId: string | null; zone: string }) {
   const data = useResource(async () => {
     if (connectionId === null) return null
     const [zones, records] = await Promise.all([listZones(), listRecords(connectionId, zone)])

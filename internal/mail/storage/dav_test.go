@@ -86,7 +86,7 @@ func TestDAVReconcileAndDelete(t *testing.T) {
 	c := defaultCalendar(t, s, idA)
 	a := putEvent(t, s, c, "a.ics", "a")
 	putEvent(t, s, c, "b.ics", "b")
-	collDir := filepath.Join(dir, davDir, idA, strconv.FormatInt(c.ID, 10))
+	collDir := filepath.Join(dir, davDir, idA, c.ID)
 	// A file of a lost row (crash before commit, or a backup taken while
 	// writing), a damaged file, and a row whose file is gone.
 	if err := os.WriteFile(filepath.Join(collDir, "1.0123456789abcdef"), davEvent("lost"), 0o600); err != nil {

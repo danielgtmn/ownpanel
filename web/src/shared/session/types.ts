@@ -1,7 +1,7 @@
 export type Role = 'admin' | 'member'
 
 export type User = {
-  id: number
+  id: string
   name: string
   // "" when the person has none.
   email: string

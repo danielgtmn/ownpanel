@@ -93,15 +93,15 @@ func (s *Service) buildMailConfig(ctx context.Context) (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	appPasswords, err := s.store.AppPasswords(ctx, 0)
+	appPasswords, err := s.store.AppPasswords(ctx, "")
 	if err != nil {
 		return nil, err
 	}
-	byMailbox := map[int64][]config.AppPassword{}
+	byMailbox := map[string][]config.AppPassword{}
 	for _, ap := range appPasswords {
 		byMailbox[ap.MailboxID] = append(byMailbox[ap.MailboxID], config.AppPassword{ID: ap.ID, Name: ap.Name, MAC: ap.MAC, Created: ap.CreatedAt})
 	}
-	grants, err := s.store.MailboxGrants(ctx, 0, 0)
+	grants, err := s.store.MailboxGrants(ctx, "", "")
 	if err != nil {
 		return nil, err
 	}

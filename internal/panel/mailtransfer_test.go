@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -22,12 +23,12 @@ type transferMail struct {
 	sources  []config.ImportSource
 	resumes  []config.ImportResume
 	parts    []string
-	jobs     map[int64]config.ImportJob
-	canceled []int64
+	jobs     map[string]config.ImportJob
+	canceled []string
 }
 
 func newTransferMail(f *fakeMail) *transferMail {
-	return &transferMail{fakeMail: f, jobs: map[int64]config.ImportJob{}}
+	return &transferMail{fakeMail: f, jobs: map[string]config.ImportJob{}}
 }
 
 func (t *transferMail) CheckImport(_ context.Context, sid string, src config.ImportSource) (config.ImportCheck, error) {
@@ -41,7 +42,7 @@ func (t *transferMail) CheckImport(_ context.Context, sid string, src config.Imp
 }
 
 func (t *transferMail) add(j config.ImportJob) config.ImportJob {
-	j.ID = int64(len(t.jobs) + 1)
+	j.ID = strconv.Itoa(len(t.jobs) + 1)
 	t.jobs[j.ID] = j
 	return j
 }
@@ -65,7 +66,7 @@ func (t *transferMail) CreateUpload(_ context.Context, sid string, req config.Up
 	return t.add(config.ImportJob{StorageID: sid, Kind: config.ImportFile, State: config.ImportUploading, FileName: req.Name, FileSize: req.Size}), nil
 }
 
-func (t *transferMail) UploadPart(_ context.Context, sid string, id, offset int64, part io.Reader, size int64) (int64, error) {
+func (t *transferMail) UploadPart(_ context.Context, sid, id string, offset int64, part io.Reader, size int64) (int64, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.err != nil {
@@ -76,7 +77,7 @@ func (t *transferMail) UploadPart(_ context.Context, sid string, id, offset int6
 	return offset + int64(len(b)), nil
 }
 
-func (t *transferMail) ResumeImport(_ context.Context, sid string, id int64, r config.ImportResume) (config.ImportJob, error) {
+func (t *transferMail) ResumeImport(_ context.Context, sid, id string, r config.ImportResume) (config.ImportJob, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.resumes = append(t.resumes, r)
@@ -107,7 +108,7 @@ func (t *transferMail) ImportJobs(_ context.Context, sid string) ([]config.Impor
 	return out, nil
 }
 
-func (t *transferMail) ImportJob(_ context.Context, sid string, id int64) (config.ImportJob, error) {
+func (t *transferMail) ImportJob(_ context.Context, sid, id string) (config.ImportJob, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.err != nil {
@@ -120,7 +121,7 @@ func (t *transferMail) ImportJob(_ context.Context, sid string, id int64) (confi
 	return j, nil
 }
 
-func (t *transferMail) CancelImport(_ context.Context, sid string, id int64) error {
+func (t *transferMail) CancelImport(_ context.Context, sid, id string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.err != nil {
@@ -147,7 +148,7 @@ func newTransferWorld(t *testing.T) (*mailWorld, *transferMail) {
 	return w, tm
 }
 
-func storageIDOf(t *testing.T, w *mailWorld, id int64) string {
+func storageIDOf(t *testing.T, w *mailWorld, id string) string {
 	t.Helper()
 	m, err := w.svc.store.Mailbox(context.Background(), id)
 	if err != nil {
@@ -174,48 +175,48 @@ func TestMailTransferPermissions(t *testing.T) {
 	write := []Kind{ok, ok, ok, F, F, F, F, U, F}
 	writeOther := []Kind{ok, ok, N, N, F, F, F, U, F}
 	// A job of each mailbox, made directly in the service.
-	job := func(w *mailWorld, tm *transferMail, box int64) int64 {
+	job := func(w *mailWorld, tm *transferMail, box string) string {
 		tm.mu.Lock()
 		defer tm.mu.Unlock()
 		return tm.add(config.ImportJob{StorageID: storageIDOf(t, w, box), Kind: config.ImportFile, State: config.ImportReady, FileName: "a.mbox"}).ID
 	}
 	type op struct {
 		name string
-		run  func(w *mailWorld, tm *transferMail, a Actor, box int64) error
+		run  func(w *mailWorld, tm *transferMail, a Actor, box string) error
 	}
 	ops := []op{
-		{"list imports", func(w *mailWorld, tm *transferMail, a Actor, box int64) error {
+		{"list imports", func(w *mailWorld, tm *transferMail, a Actor, box string) error {
 			_, err := w.svc.MailImports(ctx, a, box)
 			return err
 		}},
-		{"get import", func(w *mailWorld, tm *transferMail, a Actor, box int64) error {
+		{"get import", func(w *mailWorld, tm *transferMail, a Actor, box string) error {
 			_, err := w.svc.MailImportOf(ctx, a, box, job(w, tm, box))
 			return err
 		}},
-		{"check", func(w *mailWorld, tm *transferMail, a Actor, box int64) error {
+		{"check", func(w *mailWorld, tm *transferMail, a Actor, box string) error {
 			_, err := w.svc.CheckMailImport(ctx, a, box, testSource)
 			return err
 		}},
-		{"start", func(w *mailWorld, tm *transferMail, a Actor, box int64) error {
+		{"start", func(w *mailWorld, tm *transferMail, a Actor, box string) error {
 			_, err := w.svc.StartMailImport(ctx, a, box, config.ImportStart{Source: testSource})
 			return err
 		}},
-		{"upload", func(w *mailWorld, tm *transferMail, a Actor, box int64) error {
+		{"upload", func(w *mailWorld, tm *transferMail, a Actor, box string) error {
 			_, err := w.svc.CreateMailUpload(ctx, a, box, config.UploadRequest{Name: "a.mbox", Size: 3})
 			return err
 		}},
-		{"upload part", func(w *mailWorld, tm *transferMail, a Actor, box int64) error {
+		{"upload part", func(w *mailWorld, tm *transferMail, a Actor, box string) error {
 			_, err := w.svc.UploadMailPart(ctx, a, box, job(w, tm, box), 0, strings.NewReader("abc"), 3)
 			return err
 		}},
-		{"start file", func(w *mailWorld, tm *transferMail, a Actor, box int64) error {
+		{"start file", func(w *mailWorld, tm *transferMail, a Actor, box string) error {
 			_, err := w.svc.ResumeMailImport(ctx, a, box, job(w, tm, box), config.ImportResume{})
 			return err
 		}},
-		{"cancel", func(w *mailWorld, tm *transferMail, a Actor, box int64) error {
+		{"cancel", func(w *mailWorld, tm *transferMail, a Actor, box string) error {
 			return w.svc.CancelMailImport(ctx, a, box, job(w, tm, box))
 		}},
-		{"export", func(w *mailWorld, tm *transferMail, a Actor, box int64) error {
+		{"export", func(w *mailWorld, tm *transferMail, a Actor, box string) error {
 			ex, err := w.svc.ExportMailbox(ctx, a, box)
 			if err == nil {
 				ex.Body.Close()
@@ -265,7 +266,7 @@ func TestMailImportByAddress(t *testing.T) {
 	ctx := context.Background()
 	id, err := w.svc.MailboxByAddress(ctx, bobRead, "BobSite.example.com", "Info")
 	if err != nil || id != w.bobBox {
-		t.Fatalf("got %d %v", id, err)
+		t.Fatalf("got %s %v", id, err)
 	}
 	// Another person's mailbox is not found, like a missing one.
 	if _, err := w.svc.MailboxByAddress(ctx, bob, "rootsite.example.com", "root"); KindOf(err) != NotFound {
@@ -352,8 +353,24 @@ func TestMailImportInputAndErrors(t *testing.T) {
 	if _, err := w.svc.CreateMailUpload(ctx, bob, w.bobBox, config.UploadRequest{Name: "big.zip", Size: config.MaxImportBytes + 1}); KindOf(err) != TooLarge {
 		t.Fatalf("too large: %v", err)
 	}
-	if _, err := w.svc.UploadMailPart(ctx, bob, w.bobBox, 1, 0, bytes.NewReader(nil), config.MaxUploadPart+1); KindOf(err) != TooLarge {
+	if _, err := w.svc.UploadMailPart(ctx, bob, w.bobBox, "1", 0, bytes.NewReader(nil), config.MaxUploadPart+1); KindOf(err) != TooLarge {
 		t.Fatalf("part too large: %v", err)
+	}
+	// An id that cannot be one answers like an unknown import, before the
+	// service is asked.
+	for _, bad := range []string{"", "../x", "A1", "1.spool"} {
+		if _, err := w.svc.MailImportOf(ctx, bob, w.bobBox, bad); KindOf(err) != NotFound {
+			t.Fatalf("get %q: %v", bad, err)
+		}
+		if _, err := w.svc.UploadMailPart(ctx, bob, w.bobBox, bad, 0, strings.NewReader("abc"), 3); KindOf(err) != NotFound {
+			t.Fatalf("part %q: %v", bad, err)
+		}
+		if _, err := w.svc.ResumeMailImport(ctx, bob, w.bobBox, bad, config.ImportResume{}); KindOf(err) != NotFound {
+			t.Fatalf("start %q: %v", bad, err)
+		}
+		if err := w.svc.CancelMailImport(ctx, bob, w.bobBox, bad); KindOf(err) != NotFound {
+			t.Fatalf("cancel %q: %v", bad, err)
+		}
 	}
 	for status, kind := range map[int]Kind{400: Invalid, 404: NotFound, 409: Conflict, 413: TooLarge, 429: Throttled, 502: Unavailable, 507: NoSpace, 500: Unavailable} {
 		tm.mu.Lock()

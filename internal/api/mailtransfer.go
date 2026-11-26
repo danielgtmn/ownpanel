@@ -35,20 +35,11 @@ func (s *Server) mailTransferRoutes(mux *http.ServeMux) {
 
 // mailboxOfPath resolves {domain} and {local_part}; the panel decides
 // whether the actor may see the mailbox.
-func (s *Server) mailboxOfPath(w http.ResponseWriter, r *http.Request) (int64, bool) {
+func (s *Server) mailboxOfPath(w http.ResponseWriter, r *http.Request) (string, bool) {
 	id, err := s.Panel.MailboxByAddress(r.Context(), actorOf(r), r.PathValue("domain"), r.PathValue("local_part"))
 	if err != nil {
 		writeFailure(w, err)
-		return 0, false
-	}
-	return id, true
-}
-
-func jobOfPath(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id <= 0 {
-		writeError(w, http.StatusNotFound, "import not found")
-		return 0, false
+		return "", false
 	}
 	return id, true
 }
@@ -110,10 +101,7 @@ func (s *Server) getMailImport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	job, ok := jobOfPath(w, r)
-	if !ok {
-		return
-	}
+	job := r.PathValue("id")
 	v, err := s.Panel.MailImportOf(r.Context(), actorOf(r), id, job)
 	answer(w, http.StatusOK, v, err)
 }
@@ -123,10 +111,7 @@ func (s *Server) cancelMailImport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	job, ok := jobOfPath(w, r)
-	if !ok {
-		return
-	}
+	job := r.PathValue("id")
 	if err := s.Panel.CancelMailImport(r.Context(), actorOf(r), id, job); err != nil {
 		writeFailure(w, err)
 		return
@@ -139,10 +124,7 @@ func (s *Server) resumeMailImport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	job, ok := jobOfPath(w, r)
-	if !ok {
-		return
-	}
+	job := r.PathValue("id")
 	var body struct {
 		Choices  config.ImportChoices `json:"choices"`
 		Password string               `json:"password"`
@@ -177,10 +159,7 @@ func (s *Server) uploadMailPart(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	job, ok := jobOfPath(w, r)
-	if !ok {
-		return
-	}
+	job := r.PathValue("id")
 	offset, err := strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)
 	if err != nil || offset < 0 {
 		writeError(w, http.StatusBadRequest, "add ?offset= with the number of bytes the server has received so far")

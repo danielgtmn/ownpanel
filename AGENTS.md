@@ -21,7 +21,7 @@ cmd/ownpaneld/        entry point: flags, wiring, serve / backup / version
 internal/panel/       the single place where operations and permission checks live
 internal/api/         HTTP routes, one file per area, registered in api.go
 internal/mcp/         MCP tools on top of internal/panel
-internal/store/       SQLite; migrations in store/migrations/NNNN_name.sql
+internal/store/       data in ablage repositories (repos.go); legacy.go converts old DBs once
 internal/caddy/       builds the full Caddy config and loads it
 internal/deploy/      releases of a site (unpack, versions, make live)
 internal/dns/         provider-neutral DNS + hetzner/ (Cloud API only)
@@ -57,7 +57,10 @@ wiki/                 documentation (synced to the GitHub wiki)
   request files of the update worker.
 - **New dependencies** need a good reason; prefer the standard library. Pin
   GitHub Actions to commit SHAs with a version comment.
-- **Migrations** are new files only; never edit one that has been released.
+- **Schema changes** are changes to the row structs in `internal/store/repos.go`;
+  ablage only adds tables, fields and indexes. No joins: batch-load related
+  rows. Never edit `internal/store/legacy/*.sql` (the old schema the
+  one-time conversion starts from).
 - **UI text** describes the effect for the person, never the technology
   (details in `web/AGENTS.md`).
 

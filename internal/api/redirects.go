@@ -67,10 +67,7 @@ func (s *Server) createRedirect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateRedirect(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "redirect")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	in, ok := decodeRedirect(w, r)
 	if !ok {
 		return
@@ -84,10 +81,7 @@ func (s *Server) updateRedirect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteRedirect(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "redirect")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	if err := s.Panel.DeleteRedirect(r.Context(), actorOf(r), id); err != nil {
 		writeFailure(w, err)
 		return
@@ -120,10 +114,7 @@ func (s *Server) pointAnyDomain(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createDNSZone(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "DNS connection")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	var body struct {
 		Name string `json:"name"`
 	}
@@ -139,10 +130,7 @@ func (s *Server) createDNSZone(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteDNSZone(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "DNS connection")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	var body struct {
 		Confirm string `json:"confirm"`
 	}

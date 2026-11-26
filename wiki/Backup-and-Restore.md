@@ -20,7 +20,7 @@ The archive is written with mode 0600. It can be made **while everything runs**:
 
 | In the archive | What |
 |---|---|
-| `ownpanel.db` | a consistent copy of the database: users and password hashes, sessions, access token hashes, sites and domains, DNS connections (encrypted tokens), activity log |
+| `ownpanel.db` | a consistent copy of the database: users and password hashes, sessions, access token hashes, sites and domains, DNS connections (encrypted tokens), activity log. A `ownpanel.db.pre-ablage-*` copy left by the database conversion is not included |
 | `secret.key` | the key that decrypts the stored DNS tokens |
 | `sites/` | all site versions and the `current` links |
 | `caddy/` | Caddy's storage (`/var/lib/ownpanel-caddy/storage`): certificates and their private keys |
@@ -51,12 +51,13 @@ chown -R ownpanel-mail:ownpanel-mail /var/lib/ownpanel-mail
 systemctl start ownpanel-caddy ownpanel-mail ownpaneld
 ```
 
-The leftover `-wal` and `-shm` files must go: SQLite would otherwise apply them to the restored database. Skip the mail lines for an archive made with `-no-mail`.
+The leftover `-wal` and `-shm` files must go: SQLite would otherwise apply them to the restored database. A backup made by a version from before the database conversion (see [[Installation|Installation#updating]]) can be restored too: the panel converts it at its next start, after writing a copy `ownpanel.db.pre-ablage-<UTC time>` of it. Skip the mail lines for an archive made with `-no-mail`.
 
 The file `restored` tells the mail service that its data is older than what mail programs may have seen: it renumbers every folder once, so mail programs load the folders again instead of showing messages that are not there any more. Calendar and contacts programs likewise sync everything again (every entry gets a new version). Mail that arrived after the backup is lost unless the sending servers deliver it again.
 
 Notes:
 
+- An archive made by a version from before the mail index used ablage restores the same way: the mail service converts its `mail.db` at the next start and leaves a copy of the unconverted file as `mail.db.pre-ablage-<UTC time>` next to it (delete it once the service runs).
 - Unpacking over an existing `sites/` or Caddy's `storage` directory adds and overwrites files but does not delete files that are not in the archive. For a clean restore, move the old `/var/lib/ownpanel/sites` and `/var/lib/ownpanel-caddy/storage` away first.
 - On a fresh server, run the installer first so users, units and directories exist, then restore, then restore your `ownpaneld.env` flags (`-server-ip` in particular if the address changed).
 - Without `secret.key`, restored DNS connections cannot be used; add them again.

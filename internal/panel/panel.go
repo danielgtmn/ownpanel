@@ -18,8 +18,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/danielgtmn/sesam"
-	"github.com/danielgtmn/sesam/plugins/password"
+	"github.com/danielgtmn/sesam/v2"
+	"github.com/danielgtmn/sesam/v2/plugins/password"
 
 	"github.com/danielgtmn/ownpanel/internal/caddy"
 	"github.com/danielgtmn/ownpanel/internal/deploy"
@@ -394,7 +394,7 @@ func (s *Service) SaveSite(ctx context.Context, a Actor, name string, domains []
 // the same name (a removal that failed) are removed first, so they never
 // become the new site's releases. syncMu keeps removeOrphanSites from
 // deciding about the name meanwhile.
-func (s *Service) createSite(ctx context.Context, name string, domains []string, owner int64) (store.Site, error) {
+func (s *Service) createSite(ctx context.Context, name string, domains []string, owner string) (store.Site, error) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
 	if err := s.deploys.Remove(name); err != nil {

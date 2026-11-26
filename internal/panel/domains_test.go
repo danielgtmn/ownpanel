@@ -18,11 +18,11 @@ func TestDomainsPermissionMatrix(t *testing.T) {
 		{"nobody", nobody},
 	}
 	F, N, U := Forbidden, NotFound, Unauthenticated
-	other := func(a Actor) int64 {
-		if a.UserID == 1 {
-			return 2
+	other := func(a Actor) string {
+		if a.UserID == "1" {
+			return "2"
 		}
-		return 1
+		return "1"
 	}
 	ops := []struct {
 		name string
@@ -34,7 +34,7 @@ func TestDomainsPermissionMatrix(t *testing.T) {
 		{"add", func(w world, a Actor) error { _, err := w.svc.AddDomain(ctx, a, "elsewhere.org"); return err },
 			[]Kind{ok, ok, ok, F, F, F, F, U}},
 		{"remove own", func(w world, a Actor) error {
-			if a.UserID != 0 {
+			if a.UserID != "" {
 				if _, err := w.svc.store.AddDomain(ctx, a.UserID, "elsewhere.org"); err != nil {
 					t.Fatal(err)
 				}

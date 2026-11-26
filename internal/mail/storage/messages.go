@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/danielgtmn/ablage"
 )
 
 // System flags. \Recent is not stored (IMAP4rev2 dropped it).
@@ -70,13 +71,49 @@ func validKeyword(k string) bool {
 	return true
 }
 
-func joinFlags(f []string) string { return strings.Join(f, " ") }
-
-func splitFlags(s string) []string {
-	if s == "" {
-		return []string{}
+// flagsOf returns the flags of a stored message, sorted like
+// NormalizeFlags sorts them.
+func flagsOf(m messageRec) []string {
+	out := make([]string, 0, len(m.Keywords)+5)
+	for _, f := range []struct {
+		on   bool
+		flag string
+	}{{m.Seen, FlagSeen}, {m.Answered, FlagAnswered}, {m.Flagged, FlagFlagged}, {m.Deleted, FlagDeleted}, {m.Draft, FlagDraft}} {
+		if f.on {
+			out = append(out, f.flag)
+		}
 	}
-	return strings.Split(s, " ")
+	out = append(out, m.Keywords...)
+	slices.Sort(out)
+	return out
+}
+
+// setFlags stores normalized flags in m: system flags as bools, the rest
+// as keywords (nil when there are none).
+func setFlags(m *messageRec, flags []string) {
+	m.Seen, m.Answered, m.Flagged, m.Deleted, m.Draft = false, false, false, false, false
+	m.Keywords = nil
+	for _, f := range flags {
+		switch f {
+		case FlagSeen:
+			m.Seen = true
+		case FlagAnswered:
+			m.Answered = true
+		case FlagFlagged:
+			m.Flagged = true
+		case FlagDeleted:
+			m.Deleted = true
+		case FlagDraft:
+			m.Draft = true
+		default:
+			m.Keywords = append(m.Keywords, f)
+		}
+	}
+}
+
+// flagRow is the update of the flag fields of a message.
+func flagRow(m messageRec) ablage.Row {
+	return ablage.Row{"seen": m.Seen, "answered": m.Answered, "flagged": m.Flagged, "deleted": m.Deleted, "draft": m.Draft, "keywords": m.Keywords}
 }
 
 // Message is the index entry of one message in a folder.
@@ -90,7 +127,7 @@ type Message struct {
 	file      string
 	// rowID is the index row; column are the flags as stored, seen whether
 	// the reader the message was read for has seen it (shared mailboxes).
-	rowID  int64
+	rowID  string
 	column []string
 	seen   bool
 }
@@ -122,54 +159,55 @@ type Usage struct {
 
 // Usage returns what a mailbox stores (zero if it has no data).
 func (s *Store) Usage(ctx context.Context, id string) (Usage, error) {
-	var u Usage
-	err := s.rdb.QueryRowContext(ctx, `SELECT used_bytes, messages FROM mailboxes WHERE storage_id = ?`, id).Scan(&u.Bytes, &u.Messages)
-	if errors.Is(err, sql.ErrNoRows) {
+	m, err := s.r.mailboxes.Get(ctx, id)
+	if errors.Is(err, ablage.ErrNotFound) {
 		return Usage{}, nil
 	}
-	return u, err
+	return Usage{Bytes: m.UsedBytes, Messages: int(m.Messages)}, err
 }
 
 // StorageIDs returns every storage id that has data.
 func (s *Store) StorageIDs(ctx context.Context) ([]string, error) {
-	rows, err := s.rdb.QueryContext(ctx, `SELECT storage_id FROM mailboxes ORDER BY storage_id`)
+	list, err := s.r.mailboxes.Find(ctx, ablage.Query{})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out = append(out, id)
+	for _, m := range list {
+		out = append(out, m.ID)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-// messageCols are the columns scanMessage reads. The first query argument
-// is the reader whose read state counts ("" for none).
-const messageCols = `uid, size, internal_date, flags, file, id,
-	EXISTS (SELECT 1 FROM shared_seen ss WHERE ss.message_id = messages.id AND ss.reader = ?)`
-
-// scanMessage reads a row of messageCols. With a reader (a shared mailbox,
-// see SelectAs) \Seen is that reader's own read state, not the stored flag.
-func scanMessage(sc interface{ Scan(...any) error }, id, reader string) (Message, error) {
-	var m Message
-	var date int64
-	var flags string
-	if err := sc.Scan(&m.UID, &m.Size, &date, &flags, &m.file, &m.rowID, &m.seen); err != nil {
-		return m, err
+// loadMessages turns stored messages into Messages. With a reader (a
+// shared mailbox, see SelectAs) \Seen is that reader's own read state, not
+// the stored flag; it is read in one query for all of them.
+func loadMessages(ctx context.Context, tx *repos, id, reader string, recs []messageRec) ([]Message, error) {
+	seen := map[string]bool{}
+	if reader != "" && len(recs) > 0 {
+		ids := make([]string, len(recs))
+		for i, m := range recs {
+			ids[i] = m.ID
+		}
+		list, err := tx.sharedSeen.Find(ctx, ablage.Query{Where: ablage.And(ablage.Eq("reader", reader), ablage.In("message_id", ids...))})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range list {
+			seen[r.MessageID] = true
+		}
 	}
-	m.InternalDate = time.Unix(date, 0)
-	m.column = splitFlags(flags)
-	m.Flags = m.column
-	if reader != "" {
-		m.Flags = withSeen(m.column, m.seen)
+	out := make([]Message, len(recs))
+	for i, r := range recs {
+		m := Message{UID: uint32(r.UID), Size: r.Size, InternalDate: local(r.InternalDate),
+			storageID: id, file: r.File, rowID: r.ID, column: flagsOf(r), seen: seen[r.ID]}
+		m.Flags = m.column
+		if reader != "" {
+			m.Flags = withSeen(m.column, m.seen)
+		}
+		out[i] = m
 	}
-	m.storageID = id
-	return m, nil
+	return out, nil
 }
 
 // withSeen returns flags with \Seen set or not.
@@ -198,35 +236,24 @@ func (s *Store) SelectAs(ctx context.Context, id, name, reader string) (Folder, 
 	if err := s.ensure(ctx, id); err != nil {
 		return f, nil, err
 	}
-	tx, err := s.rdb.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return f, nil, err
-	}
-	defer tx.Rollback()
-	var fid int64
-	err = tx.QueryRow(`SELECT id, name, special_use, uid_validity, uid_next, subscribed
-		FROM folders WHERE storage_id = ? AND name = ?`, id, name).
-		Scan(&fid, &f.Name, &f.SpecialUse, &f.UIDValidity, &f.UIDNext, &f.Subscribed)
-	if errors.Is(err, sql.ErrNoRows) {
-		return f, nil, ErrNoFolder
-	}
-	if err != nil {
-		return f, nil, err
-	}
-	rows, err := tx.Query(`SELECT `+messageCols+` FROM messages WHERE folder_id = ? ORDER BY uid`, reader, fid)
-	if err != nil {
-		return f, nil, err
-	}
-	defer rows.Close()
-	msgs := []Message{}
-	for rows.Next() {
-		m, err := scanMessage(rows, id, reader)
+	var msgs []Message
+	err = s.read(ctx, func(tx *repos) error {
+		fr, err := folderByName(ctx, tx, id, name)
 		if err != nil {
-			return f, nil, err
+			return err
 		}
-		msgs = append(msgs, m)
+		f = fr.folder()
+		recs, err := tx.messages.Find(ctx, ablage.Query{Where: ablage.Eq("folder_id", fr.ID), OrderBy: []ablage.Order{ablage.Asc("uid")}})
+		if err != nil {
+			return err
+		}
+		msgs, err = loadMessages(ctx, tx, id, reader, recs)
+		return err
+	})
+	if err != nil {
+		return Folder{}, nil, err
 	}
-	return f, msgs, rows.Err()
+	return f, msgs, nil
 }
 
 // Messages returns the messages with the given UIDs (those that exist),
@@ -244,26 +271,29 @@ func (s *Store) MessagesAs(ctx context.Context, id, folder string, uids []uint32
 	if err := s.ensure(ctx, id); err != nil {
 		return nil, err
 	}
-	var fid int64
-	err = s.rdb.QueryRowContext(ctx, `SELECT id FROM folders WHERE storage_id = ? AND name = ?`, id, folder).Scan(&fid)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNoFolder
-	}
+	var out []Message
+	err = s.read(ctx, func(tx *repos) error {
+		f, err := folderByName(ctx, tx, id, folder)
+		if err != nil {
+			return err
+		}
+		out, err = messagesByUID(ctx, tx, id, f.ID, uids, reader)
+		return err
+	})
+	return out, err
+}
+
+// messagesByUID reads the messages of a folder with the given UIDs (those
+// that exist), ordered by UID.
+func messagesByUID(ctx context.Context, tx *repos, id, folderID string, uids []uint32, reader string) ([]Message, error) {
+	recs, err := tx.messages.Find(ctx, ablage.Query{
+		Where:   ablage.And(ablage.Eq("folder_id", folderID), ablage.In("uid", sortedUnique(uids)...)),
+		OrderBy: []ablage.Order{ablage.Asc("uid")},
+	})
 	if err != nil {
 		return nil, err
 	}
-	out := []Message{}
-	for _, u := range sortedUnique(uids) {
-		m, err := scanMessage(s.rdb.QueryRowContext(ctx, `SELECT `+messageCols+` FROM messages WHERE folder_id = ? AND uid = ?`, reader, fid, u), id, reader)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, m)
-	}
-	return out, nil
+	return loadMessages(ctx, tx, id, reader, recs)
 }
 
 func sortedUnique(uids []uint32) []uint32 {
@@ -340,26 +370,27 @@ func (s *Store) Append(ctx context.Context, id, folder string, r io.Reader, opts
 	if opts.Reader != "" && slices.Contains(flags, FlagSeen) {
 		seen, flags = true, withSeen(flags, false)
 	}
-	err = s.write(ctx, func(tx *sql.Tx, ch *changes) error {
-		f, err := folderByName(tx, id, folder)
+	err = s.write(ctx, func(tx *repos, ch *changes) error {
+		f, err := folderByName(ctx, tx, id, folder)
 		if err != nil {
 			return err
 		}
 		if msgid != "" {
-			var uid uint32
-			var size int64
-			err := tx.QueryRow(`SELECT uid, size FROM messages WHERE folder_id = ? AND msgid = ? ORDER BY uid LIMIT 1`, f.id, msgid).Scan(&uid, &size)
-			if err == nil {
-				res = AppendResult{UIDValidity: f.uidValidity, UID: uid, Size: size, Duplicate: true}
-				return nil
-			}
-			if !errors.Is(err, sql.ErrNoRows) {
+			dup, err := tx.messages.Find(ctx, ablage.Query{
+				Where:   ablage.And(ablage.Eq("folder_id", f.ID), ablage.Eq("msgid", msgid)),
+				OrderBy: []ablage.Order{ablage.Asc("uid")}, Limit: 1,
+			})
+			if err != nil {
 				return err
+			}
+			if len(dup) > 0 {
+				res = AppendResult{UIDValidity: uint32(f.UIDValidity), UID: uint32(dup[0].UID), Size: dup[0].Size, Duplicate: true}
+				return nil
 			}
 		}
 		if quota > 0 {
-			var used int64
-			if err := tx.QueryRow(`SELECT used_bytes FROM mailboxes WHERE storage_id = ?`, id).Scan(&used); err != nil {
+			used, err := usedBytes(ctx, tx, id)
+			if err != nil {
 				return err
 			}
 			if used+size > quota {
@@ -370,28 +401,24 @@ func (s *Store) Append(ctx context.Context, id, folder string, r io.Reader, opts
 		if err != nil {
 			return err
 		}
-		ins, err := tx.Exec(`INSERT INTO messages (folder_id, storage_id, uid, file, size, internal_date, flags, msgid) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			f.id, id, f.uidNext, name, size, date.Unix(), joinFlags(flags), msgid)
-		if err != nil {
+		m := messageRec{FolderID: f.ID, StorageID: id, UID: f.UIDNext, File: name, Size: size, InternalDate: sec(date), MsgID: msgid}
+		setFlags(&m, flags)
+		if err := tx.messages.Create(ctx, &m); err != nil {
 			return err
 		}
 		if seen {
-			row, err := ins.LastInsertId()
-			if err != nil {
-				return err
-			}
-			if _, err := tx.Exec(`INSERT INTO shared_seen (message_id, reader) VALUES (?, ?)`, row, opts.Reader); err != nil {
+			if err := tx.sharedSeen.Create(ctx, &sharedSeenRec{MessageID: m.ID, Reader: opts.Reader}); err != nil {
 				return err
 			}
 		}
-		if _, err := tx.Exec(`UPDATE folders SET uid_next = uid_next + 1 WHERE id = ?`, f.id); err != nil {
+		if err := tx.folders.Patch(ctx, f.ID, ablage.Row{"uid_next": ablage.Incr(1)}); err != nil {
 			return err
 		}
-		if err := addUsage(tx, id, size, 1); err != nil {
+		if err := addUsage(ctx, tx, id, size, 1); err != nil {
 			return err
 		}
-		res = AppendResult{UIDValidity: f.uidValidity, UID: f.uidNext, Size: size}
-		ch.add(id, Change{Kind: Appended, Folder: folder, UIDs: []uint32{f.uidNext}})
+		res = AppendResult{UIDValidity: uint32(f.UIDValidity), UID: uint32(f.UIDNext), Size: size}
+		ch.add(id, Change{Kind: Appended, Folder: folder, UIDs: []uint32{uint32(f.UIDNext)}})
 		return nil
 	})
 	return res, err
@@ -454,9 +481,16 @@ func (s *Store) place(ch *changes, id, tmp string) (string, error) {
 	return name, nil
 }
 
-func addUsage(tx *sql.Tx, id string, bytes int64, messages int) error {
-	_, err := tx.Exec(`UPDATE mailboxes SET used_bytes = used_bytes + ?, messages = messages + ? WHERE storage_id = ?`, bytes, messages, id)
+// addUsage adds to the usage counters of a mailbox.
+func addUsage(ctx context.Context, tx *repos, id string, bytes int64, messages int) error {
+	_, err := tx.mailboxes.UpdateWhere(ctx, ablage.Eq("id", id), ablage.Row{"used_bytes": ablage.Incr(bytes), "messages": ablage.Incr(int64(messages))})
 	return err
+}
+
+// usedBytes is what a mailbox uses of its quota.
+func usedBytes(ctx context.Context, tx *repos, id string) (int64, error) {
+	m, err := tx.mailboxes.Get(ctx, id)
+	return m.UsedBytes, err
 }
 
 // FlagOp is how SetFlags changes flags.
@@ -490,20 +524,17 @@ func (s *Store) SetFlagsAs(ctx context.Context, id, folder string, uids []uint32
 		return nil, err
 	}
 	var out []Message
-	err = s.write(ctx, func(tx *sql.Tx, ch *changes) error {
-		f, err := folderByName(tx, id, folder)
+	err = s.write(ctx, func(tx *repos, ch *changes) error {
+		f, err := folderByName(ctx, tx, id, folder)
+		if err != nil {
+			return err
+		}
+		msgs, err := messagesByUID(ctx, tx, id, f.ID, uids, reader)
 		if err != nil {
 			return err
 		}
 		var changed, seenChanged []uint32
-		for _, u := range sortedUnique(uids) {
-			m, err := scanMessage(tx.QueryRow(`SELECT `+messageCols+` FROM messages WHERE folder_id = ? AND uid = ?`, reader, f.id, u), id, reader)
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
-			}
-			if err != nil {
-				return err
-			}
+		for _, m := range msgs {
 			var next []string
 			switch op {
 			case FlagsReplace:
@@ -522,21 +553,24 @@ func (s *Store) SetFlagsAs(ctx context.Context, id, folder string, uids []uint32
 				// The stored \Seen is nobody's read state here: kept as it is.
 				column = withSeen(next, slices.Contains(m.column, FlagSeen))
 				if seen := slices.Contains(next, FlagSeen); seen != m.seen {
-					q := `DELETE FROM shared_seen WHERE message_id = ? AND reader = ?`
 					if seen {
-						q = `INSERT INTO shared_seen (message_id, reader) VALUES (?, ?) ON CONFLICT DO NOTHING`
+						err = tx.sharedSeen.Create(ctx, &sharedSeenRec{MessageID: m.rowID, Reader: reader})
+					} else {
+						_, err = tx.sharedSeen.DeleteWhere(ctx, ablage.And(ablage.Eq("message_id", m.rowID), ablage.Eq("reader", reader)))
 					}
-					if _, err := tx.Exec(q, m.rowID, reader); err != nil {
+					if err != nil {
 						return err
 					}
-					seenChanged = append(seenChanged, u)
+					seenChanged = append(seenChanged, m.UID)
 				}
 			}
-			if joinFlags(column) != joinFlags(m.column) {
-				if _, err := tx.Exec(`UPDATE messages SET flags = ? WHERE folder_id = ? AND uid = ?`, joinFlags(column), f.id, u); err != nil {
+			if !slices.Equal(column, m.column) {
+				var r messageRec
+				setFlags(&r, column)
+				if err := tx.messages.Patch(ctx, m.rowID, flagRow(r)); err != nil {
 					return err
 				}
-				changed = append(changed, u)
+				changed = append(changed, m.UID)
 			}
 			m.Flags = slices.Clone(next)
 			out = append(out, m)
@@ -588,26 +622,26 @@ func (s *Store) copyOrMove(ctx context.Context, id, from string, uids []uint32, 
 		return res, err
 	}
 	quota := s.quota(id)
-	err = s.write(ctx, func(tx *sql.Tx, ch *changes) error {
-		src, err := folderByName(tx, id, from)
+	err = s.write(ctx, func(tx *repos, ch *changes) error {
+		src, err := folderByName(ctx, tx, id, from)
 		if err != nil {
 			return err
 		}
-		dst, err := folderByName(tx, id, to)
+		dst, err := folderByName(ctx, tx, id, to)
 		if err != nil {
 			return err
 		}
-		res.UIDValidity = dst.uidValidity
+		res.UIDValidity = uint32(dst.UIDValidity)
 		if move {
-			if src.id == dst.id {
+			if src.ID == dst.ID {
 				return ErrInvalidName
 			}
-			existing, err := existingUIDs(tx, src.id, uids)
+			existing, err := existingUIDs(ctx, tx, src.ID, uids)
 			if err != nil {
 				return err
 			}
 			res.Source = existing
-			if res.Dest, err = moveRows(tx, src.id, dst.id, existing); err != nil {
+			if res.Dest, err = moveRows(ctx, tx, src.ID, dst.ID, existing); err != nil {
 				return err
 			}
 			if len(existing) > 0 {
@@ -616,50 +650,48 @@ func (s *Store) copyOrMove(ctx context.Context, id, from string, uids []uint32, 
 			}
 			return nil
 		}
-		next := dst.uidNext
+		recs, err := tx.messages.Find(ctx, ablage.Query{
+			Where:   ablage.And(ablage.Eq("folder_id", src.ID), ablage.In("uid", sortedUnique(uids)...)),
+			OrderBy: []ablage.Order{ablage.Asc("uid")},
+		})
+		if err != nil {
+			return err
+		}
+		next := dst.UIDNext
 		var added int64
-		for _, u := range sortedUnique(uids) {
-			m, err := scanMessage(tx.QueryRow(`SELECT `+messageCols+` FROM messages WHERE folder_id = ? AND uid = ?`, "", src.id, u), id, "")
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
-			}
-			if err != nil {
+		copies := map[string]string{} // source row → copy
+		for _, m := range recs {
+			c := m
+			c.ID, c.FolderID, c.UID, c.MsgID = "", dst.ID, next, ""
+			if err := tx.messages.Create(ctx, &c); err != nil {
 				return err
 			}
-			ins, err := tx.Exec(`INSERT INTO messages (folder_id, storage_id, uid, file, size, internal_date, flags) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				dst.id, id, next, m.file, m.Size, m.InternalDate.Unix(), joinFlags(m.Flags))
-			if err != nil {
-				return err
-			}
-			// In a shared mailbox every reader's read state goes with the copy.
-			row, err := ins.LastInsertId()
-			if err != nil {
-				return err
-			}
-			if _, err := tx.Exec(`INSERT INTO shared_seen (message_id, reader) SELECT ?, reader FROM shared_seen WHERE message_id = ?`, row, m.rowID); err != nil {
-				return err
-			}
-			res.Source = append(res.Source, u)
-			res.Dest = append(res.Dest, next)
+			copies[m.ID] = c.ID
+			res.Source = append(res.Source, uint32(m.UID))
+			res.Dest = append(res.Dest, uint32(next))
 			added += m.Size
 			next++
 		}
 		if len(res.Dest) == 0 {
 			return nil
 		}
+		// In a shared mailbox every reader's read state goes with the copy.
+		if err := copySeen(ctx, tx, copies); err != nil {
+			return err
+		}
 		if quota > 0 {
-			var used int64
-			if err := tx.QueryRow(`SELECT used_bytes FROM mailboxes WHERE storage_id = ?`, id).Scan(&used); err != nil {
+			used, err := usedBytes(ctx, tx, id)
+			if err != nil {
 				return err
 			}
 			if used+added > quota {
 				return ErrOverQuota
 			}
 		}
-		if _, err := tx.Exec(`UPDATE folders SET uid_next = ? WHERE id = ?`, next, dst.id); err != nil {
+		if err := tx.folders.Patch(ctx, dst.ID, ablage.Row{"uid_next": next}); err != nil {
 			return err
 		}
-		if err := addUsage(tx, id, added, len(res.Dest)); err != nil {
+		if err := addUsage(ctx, tx, id, added, len(res.Dest)); err != nil {
 			return err
 		}
 		ch.add(id, Change{Kind: Appended, Folder: to, UIDs: res.Dest})
@@ -671,37 +703,65 @@ func (s *Store) copyOrMove(ctx context.Context, id, from string, uids []uint32, 
 	return res, nil
 }
 
-func existingUIDs(tx *sql.Tx, folderID int64, uids []uint32) ([]uint32, error) {
+// copySeen gives copies of messages (source row → copy row) the read
+// state of every reader of the source.
+func copySeen(ctx context.Context, tx *repos, copies map[string]string) error {
+	src := make([]string, 0, len(copies))
+	for id := range copies {
+		src = append(src, id)
+	}
+	list, err := tx.sharedSeen.Find(ctx, ablage.Query{Where: ablage.In("message_id", src...)})
+	if err != nil {
+		return err
+	}
+	for _, r := range list {
+		if err := tx.sharedSeen.Create(ctx, &sharedSeenRec{MessageID: copies[r.MessageID], Reader: r.Reader}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// existingUIDs returns those of uids that are in the folder, ascending.
+func existingUIDs(ctx context.Context, tx *repos, folderID string, uids []uint32) ([]uint32, error) {
+	recs, err := tx.messages.Find(ctx, ablage.Query{
+		Where:   ablage.And(ablage.Eq("folder_id", folderID), ablage.In("uid", sortedUnique(uids)...)),
+		OrderBy: []ablage.Order{ablage.Asc("uid")},
+	})
+	if err != nil {
+		return nil, err
+	}
 	var out []uint32
-	for _, u := range sortedUnique(uids) {
-		var n int
-		if err := tx.QueryRow(`SELECT count(*) FROM messages WHERE folder_id = ? AND uid = ?`, folderID, u).Scan(&n); err != nil {
-			return nil, err
-		}
-		if n > 0 {
-			out = append(out, u)
-		}
+	for _, m := range recs {
+		out = append(out, uint32(m.UID))
 	}
 	return out, nil
 }
 
 // moveRows moves existing messages (uids sorted) to another folder, giving
 // them new UIDs there in the same order.
-func moveRows(tx *sql.Tx, srcID, dstID int64, uids []uint32) ([]uint32, error) {
-	var next uint32
-	if err := tx.QueryRow(`SELECT uid_next FROM folders WHERE id = ?`, dstID).Scan(&next); err != nil {
+func moveRows(ctx context.Context, tx *repos, srcID, dstID string, uids []uint32) ([]uint32, error) {
+	dst, err := tx.folders.Get(ctx, dstID)
+	if err != nil {
 		return nil, err
 	}
-	out := make([]uint32, 0, len(uids))
-	for _, u := range uids {
-		if _, err := tx.Exec(`UPDATE messages SET folder_id = ?, uid = ? WHERE folder_id = ? AND uid = ?`, dstID, next, srcID, u); err != nil {
+	recs, err := tx.messages.Find(ctx, ablage.Query{
+		Where:   ablage.And(ablage.Eq("folder_id", srcID), ablage.In("uid", uids...)),
+		OrderBy: []ablage.Order{ablage.Asc("uid")},
+	})
+	if err != nil {
+		return nil, err
+	}
+	next := dst.UIDNext
+	out := make([]uint32, 0, len(recs))
+	for _, m := range recs {
+		if err := tx.messages.Patch(ctx, m.ID, ablage.Row{"folder_id": dstID, "uid": next}); err != nil {
 			return nil, err
 		}
-		out = append(out, next)
+		out = append(out, uint32(next))
 		next++
 	}
-	_, err := tx.Exec(`UPDATE folders SET uid_next = ? WHERE id = ?`, next, dstID)
-	return out, err
+	return out, tx.folders.Patch(ctx, dstID, ablage.Row{"uid_next": next})
 }
 
 // Expunge removes the messages flagged \Deleted, of the given UIDs only or
@@ -716,38 +776,24 @@ func (s *Store) Expunge(ctx context.Context, id, folder string, uids []uint32) (
 		return nil, err
 	}
 	var removed []uint32
-	err = s.write(ctx, func(tx *sql.Tx, ch *changes) error {
-		f, err := folderByName(tx, id, folder)
+	err = s.write(ctx, func(tx *repos, ch *changes) error {
+		f, err := folderByName(ctx, tx, id, folder)
 		if err != nil {
 			return err
 		}
-		rows, err := tx.Query(`SELECT uid FROM messages WHERE folder_id = ? AND instr(' ' || flags || ' ', ' \Deleted ') > 0 ORDER BY uid`, f.id)
-		if err != nil {
-			return err
-		}
-		var only map[uint32]bool
+		where := ablage.And(ablage.Eq("folder_id", f.ID), ablage.Eq("deleted", true))
 		if uids != nil {
-			only = make(map[uint32]bool, len(uids))
-			for _, u := range uids {
-				only[u] = true
-			}
+			where = ablage.And(where, ablage.In("uid", uids...))
 		}
-		var del []uint32
-		for rows.Next() {
-			var u uint32
-			if err := rows.Scan(&u); err != nil {
-				rows.Close()
-				return err
-			}
-			if only == nil || only[u] {
-				del = append(del, u)
-			}
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
+		recs, err := tx.messages.Find(ctx, ablage.Query{Where: where, OrderBy: []ablage.Order{ablage.Asc("uid")}})
+		if err != nil {
 			return err
 		}
-		if removed, err = s.removeMessages(tx, ch, id, f.id, del); err != nil {
+		del := make([]uint32, len(recs))
+		for i, m := range recs {
+			del[i] = uint32(m.UID)
+		}
+		if removed, err = s.removeMessages(ctx, tx, ch, id, f.ID, del); err != nil {
 			return err
 		}
 		if len(removed) > 0 {
@@ -762,31 +808,35 @@ func (s *Store) Expunge(ctx context.Context, id, folder string, uids []uint32) (
 // the trash directory (removed after commit). The mailbox directory is
 // fsynced before the commit, so a crash can never bring a deleted message
 // back through reconciliation.
-func (s *Store) removeMessages(tx *sql.Tx, ch *changes, id string, folderID int64, uids []uint32) ([]uint32, error) {
+func (s *Store) removeMessages(ctx context.Context, tx *repos, ch *changes, id, folderID string, uids []uint32) ([]uint32, error) {
+	if len(uids) == 0 {
+		return nil, nil
+	}
+	recs, err := tx.messages.Find(ctx, ablage.Query{
+		Where:   ablage.And(ablage.Eq("folder_id", folderID), ablage.In("uid", uids...)),
+		OrderBy: []ablage.Order{ablage.Asc("uid")},
+	})
+	if err != nil {
+		return nil, err
+	}
 	var removed []uint32
 	var bytes int64
 	trashed := false
-	for _, u := range uids {
-		var file string
-		var size int64
-		err := tx.QueryRow(`DELETE FROM messages WHERE folder_id = ? AND uid = ? RETURNING file, size`, folderID, u).Scan(&file, &size)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
-		}
-		if err != nil {
+	for _, m := range recs {
+		if err := tx.messages.Delete(ctx, m.ID); err != nil {
 			return nil, err
 		}
-		removed = append(removed, u)
-		bytes += size
-		var refs int
-		if err := tx.QueryRow(`SELECT count(*) FROM messages WHERE storage_id = ? AND file = ?`, id, file).Scan(&refs); err != nil {
+		removed = append(removed, uint32(m.UID))
+		bytes += m.Size
+		refs, err := tx.messages.Count(ctx, ablage.And(ablage.Eq("storage_id", id), ablage.Eq("file", m.File)))
+		if err != nil {
 			return nil, err
 		}
 		if refs > 0 {
 			continue
 		}
-		from := filepath.Join(s.mailboxDir(id), file)
-		to := filepath.Join(s.dir, trashDir, id+"."+file)
+		from := filepath.Join(s.mailboxDir(id), m.File)
+		to := filepath.Join(s.dir, trashDir, id+"."+m.File)
 		if err := os.Rename(from, to); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, err
 		} else if err == nil {
@@ -800,7 +850,7 @@ func (s *Store) removeMessages(tx *sql.Tx, ch *changes, id string, folderID int6
 		}
 	}
 	if len(removed) > 0 {
-		if err := addUsage(tx, id, -bytes, -len(removed)); err != nil {
+		if err := addUsage(ctx, tx, id, -bytes, -len(removed)); err != nil {
 			return nil, err
 		}
 	}

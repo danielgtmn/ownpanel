@@ -44,7 +44,7 @@ var RedirectCodes = []int{301, 302, 307, 308}
 // Redirect is what callers see of a redirect. SourcePath "" is a domain
 // redirect; otherwise an exact path ("/old") or a prefix ("/blog/*").
 type Redirect struct {
-	ID           int64     `json:"id"`
+	ID           string    `json:"id"`
 	Owner        string    `json:"owner"`
 	SourceDomain string    `json:"source_domain"`
 	SourcePath   string    `json:"source_path"`
@@ -100,7 +100,7 @@ func (a Actor) canSeeRedirect(r store.Redirect, sites map[string]store.Site) boo
 		site, ok := sites[r.SiteName]
 		return ok && a.canSee(site)
 	}
-	return a.Sites == nil && (a.Admin || (a.UserID != 0 && r.OwnerID == a.UserID))
+	return a.Sites == nil && (a.Admin || (a.UserID != "" && r.OwnerID == a.UserID))
 }
 
 // needRedirectWrite: changing redirects needs write access and a person.
@@ -111,7 +111,7 @@ func needRedirectWrite(a Actor) error {
 	if err := needWrite(a); err != nil {
 		return err
 	}
-	if a.Via == ViaSystem || a.UserID == 0 {
+	if a.Via == ViaSystem || a.UserID == "" {
 		return errorf(Forbidden, "redirects must be changed by a person")
 	}
 	return nil
@@ -119,10 +119,11 @@ func needRedirectWrite(a Actor) error {
 
 // visibleRedirect returns a redirect the actor may see; others answer
 // NotFound like missing ones.
-func (s *Service) visibleRedirect(ctx context.Context, a Actor, id int64) (store.Redirect, map[string]store.Site, error) {
+func (s *Service) visibleRedirect(ctx context.Context, a Actor, redirectID string) (store.Redirect, map[string]store.Site, error) {
 	if err := needAuth(a); err != nil {
 		return store.Redirect{}, nil, err
 	}
+	id := redirectID
 	r, err := s.store.Redirect(ctx, id)
 	if err != nil {
 		return store.Redirect{}, nil, storeError(err)
@@ -297,7 +298,7 @@ func (s *Service) validRedirect(in RedirectInput) (store.Redirect, error) {
 
 // placeRedirect completes a validated redirect with its site and owner and
 // checks that the actor may have it there.
-func (s *Service) placeRedirect(a Actor, r *store.Redirect, sites map[string]store.Site, owner int64) error {
+func (s *Service) placeRedirect(a Actor, r *store.Redirect, sites map[string]store.Site, owner string) error {
 	if r.SourcePath == "" {
 		if a.Sites != nil {
 			return errorf(Forbidden, "this access token is limited to certain sites and cannot manage domain redirects")
@@ -393,7 +394,7 @@ func (s *Service) SiteRedirects(ctx context.Context, a Actor, siteName string) (
 }
 
 // Redirect returns one redirect.
-func (s *Service) Redirect(ctx context.Context, a Actor, id int64) (Redirect, error) {
+func (s *Service) Redirect(ctx context.Context, a Actor, id string) (Redirect, error) {
 	r, _, err := s.visibleRedirect(ctx, a, id)
 	if err != nil {
 		return Redirect{}, err
@@ -431,7 +432,7 @@ func (s *Service) CreateRedirect(ctx context.Context, a Actor, in RedirectInput)
 
 // UpdateRedirect replaces a redirect. The actor must be allowed to manage
 // both the redirect as it was and as it will be.
-func (s *Service) UpdateRedirect(ctx context.Context, a Actor, id int64, in RedirectInput) (Redirect, error) {
+func (s *Service) UpdateRedirect(ctx context.Context, a Actor, id string, in RedirectInput) (Redirect, error) {
 	cur, sites, err := s.visibleRedirect(ctx, a, id)
 	if err != nil {
 		return Redirect{}, err
@@ -456,7 +457,7 @@ func (s *Service) UpdateRedirect(ctx context.Context, a Actor, id int64, in Redi
 	if err := s.othersMailDomainName(ctx, a, []string{r.SourceDomain}, []string{cur.SourceDomain}); err != nil {
 		return Redirect{}, err
 	}
-	r.ID = id
+	r.ID = cur.ID
 	saved, err := s.store.UpdateRedirect(ctx, r, MaxRedirectsPerUser)
 	if err != nil {
 		return Redirect{}, s.redirectStoreError(a, err, sites)
@@ -470,7 +471,7 @@ func (s *Service) UpdateRedirect(ctx context.Context, a Actor, id int64, in Redi
 }
 
 // DeleteRedirect removes a redirect.
-func (s *Service) DeleteRedirect(ctx context.Context, a Actor, id int64) error {
+func (s *Service) DeleteRedirect(ctx context.Context, a Actor, id string) error {
 	cur, _, err := s.visibleRedirect(ctx, a, id)
 	if err != nil {
 		return err
@@ -478,7 +479,7 @@ func (s *Service) DeleteRedirect(ctx context.Context, a Actor, id int64) error {
 	if err := needRedirectWrite(a); err != nil {
 		return err
 	}
-	if err := s.store.DeleteRedirect(ctx, id); err != nil {
+	if err := s.store.DeleteRedirect(ctx, cur.ID); err != nil {
 		return storeError(err)
 	}
 	s.record(ctx, a, "redirect.delete", redirectSource(cur.SourceDomain, cur.SourcePath), redirectDetail(cur))
