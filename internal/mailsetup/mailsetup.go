@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/xml"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 )
@@ -20,6 +21,19 @@ type ClientSettings struct {
 	SMTPPort        int    `json:"smtp_port"`
 	SMTPStartTLS    int    `json:"smtp_starttls_port"`
 	UserNameIsEmail bool   `json:"user_name_is_address"`
+	// DAVURL is where calendar and contacts programs connect
+	// (https://<mail host>/dav/); empty when the server offers no
+	// calendars and contacts.
+	DAVURL string `json:"dav_url,omitempty"`
+}
+
+// DAVPath is where calendars and contacts start on the mail host.
+const DAVPath = "/dav/"
+
+// WithDAV adds the address of calendars and contacts on the mail host.
+func (c ClientSettings) WithDAV() ClientSettings {
+	c.DAVURL = "https://" + c.Server + DAVPath
+	return c
 }
 
 // Settings are the settings for mail programs of the mail service on host:
@@ -74,8 +88,10 @@ func (p *plist) boolean(k string, v bool) {
 const ProfileContentType = "application/x-apple-aspen-config"
 
 // AppleProfile is an unsigned configuration profile with one mail account
-// (com.apple.mail.managed) for address; the device asks for the password
-// when the profile is installed. It never contains a password.
+// (com.apple.mail.managed) for address and, when c.DAVURL is set, a
+// calendar (com.apple.caldav.account) and a contacts account
+// (com.apple.carddav.account); the device asks for the password when the
+// profile is installed. It never contains a password.
 func AppleProfile(address string, c ClientSettings) []byte {
 	addr := address
 	var p plist
@@ -104,8 +120,33 @@ func AppleProfile(address string, c ClientSettings) []byte {
 	p.str("PayloadType", "com.apple.mail.managed")
 	p.str("PayloadUUID", profileUUID("account", addr, c.Server))
 	p.integer("PayloadVersion", 1)
-	p.WriteString("</dict>\n</array>\n")
-	p.str("PayloadDescription", "Sets up the mail account "+addr+". The password is asked for when the profile is installed.")
+	p.WriteString("</dict>\n")
+	what := "the mail account"
+	if c.DAVURL != "" {
+		principal := c.DAVURL + "principals/" + url.PathEscape(addr) + "/"
+		for _, d := range []struct{ prefix, payload, part, label string }{
+			{"CalDAV", "com.apple.caldav.account", "calendar", "Calendars"},
+			{"CardDAV", "com.apple.carddav.account", "contacts", "Contacts"},
+		} {
+			p.WriteString("<dict>\n")
+			p.str(d.prefix+"AccountDescription", d.label+" "+addr)
+			p.str(d.prefix+"HostName", c.Server)
+			p.integer(d.prefix+"Port", 443)
+			p.boolean(d.prefix+"UseSSL", true)
+			p.str(d.prefix+"Username", addr)
+			p.str(d.prefix+"PrincipalURL", principal)
+			p.str("PayloadDescription", d.label+" of "+addr)
+			p.str("PayloadDisplayName", d.label+" "+addr)
+			p.str("PayloadIdentifier", "ownpanel.mail."+profileUUID(d.part, addr, c.Server))
+			p.str("PayloadType", d.payload)
+			p.str("PayloadUUID", profileUUID(d.part, addr, c.Server))
+			p.integer("PayloadVersion", 1)
+			p.WriteString("</dict>\n")
+		}
+		what = "the mail account, calendars and contacts of"
+	}
+	p.WriteString("</array>\n")
+	p.str("PayloadDescription", "Sets up "+what+" "+addr+". The password is asked for when the profile is installed.")
 	p.str("PayloadDisplayName", "Mail: "+addr)
 	p.str("PayloadIdentifier", "ownpanel.mail.profile."+profileUUID("profile", addr, c.Server))
 	p.boolean("PayloadRemovalDisallowed", false)

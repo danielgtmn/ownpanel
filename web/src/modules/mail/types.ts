@@ -39,6 +39,8 @@ export type MailboxUsage = {
   blocked: boolean
   blocked_reason: string
   blocked_at: string | null
+  // An out-of-office reply answers mail now (never its text).
+  out_of_office?: boolean
 }
 
 export type Mailbox = {
@@ -56,6 +58,75 @@ export type Mailbox = {
   display_name: string
   // Mail programs can sign in only with app passwords, not with the mailbox's own password.
   app_passwords_only: boolean
+  // shared: nobody signs in to it; personal mailboxes of the organisation get access to it.
+  kind: MailboxKind
+  // Shared only: mail sent for it is also kept in its Sent folder.
+  keep_sent_copy: boolean
+  // Mailboxes that have access to this one.
+  shared_with: MailboxAccessor[]
+  // Mailboxes this one has access to.
+  access_to: MailboxAccess[]
+}
+
+export type MailboxKind = 'personal' | 'shared'
+
+// Rights are "read", "write", "manage", "send-as", "send-on-behalf" (src/shared/sharing).
+// active false: the two mailboxes are no longer in the same organisation, so the access doesn't count.
+export type MailboxAccessor = {
+  mailbox_id: number
+  address: string
+  display_name: string
+  rights: string[]
+  active: boolean
+}
+
+export type MailboxAccess = {
+  mailbox_id: number
+  address: string
+  kind: MailboxKind
+  rights: string[]
+  active: boolean
+}
+
+export type NewMailbox = {
+  local_part: string
+  kind: MailboxKind
+  // Personal only.
+  password?: string
+  display_name?: string
+  // Shared only.
+  keep_sent_copy?: boolean
+}
+
+// Out-of-office and forwarding of a mailbox for its domain owner (internal/panel/mailrules.go). Subject, text and
+// address only come when they were set from the panel (set_by); what the person set stays private.
+export type MailboxOutOfOffice = {
+  enabled: boolean
+  // Enabled and within its dates today.
+  on: boolean
+  start: string
+  end: string
+  set_by: string
+  set_at: string | null
+  subject: string
+  text: string
+  days: number
+}
+
+export type MailboxForwarding = {
+  enabled: boolean
+  to: string
+  keep_copy: boolean
+  set_by: string
+  set_at: string | null
+}
+
+export type MailboxRules = {
+  out_of_office: MailboxOutOfOffice
+  forwarding: MailboxForwarding
+  // The person's filters were written in a mail program; saving here replaces them (replace).
+  hand_written: boolean
+  may_forward: boolean
 }
 
 export type AppPassword = {
@@ -79,7 +150,15 @@ export type MailAlias = {
   targets: string[]
   owner: string
   created_at: string
+  // Who may send mail to the address; the catch-all only allows "anyone".
+  sender_policy: SenderPolicy
+  // Left out of the organisation's address book.
+  hide_from_directory: boolean
 }
+
+export type SenderPolicy = 'anyone' | 'organisation' | 'members'
+
+export type AliasOptions = { sender_policy: SenderPolicy; hide_from_directory: boolean }
 
 export type MailClientSettings = {
   server: string
@@ -87,6 +166,8 @@ export type MailClientSettings = {
   smtp_port: number
   smtp_starttls_port: number
   user_name_is_address: boolean
+  // Where calendar and contacts programs connect; missing when the server offers no calendars and contacts.
+  dav_url?: string
 }
 
 export type MailStatus = {
@@ -107,6 +188,10 @@ export type MailRecordKind =
   | 'srv-imaps'
   | 'autoconfig'
   | 'autodiscover'
+  | 'srv-caldav'
+  | 'txt-caldav'
+  | 'srv-carddav'
+  | 'txt-carddav'
 export type MailRecordStatus = 'ok' | 'missing' | 'different' | 'conflict' | 'unknown'
 
 export type MailRecord = {

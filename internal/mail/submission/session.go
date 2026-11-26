@@ -22,6 +22,7 @@ import (
 
 	"github.com/danielgtmn/ownpanel/internal/mail/auth"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/mail/deliver"
 	"github.com/danielgtmn/ownpanel/internal/mail/directory"
 	"github.com/danielgtmn/ownpanel/internal/mail/queue"
 	"github.com/danielgtmn/ownpanel/internal/mail/signin"
@@ -42,6 +43,8 @@ var (
 	errNeedSender    = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 6, 0}, Message: "A From header with several addresses needs a Sender header"}
 	errBadSender     = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 6, 0}, Message: "The Sender header must hold exactly one address"}
 	errSenderHdr     = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 7, 1}, Message: "The Sender address of the message may not be used by this mailbox"}
+	errOnBehalf      = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 7, 1}, Message: "Sending on behalf of this address needs a Sender header with your own address"}
+	errGroupDenied   = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 7, 1}, Message: "This address accepts mail only from certain senders"}
 	errHeaderTooBig  = &smtp.SMTPError{Code: 552, EnhancedCode: smtp.EnhancedCode{5, 3, 4}, Message: "Message header too large"}
 	errRateLimited   = &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 7, 1}, Message: "Sending limit reached, try again later"}
 	errBadRcpt       = &smtp.SMTPError{Code: 553, EnhancedCode: smtp.EnhancedCode{5, 1, 3}, Message: "Recipient address not valid"}
@@ -63,9 +66,14 @@ type session struct {
 	box  *signin.Grant // signed-in mailbox (a copy), nil before AUTH
 
 	// One transaction:
-	dir      *directory.Directory
-	from     string
+	dir  *directory.Directory
+	from string
+	// owner is the mailbox the envelope sender belongs to when it is not
+	// the signed-in one (send as or on behalf of a shared or delegated
+	// mailbox): its limits count too and it gets the bounces.
+	owner    *config.Mailbox
 	local    []*config.Mailbox
+	rcptOf   map[string]string // storage id → the first recipient address that reached it
 	external []string
 }
 
@@ -75,8 +83,8 @@ func newSession(s *Server, c *smtp.Conn) *session {
 }
 
 func (ss *session) Reset() {
-	ss.dir, ss.from = nil, ""
-	ss.local, ss.external = nil, nil
+	ss.dir, ss.from, ss.owner = nil, "", nil
+	ss.local, ss.external, ss.rcptOf = nil, nil, nil
 }
 
 func (ss *session) Logout() error { return nil }
@@ -144,11 +152,25 @@ func (ss *session) Mail(from string, _ *smtp.MailOptions) error {
 	if !config.ValidAddress(addr) {
 		return errSenderAddress
 	}
-	if !dir.MaySendAs(&ss.box.Mailbox, addr) {
+	mode, owner := dir.SendMode(&ss.box.Mailbox, addr)
+	if mode == directory.SendDenied {
 		return errSenderDenied
 	}
+	boxes := []config.Mailbox{ss.box.Mailbox}
+	if mode != directory.SendOwn {
+		ob, err := ss.s.opts.Store.Blocked(ctx, owner.StorageID)
+		if err != nil {
+			ss.s.log.Error("submission: block state", "err", err)
+			return errLocal
+		}
+		if ob.Blocked {
+			return errBlocked
+		}
+		boxes = append(boxes, *owner)
+		ss.owner = owner
+	}
 	if ss.s.opts.Limits != nil {
-		if err := ss.s.opts.Limits.Check(ctx, dir, ss.box.Mailbox); err != nil {
+		if err := ss.s.opts.Limits.Check(ctx, dir, boxes...); err != nil {
 			return err
 		}
 	}
@@ -179,9 +201,19 @@ func (ss *session) Rcpt(to string, _ *smtp.RcptOptions) error {
 	case directory.NoPostmaster:
 		return errNoPostmaster
 	}
+	// A distribution group may take mail from its organisation or its
+	// members only; the signed-in mailbox (and the one it sends for)
+	// counts.
+	if g, ok := ss.dir.Group(addr); ok && !ss.dir.GroupAllows(g, ss.from, &ss.box.Mailbox, ss.owner) {
+		return errGroupDenied
+	}
 	for _, m := range route.Mailboxes {
 		if !slices.ContainsFunc(ss.local, func(b *config.Mailbox) bool { return b.StorageID == m.StorageID }) {
 			ss.local = append(ss.local, m)
+			if ss.rcptOf == nil {
+				ss.rcptOf = map[string]string{}
+			}
+			ss.rcptOf[m.StorageID] = addr
 		}
 	}
 	// External targets of local aliases go out with the rest: the sender
@@ -267,12 +299,30 @@ func (ss *session) Data(r io.Reader) error {
 	if err != nil {
 		return errNoFrom
 	}
-	fromDomain, err := ss.checkFrom(hdr)
+	fromDomain, fromOwner, others, err := ss.checkFrom(hdr)
 	if err != nil {
 		return err
 	}
+	// The limits of the signed-in mailbox count, and those of every mailbox
+	// it sends for (envelope, any From address, a Sender held through
+	// send-as); none of those may be blocked.
+	boxes := []config.Mailbox{ss.box.Mailbox}
+	for _, o := range append([]*config.Mailbox{ss.owner}, others...) {
+		if o == nil || slices.ContainsFunc(boxes, func(b config.Mailbox) bool { return b.StorageID == o.StorageID }) {
+			continue
+		}
+		b, err := store.Blocked(ctx, o.StorageID)
+		if err != nil {
+			ss.s.log.Error("submission: block state", "err", err)
+			return errLocal
+		}
+		if b.Blocked {
+			return errBlocked
+		}
+		boxes = append(boxes, *o)
+	}
 	if ss.s.opts.Limits != nil {
-		if err := ss.s.opts.Limits.Reserve(ctx, ss.dir, ss.box.Mailbox); err != nil {
+		if err := ss.s.opts.Limits.Reserve(ctx, ss.dir, boxes...); err != nil {
 			return err
 		}
 	}
@@ -298,15 +348,29 @@ func (ss *session) Data(r io.Reader) error {
 	// recipients getting it twice.
 	var full []queue.Failure
 	failed := 0
-	returnPath := []byte("Return-Path: <" + ss.from + ">\r\n")
-	for _, m := range ss.local {
-		msg, err := message()
-		if err != nil {
-			return errLocal
+	// Mail between mailboxes runs the recipients' filters (and
+	// out-of-office replies) like mail from outside; it comes from a
+	// signed-in mailbox, so it passed every check.
+	dm := &deliver.Message{Dir: ss.dir, Open: message, Size: ss.size(f, prefix, sig), EnvelopeFrom: ss.from,
+		SenderVerified: true, SenderAuthenticated: true}
+	// Every mailbox stores first; forwards and replies of filters follow
+	// only once the message is accepted.
+	var pending []*deliver.Pending
+	accepted := false
+	defer func() {
+		for _, p := range pending {
+			if accepted {
+				p.Finish(ctx)
+			} else {
+				p.Abort(ctx)
+			}
 		}
-		_, err = store.Append(ctx, m.StorageID, storage.Inbox, io.MultiReader(bytes.NewReader(returnPath), msg), storage.AppendOptions{})
+	}()
+	for _, m := range ss.local {
+		p, err := ss.s.opts.Deliver.Store(ctx, dm, deliver.Recipient{Mailbox: m, Rcpt: ss.rcptOf[m.StorageID]})
 		switch {
 		case err == nil:
+			pending = append(pending, p)
 		case errors.Is(err, storage.ErrOverQuota):
 			full = append(full, queue.Failure{Recipient: m.Address, Status: "5.2.2", Diagnostic: "552 5.2.2 the mailbox of the recipient is full"})
 		default:
@@ -320,67 +384,144 @@ func (ss *session) Data(r io.Reader) error {
 	if len(full) == len(ss.local) && len(ss.local) > 0 && len(ss.external) == 0 {
 		return errAllFull
 	}
+	// Bounces go to the mailbox of the envelope sender.
+	bounceTo := ss.box.StorageID
+	if ss.owner != nil {
+		bounceTo = ss.owner.StorageID
+	}
 	if len(ss.external) > 0 {
 		msg, err := message()
 		if err != nil {
 			return errLocal
 		}
-		if err := ss.s.opts.Queue.Enqueue(ctx, msg, ss.from, ss.box.StorageID, ss.external); err != nil {
+		if err := ss.s.opts.Queue.Enqueue(ctx, msg, ss.from, bounceTo, ss.external); err != nil {
 			ss.s.log.Error("submission: enqueue", "err", err)
 			return errLocal
 		}
 	}
 	if len(full) > 0 {
-		ss.s.opts.Queue.Bounce(ctx, ss.from, ss.box.StorageID, rawHeader, full)
+		ss.s.opts.Queue.Bounce(ctx, ss.from, bounceTo, rawHeader, full)
 	}
+	if fromOwner != nil && fromOwner.Shared() && fromOwner.KeepSentCopy {
+		ss.keepSentCopy(ctx, fromOwner, message)
+	}
+	accepted = true
 	ss.s.log.Info("submission: message accepted", "storage_id", ss.box.StorageID,
 		"local", len(ss.local)-len(full), "external", len(ss.external), "signed", sig != "")
 	return nil
 }
 
+// size is the size of the message as stored.
+func (ss *session) size(f *os.File, prefix []byte, sig string) int64 {
+	st, err := f.Stat()
+	if err != nil {
+		return 0
+	}
+	return st.Size() + int64(len(prefix)+len(sig))
+}
+
 // checkFrom checks the header From (exactly one field) and, when present,
 // Sender (exactly one field with one address) against the sign-in, as RFC
 // 5322 3.6.2 wants them: several From addresses need a Sender. Every
-// address must be one the mailbox may send as. It returns the domain of the
-// first From address (the one that signs).
-func (ss *session) checkFrom(hdr textproto.MIMEHeader) (string, error) {
+// address must be one the mailbox may send as: its own and its aliases,
+// those of a mailbox it has the send-as right on, or exactly the address
+// of a mailbox it may send on behalf of, and then only with a Sender of its
+// own. It returns the domain of the first From address (the one that
+// signs), the mailbox of that address when it is another mailbox's, and
+// every other mailbox the message is sent for: those of all From addresses
+// and of a Sender held through send-as.
+func (ss *session) checkFrom(hdr textproto.MIMEHeader) (string, *config.Mailbox, []*config.Mailbox, error) {
 	values := hdr.Values("From")
 	if len(values) == 0 {
-		return "", errNoFrom
+		return "", nil, nil, errNoFrom
 	}
 	if len(values) > 1 {
-		return "", errManyFrom
+		return "", nil, nil, errManyFrom
 	}
 	list, err := (&mail.AddressParser{}).ParseList(values[0])
 	if err != nil || len(list) == 0 {
-		return "", errNoFrom
+		return "", nil, nil, errNoFrom
 	}
+	me := &ss.box.Mailbox
+	ownSender := false
+	var others []*config.Mailbox
 	senders := hdr.Values("Sender")
 	switch {
 	case len(senders) > 1:
-		return "", errBadSender
+		return "", nil, nil, errBadSender
 	case len(senders) == 1:
 		sl, err := (&mail.AddressParser{}).ParseList(senders[0])
 		if err != nil || len(sl) != 1 {
-			return "", errBadSender
+			return "", nil, nil, errBadSender
 		}
-		if !ss.dir.MaySendAs(&ss.box.Mailbox, directory.Normalize(sl[0].Address)) {
-			return "", errSenderHdr
+		switch mode, owner := ss.dir.SendMode(me, directory.Normalize(sl[0].Address)); mode {
+		case directory.SendOwn:
+			ownSender = true
+		case directory.SendAsGrant:
+			others = append(others, owner)
+		default:
+			return "", nil, nil, errSenderHdr
 		}
 	case len(list) > 1:
-		return "", errNeedSender
+		return "", nil, nil, errNeedSender
 	}
 	domain := ""
-	for _, a := range list {
+	var first *config.Mailbox
+	for i, a := range list {
 		addr := directory.Normalize(a.Address)
-		if !ss.dir.MaySendAs(&ss.box.Mailbox, addr) {
-			return "", errFromDenied
+		mode, owner := ss.dir.SendMode(me, addr)
+		switch mode {
+		case directory.SendDenied:
+			return "", nil, nil, errFromDenied
+		case directory.SendOnBehalfGrant:
+			if !ownSender {
+				return "", nil, nil, errOnBehalf
+			}
 		}
-		if domain == "" {
+		if mode != directory.SendOwn {
+			others = append(others, owner)
+		}
+		if i == 0 {
 			_, domain, _ = config.SplitAddress(addr)
+			if mode != directory.SendOwn {
+				first = owner
+			}
 		}
 	}
-	return domain, nil
+	return domain, first, others, nil
+}
+
+// keepSentCopy stores the sent message in the Sent folder of the shared
+// mailbox it was sent for, read for the sender. A copy the mail program
+// saved there already (the same Message-ID) is not stored twice, and the
+// program's own copy is not stored after this one (see imapd). Failures
+// are logged only: the message has been sent.
+func (ss *session) keepSentCopy(ctx context.Context, owner *config.Mailbox, message func() (io.Reader, error)) {
+	store := ss.s.opts.Store
+	folder := storage.Inbox
+	if err := store.EnsureMailbox(ctx, owner.StorageID); err == nil {
+		if folders, err := store.ListFolders(ctx, owner.StorageID); err == nil {
+			for _, f := range folders {
+				if f.SpecialUse == storage.SpecialSent {
+					folder = f.Name
+				}
+			}
+		}
+	}
+	if folder == storage.Inbox {
+		ss.s.log.Warn("submission: no Sent folder for the copy of sent mail", "storage_id", owner.StorageID)
+		return
+	}
+	msg, err := message()
+	if err != nil {
+		return
+	}
+	_, err = store.Append(ctx, owner.StorageID, folder, msg, storage.AppendOptions{
+		Flags: []string{storage.FlagSeen}, Reader: ss.box.StorageID, Dedupe: true,
+	})
+	if err != nil {
+		ss.s.log.Error("submission: keep a copy of sent mail", "storage_id", owner.StorageID, "err", err)
+	}
 }
 
 // addedHeaders are the Received header and, when missing, Message-ID and

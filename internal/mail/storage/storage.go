@@ -86,7 +86,7 @@ func Open(dir string, opts Options) (*Store, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	for _, d := range []string{dir, filepath.Join(dir, messagesDir), filepath.Join(dir, tmpDir), filepath.Join(dir, trashDir), filepath.Join(dir, queueDir), filepath.Join(dir, importsDir)} {
+	for _, d := range []string{dir, filepath.Join(dir, messagesDir), filepath.Join(dir, tmpDir), filepath.Join(dir, trashDir), filepath.Join(dir, queueDir), filepath.Join(dir, importsDir), filepath.Join(dir, davDir)} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return nil, err
 		}
@@ -304,6 +304,53 @@ CREATE TABLE account_sessions (
 	last_seen  INTEGER NOT NULL
 );
 CREATE INDEX account_sessions_mailbox ON account_sessions(storage_id, created);
+`,
+	// 8: shared mailboxes (G3). shared_seen is the read state of each
+	// reader (a storage id) in a shared mailbox, by message row: it moves
+	// with the message and goes with it. msgid is the Message-ID of copies
+	// of sent mail kept in a shared mailbox, so one saved by the mail
+	// program and one kept by the server are stored once.
+	`
+CREATE TABLE shared_seen (
+	message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+	reader     TEXT    NOT NULL,
+	PRIMARY KEY (message_id, reader)
+) WITHOUT ROWID;
+CREATE INDEX shared_seen_reader ON shared_seen(reader);
+ALTER TABLE messages ADD COLUMN msgid TEXT NOT NULL DEFAULT '';
+CREATE INDEX messages_msgid ON messages(folder_id, msgid) WHERE msgid != '';
+`,
+	// 9: calendars and address books (G4a, dav.go). IF NOT EXISTS keeps the
+	// migration harmless if it ends up numbered after another phase's.
+	davSchema,
+	// 10: filters and out-of-office (G2): the mailbox's Sieve scripts (at
+	// most one active), who got an out-of-office reply until when, and the
+	// ids the "duplicate" test has seen.
+	`
+CREATE TABLE sieve_scripts (
+	storage_id TEXT NOT NULL,
+	name       TEXT NOT NULL,
+	content    TEXT NOT NULL,
+	active     INTEGER NOT NULL DEFAULT 0 CHECK (active IN (0, 1)),
+	updated    INTEGER NOT NULL,
+	PRIMARY KEY (storage_id, name)
+);
+CREATE UNIQUE INDEX sieve_scripts_active ON sieve_scripts(storage_id) WHERE active = 1;
+CREATE TABLE sieve_replies (
+	storage_id TEXT NOT NULL,
+	handle     TEXT NOT NULL,
+	sender     TEXT NOT NULL,
+	until      INTEGER NOT NULL,
+	PRIMARY KEY (storage_id, handle, sender)
+);
+CREATE INDEX sieve_replies_until ON sieve_replies(until);
+CREATE TABLE sieve_duplicates (
+	storage_id TEXT NOT NULL,
+	id         TEXT NOT NULL,
+	until      INTEGER NOT NULL,
+	PRIMARY KEY (storage_id, id)
+);
+CREATE INDEX sieve_duplicates_until ON sieve_duplicates(until);
 `,
 }
 

@@ -25,7 +25,7 @@ The archive is written with mode 0600. It can be made **while everything runs**:
 | `sites/` | all site versions and the `current` links |
 | `caddy/` | Caddy's storage (`/var/lib/ownpanel-caddy/storage`): certificates and their private keys |
 | `mail-tls/` | the mail server's certificate and its account at the certificate authority |
-| `mail/` | the mail service's data: a consistent copy of its index (`mail.db`), every stored message, its last configuration (with mailbox password hashes and DKIM keys) and an empty file `restored` |
+| `mail/` | the mail service's data: a consistent copy of its index (`mail.db`), every stored message, calendar entry and contact, its last configuration (with mailbox password hashes and DKIM keys) and an empty file `restored` |
 
 Not included: `setup-code` (only exists before the first admin), Caddy's home directory with its saved config (`/var/lib/ownpanel-caddy/home`; ownpaneld pushes the full config again on start), `/etc/ownpanel` (your flags in `ownpaneld.env`), the binaries and the systemd units. Keep a copy of your `ownpaneld.env` yourself.
 
@@ -53,7 +53,7 @@ systemctl start ownpanel-caddy ownpanel-mail ownpaneld
 
 The leftover `-wal` and `-shm` files must go: SQLite would otherwise apply them to the restored database. Skip the mail lines for an archive made with `-no-mail`.
 
-The file `restored` tells the mail service that its data is older than what mail programs may have seen: it renumbers every folder once, so mail programs load the folders again instead of showing messages that are not there any more. Mail that arrived after the backup is lost unless the sending servers deliver it again.
+The file `restored` tells the mail service that its data is older than what mail programs may have seen: it renumbers every folder once, so mail programs load the folders again instead of showing messages that are not there any more. Calendar and contacts programs likewise sync everything again (every entry gets a new version). Mail that arrived after the backup is lost unless the sending servers deliver it again.
 
 Notes:
 

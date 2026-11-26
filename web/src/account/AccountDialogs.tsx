@@ -5,6 +5,7 @@ import { Field, FieldDescription, FieldError, FieldLabel } from '@ui-sdk/react/f
 import { Input } from '@ui-sdk/react/input'
 import { useState, type FormEvent } from 'react'
 import { PASSWORD_MIN } from '../shared/session/validation.ts'
+import { normaliseRights, RightsChoice, validatePersonAddress, validateRights } from '../shared/sharing/index.ts'
 import { copyText, FormDialog, PasswordField } from '../shared/ui/index.ts'
 import { accountErrorMessage, isSessionEnded } from './api.ts'
 import { NAME_MAX, passwordErrors, validateAppPasswordName, validateDisplayName, type PasswordErrors } from './rules.ts'
@@ -350,5 +351,127 @@ export function NewAppPasswordDialog({ created, onClose }: { created: CreatedApp
         </div>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// ---- sharing your mailbox ----
+
+export type ShareTarget = { address: string; display_name: string; rights: string[] }
+
+type ShareErrors = { address?: string; rights?: string; form?: string }
+
+export function ShareForm({
+  own,
+  existing,
+  onSubmit,
+}: {
+  own: string
+  existing: ShareTarget | null
+  onSubmit: (address: string, rights: string[]) => Promise<void>
+}) {
+  const [address, setAddress] = useState(existing?.address ?? '')
+  const [rights, setRights] = useState<string[]>(existing ? normaliseRights(existing.rights) : ['read'])
+  const [errors, setErrors] = useState<ShareErrors>({})
+  const [busy, setBusy] = useState(false)
+  const domain = own.slice(own.indexOf('@') + 1)
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const found: ShareErrors = {}
+    if (!existing) {
+      const problem = validatePersonAddress(address)
+      if (problem) found.address = problem
+      else if (address.trim().toLowerCase() === own.toLowerCase()) found.address = 'Enter the address of someone else.'
+    }
+    const rightsProblem = validateRights(rights)
+    if (rightsProblem) found.rights = rightsProblem
+    if (found.address || found.rights) {
+      setErrors(found)
+      return
+    }
+    setErrors({})
+    setBusy(true)
+    await attempt(
+      () => onSubmit(existing ? existing.address : address.trim().toLowerCase(), normaliseRights(rights)),
+      (form) => {
+        setErrors({ form })
+        setBusy(false)
+      },
+    )
+  }
+
+  return (
+    <form className="form" onSubmit={submit} noValidate>
+      {existing ? (
+        <p className="account-share-person">
+          {existing.display_name ? `${existing.display_name} (${existing.address})` : existing.address}
+        </p>
+      ) : (
+        <Field name="address" invalid={errors.address ? true : undefined}>
+          <FieldLabel>Their e-mail address</FieldLabel>
+          <Input
+            value={address}
+            type="email"
+            placeholder={`anna@${domain}`}
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            autoFocus
+            onValueChange={(value) => {
+              setAddress(value)
+              setErrors((current) => ({ ...current, address: undefined, form: undefined }))
+            }}
+          />
+          <FieldDescription>Someone with a mailbox in your organisation. They use their own sign-in.</FieldDescription>
+          {errors.address ? <FieldError match>{errors.address}</FieldError> : null}
+        </Field>
+      )}
+      <RightsChoice
+        value={rights}
+        error={errors.rights}
+        disabled={busy}
+        legend="What they may do with your mailbox"
+        onChange={(next) => {
+          setRights(next)
+          setErrors((current) => ({ ...current, rights: undefined, form: undefined }))
+        }}
+      />
+      <FormError message={errors.form} />
+      <div className="form-actions">
+        <DialogClose disabled={busy}>Cancel</DialogClose>
+        <Button type="submit" data-variant="solid" disabled={busy}>
+          {busy ? 'Saving…' : existing ? 'Save' : 'Share'}
+        </Button>
+      </div>
+    </form>
+  )
+}
+
+export function ShareDialog({
+  open,
+  own,
+  existing,
+  onOpenChange,
+  onSubmit,
+}: {
+  open: boolean
+  own: string
+  existing: ShareTarget | null
+  onOpenChange: (open: boolean) => void
+  onSubmit: (address: string, rights: string[]) => Promise<void>
+}) {
+  return (
+    <FormDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={existing ? 'Change what they may do' : 'Share your mailbox'}
+      description={
+        existing
+          ? `What ${existing.address} may do with your mailbox.`
+          : 'Your mailbox shows up in their mail program next to their own, for example for an assistant.'
+      }
+    >
+      <ShareForm own={own} existing={existing} onSubmit={onSubmit} />
+    </FormDialog>
   )
 }

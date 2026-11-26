@@ -1,5 +1,5 @@
 import { validatePasswordPair } from '../shared/session/validation.ts'
-import type { AppPassword, ClientSettings, Me } from './api.ts'
+import type { AppPassword, ClientSettings, Collection, ImportResult, MailboxAccess, Me } from './api.ts'
 
 // The same limits as the mail server's (internal/mail/config, internal/passwd).
 export const NAME_MAX = 64
@@ -103,6 +103,48 @@ export function clientRows(client: ClientSettings, address: string, appPasswords
   ]
 }
 
+// The settings calendar and contacts programs need, if the server offers calendars and contacts.
+export function calendarRows(client: ClientSettings, address: string, appPasswordsOnly: boolean): ClientRow[] {
+  if (!client.dav_url) return []
+  return [
+    { label: 'Server address', value: client.dav_url, copy: true },
+    { label: 'User name', value: address, copy: true },
+    {
+      label: 'Password',
+      value: appPasswordsOnly ? 'An app password' : 'Your mailbox password, or better an app password',
+    },
+  ]
+}
+
+export function entriesText(collection: Pick<Collection, 'kind' | 'objects'>): string {
+  const n = collection.objects
+  if (collection.kind === 'calendar') return n === 1 ? '1 entry' : `${n.toLocaleString('en')} entries`
+  return n === 1 ? '1 contact' : `${n.toLocaleString('en')} contacts`
+}
+
+// What the page says after a file was imported.
+export function importedText(result: ImportResult, kind: Collection['kind']): string {
+  const what = kind === 'calendar' ? ['entry', 'entries'] : ['contact', 'contacts']
+  const count = (n: number) => `${n.toLocaleString('en')} ${n === 1 ? what[0] : what[1]}`
+  const parts: string[] = []
+  if (result.added > 0) parts.push(`${count(result.added)} added`)
+  if (result.replaced > 0) parts.push(`${count(result.replaced)} updated`)
+  let text = parts.length > 0 ? `${parts.join(', ')}.` : `No ${what[1]} found in the file.`
+  if (result.skipped > 0) text += ` ${count(result.skipped)} couldn't be imported.`
+  return text[0].toUpperCase() + text.slice(1)
+}
+
+// Checks a chosen file before it is uploaded.
+export function importFileError(file: Pick<File, 'name' | 'size'>, kind: Collection['kind'], maxBytes: number): string | null {
+  const ext = kind === 'calendar' ? '.ics' : '.vcf'
+  if (!file.name.toLowerCase().endsWith(ext)) {
+    return kind === 'calendar' ? 'Choose a calendar file ending in .ics.' : 'Choose a contacts file ending in .vcf.'
+  }
+  if (file.size > maxBytes) return `The file is larger than ${formatBytes(maxBytes)}. Split it into smaller files.`
+  if (file.size === 0) return 'The file is empty.'
+  return null
+}
+
 export type PasswordErrors = { current?: string; password?: string; repeat?: string }
 
 // The checks of the password dialog before anything is sent: the same length rules as the panel's.
@@ -141,4 +183,15 @@ export function passwordChangedNotice(
       ? 'Your password was changed and all app passwords were revoked.'
       : 'Your password was changed.',
   }
+}
+
+// Where a mailbox the person may use shows up in mail programs.
+export function folderText(access: Pick<MailboxAccess, 'folder'>): string {
+  return access.folder
+    ? `In your mail program: the folder ${access.folder}`
+    : 'In your mail program, next to your own mail'
+}
+
+export function accessKindText(access: Pick<MailboxAccess, 'shared'>): string {
+  return access.shared ? 'Shared mailbox' : 'Someone’s own mailbox, shared with you'
 }

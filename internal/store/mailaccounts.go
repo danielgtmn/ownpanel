@@ -314,6 +314,8 @@ type MailboxChange struct {
 	AppPasswordsOnly  *bool
 	AddAppPassword    *AppPassword // MailboxID is filled in
 	RevokeAppPassword string
+	// Grants replaces who a personal mailbox is shared with.
+	Grants *[]GrantByStorage
 }
 
 // MailboxChangeResult tells what ApplyMailboxChange did.
@@ -363,6 +365,13 @@ func (s *Store) ApplyMailboxChange(ctx context.Context, storageID string, ch Mai
 			r.Overridden = true
 			return false
 		}
+		// A shared mailbox has no password and no app passwords: a change
+		// the mailbox made while it was personal, reported late, is ignored.
+		shared := m.Kind == "shared"
+		if shared && (ch.PasswordHash != nil || ch.AppPasswordsOnly != nil || ch.AddAppPassword != nil) {
+			r.Overridden = true
+			ch.PasswordHash, ch.AppPasswordsOnly, ch.AddAppPassword = nil, nil, nil
+		}
 		if ch.PasswordHash != nil && taken(m.AdminPasswordAt) {
 			m.PasswordHash = *ch.PasswordHash
 		}
@@ -388,6 +397,19 @@ func (s *Store) ApplyMailboxChange(ctx context.Context, storageID string, ch Mai
 				r.TooManyAppPasswords = true
 			} else if err := insertAppPassword(tx, a, s.now(), 0); err != nil && !errors.Is(err, ErrConflict) {
 				return err
+			}
+		}
+		if ch.Grants != nil {
+			// Only a personal mailbox delegates itself: the grants of a
+			// shared one are the panel's.
+			// The panel's change at or after the mailbox's wins (a removal
+			// of access must not come back with a late event).
+			if m.Kind == "shared" {
+				r.Overridden = true
+			} else if taken(m.AdminGrantsAt) {
+				if err := replaceGrants(tx, m.ID, *ch.Grants, s.now()); err != nil {
+					return err
+				}
 			}
 		}
 		if ch.RevokeAppPassword != "" {

@@ -1,9 +1,11 @@
 import { Dialog } from '@ui-sdk/react/dialog'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { ChangePasswordForm } from './AccountDialogs.tsx'
+import { ChangePasswordForm, ShareForm } from './AccountDialogs.tsx'
 import { AccountPage } from './AccountPage.tsx'
-import type { Me } from './api.ts'
+import { AccountFilters, FiltersSection, ForwardingSection, OutOfOfficeSection } from './AccountFilters.tsx'
+import { managedMailboxes } from './filters.ts'
+import type { Filters, Me } from './api.ts'
 import { SignInForm } from './SignInForm.tsx'
 
 const noop = () => undefined
@@ -21,6 +23,50 @@ const me: Me = {
   app_passwords_available: true,
   uses_known_days: 30,
   client: { server: 'mail.example.com', imap_port: 993, smtp_port: 465, smtp_starttls_port: 587, user_name_is_address: true },
+  shared_with: [],
+  access: [],
+}
+
+const sharing: Me = {
+  ...me,
+  shared_with: [{ address: 'ben@example.com', display_name: 'Ben Assistant', rights: ['read', 'write', 'send-on-behalf'] }],
+  access: [
+    {
+      address: 'info@example.com',
+      display_name: 'Info desk',
+      shared: true,
+      rights: ['read', 'send-as'],
+      folder: 'Shared/info@example.com',
+    },
+  ],
+}
+
+const filters: Filters = {
+  rules: {
+    managed: false,
+    out_of_office: {
+      enabled: true,
+      subject: 'Away',
+      text: 'Back on Monday.',
+      start: '2026-12-01',
+      days: 7,
+      set_by: 'admin',
+      set_at: '2026-11-25T10:00:00Z',
+    },
+    forwarding: { enabled: false, to: '', keep_copy: false },
+    filters: [
+      {
+        name: 'Newsletters',
+        match_any: false,
+        conditions: [{ field: 'from', op: 'contains', value: 'news' }],
+        folder: 'Archive',
+      },
+    ],
+    active_script: 'roundcube',
+    script: 'require "fileinto";',
+  },
+  folders: ['INBOX', 'Archive'],
+  may_forward: true,
 }
 
 describe('account area', () => {
@@ -43,6 +89,125 @@ describe('account area', () => {
     expect(html).toContain('href="/account/api/apple-setup"')
     expect(html).toContain('The people who manage this server can reset your password.')
     expect(html).not.toMatch(/argon|cookie|session|HMAC|JSON/i)
+  })
+
+  it('shows nobody sharing and no other mailboxes plainly', () => {
+    const html = renderToStaticMarkup(<AccountPage host="mail.example.com" me={me} onChange={noop} onSignedOut={noop} />)
+    expect(html).toContain('Your mailbox is shared with')
+    expect(html).toContain('Nobody. Only you can use your mailbox.')
+    expect(html).toContain('Share with someone')
+    expect(html).toContain('You have access to')
+    expect(html).toContain('No other mailboxes.')
+  })
+
+  it('lists who the mailbox is shared with and the mailboxes the person may use', () => {
+    const html = renderToStaticMarkup(
+      <AccountPage host="mail.example.com" me={sharing} onChange={noop} onSignedOut={noop} />,
+    )
+    expect(html).toContain('ben@example.com')
+    expect(html).toContain('Ben Assistant')
+    expect(html).toContain('Read and write, Send on behalf')
+    expect(html).toContain('info@example.com')
+    expect(html).toContain('Shared mailbox')
+    expect(html).toContain('Read, Send as')
+    expect(html).toContain('In your mail program: the folder Shared/info@example.com')
+    const sections = html.slice(html.indexOf('Your mailbox is shared with'), html.indexOf('Settings for mail programs'))
+    expect(sections).not.toMatch(/imap|acl|sieve|grant|delegat/i)
+  })
+
+  it('asks for an address and rights when sharing, and keeps Read while Write is on', () => {
+    const add = renderToStaticMarkup(
+      <Dialog open>
+        <ShareForm own="anna@example.com" existing={null} onSubmit={async () => undefined} />
+      </Dialog>,
+    )
+    expect(add).toContain('Their e-mail address')
+    expect(add).toContain('Manage filters and out-of-office')
+    expect(add).toContain('Send on behalf')
+    const change = renderToStaticMarkup(
+      <Dialog open>
+        <ShareForm
+          own="anna@example.com"
+          existing={{ address: 'ben@example.com', display_name: '', rights: ['write'] }}
+          onSubmit={async () => undefined}
+        />
+      </Dialog>,
+    )
+    expect(change).not.toContain('Their e-mail address')
+    expect(change).toContain('ben@example.com')
+    // Read is ticked and locked because Write is on.
+    expect(change.match(/data-disabled/g)?.length ?? 0).toBeGreaterThan(0)
+  })
+
+  it('offers the settings of mailboxes the person manages, and only those', () => {
+    const access = [
+      ...sharing.access,
+      {
+        address: 'team@example.com',
+        display_name: '',
+        shared: true,
+        rights: ['read', 'manage'],
+        folder: 'Shared/team@example.com',
+      },
+    ]
+    expect(managedMailboxes(access).map((entry) => entry.address)).toEqual(['team@example.com'])
+    expect(renderToStaticMarkup(<AccountFilters managed={[]} />)).not.toContain('of other mailboxes')
+    const html = renderToStaticMarkup(<AccountFilters managed={managedMailboxes(access)} />)
+    expect(html).toContain('Out-of-office and filters of other mailboxes')
+    expect(html).toContain('Your mailbox')
+    expect(html).toContain('team@example.com')
+    expect(html).not.toContain('info@example.com')
+    expect(html).not.toMatch(/sieve|grant|delegat/i)
+  })
+
+  it('does not offer to make a setting yours in a mailbox you manage', () => {
+    const html = renderToStaticMarkup(
+      <OutOfOfficeSection data={{ ...filters, mailbox: 'team@example.com' }} locked={false} save={async () => null} />,
+    )
+    expect(html).toContain('Set by admin')
+    expect(html).not.toContain('makes it yours')
+  })
+
+  it('speaks of the managed mailbox, not of the person, in its out-of-office reply and forwarding', () => {
+    const data = { ...filters, mailbox: 'team@example.com' }
+    const save = async () => null
+    const html = renderToStaticMarkup(
+      <>
+        <OutOfOfficeSection data={data} locked={false} save={save} />
+        <ForwardingSection data={data} locked={false} save={save} />
+      </>,
+    )
+    expect(html).toContain('Answers mail to team@example.com automatically')
+    expect(html).toContain('People who write to team@example.com get this reply')
+    expect(html).toContain('Sends all new mail of team@example.com on to another address.')
+    expect(html).toContain('Forward its mail')
+    expect(html).not.toMatch(/you&#x27;re away|write to you|your new mail|Forward my mail/)
+    const own = renderToStaticMarkup(<OutOfOfficeSection data={filters} locked={false} save={save} />)
+    expect(own).toContain('People who write to you get this reply')
+  })
+
+  it('shows who set the out-of-office reply and locks the editors for filters from a mail program', () => {
+    const save = async () => null
+    const html = renderToStaticMarkup(
+      <>
+        <OutOfOfficeSection data={filters} locked save={save} />
+        <ForwardingSection data={{ ...filters, may_forward: false }} locked={false} save={save} />
+      </>,
+    )
+    expect(html).toContain('Set by admin')
+    expect(html).toContain('Back on Monday.')
+    expect(html).toMatch(/<fieldset class="mailrules-fieldset" disabled=""/)
+    expect(html).toContain('Forwarding is turned off for this mailbox by the people who manage it.')
+    expect(html).not.toMatch(/sieve|\bscripts?\b/i)
+  })
+
+  it('lists filter rules with their conditions and shows what runs under Advanced', () => {
+    const html = renderToStaticMarkup(<FiltersSection data={filters} locked={false} save={async () => null} />)
+    expect(html).toContain('Newsletters')
+    expect(html).toContain('When from contains “news”')
+    expect(html).toContain('Move to Archive')
+    expect(html).toContain('Advanced')
+    expect(html).toContain('Up<span class="visually-hidden"> Newsletters</span>')
   })
 
   it('offers to sign out app password programs only when there are some', () => {

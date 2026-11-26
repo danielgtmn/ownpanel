@@ -85,6 +85,8 @@ func Handler(p *panel.Service, version string, opts ...Option) http.Handler {
 	addRedirectTools(srv, p)
 	addMailTools(srv, p)
 	addMailAccountTools(srv, p)
+	addSharingTools(srv, p)
+	addMailRulesTools(srv, p)
 	addDNSTools(srv, p)
 	addDomainTools(srv, p)
 	// Stateless: every request carries its own token, so there is no session

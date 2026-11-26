@@ -192,6 +192,11 @@ func (c *Checker) Check(dir *directory.Directory, ip netip.Addr, address, passwo
 	ipk := pk.ip
 
 	m, ok := dir.Mailbox(address)
+	if ok && m.Shared() {
+		// Nobody signs in to a shared mailbox: it answers like an unknown
+		// address.
+		m, ok = nil, false
+	}
 	if id, secret, isApp := config.ParseAppPassword(password); isApp {
 		return c.checkApp(dir, ip, now, pk, ipw, m, ok, id, secret)
 	}
@@ -258,6 +263,9 @@ func (c *Checker) CheckMain(dir *directory.Directory, ip netip.Addr, address, pa
 		return Grant{}, err
 	}
 	m, ok := dir.Mailbox(address)
+	if ok && m.Shared() {
+		m, ok = nil, false
+	}
 	if ok && password != "" && len(password) <= MaxPasswordBytes && !config.LooksLikeAppPassword(password) {
 		if c.verify(m.PasswordHash, password) {
 			c.mu.Lock()
@@ -344,7 +352,7 @@ func (c *Checker) checkApp(dir *directory.Directory, ip netip.Addr, now time.Tim
 // account change) and end themselves when it is false.
 func Valid(dir *directory.Directory, g Grant) bool {
 	cur, ok := dir.Mailbox(g.Address)
-	if !ok || cur.StorageID != g.StorageID {
+	if !ok || cur.StorageID != g.StorageID || cur.Shared() {
 		return false
 	}
 	if g.AppPassword == "" {

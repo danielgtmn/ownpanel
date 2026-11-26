@@ -16,9 +16,14 @@ its reverse name and your DNS records. Read [Before you start](#before-you-start
   and Archive. A storage limit per mailbox, a display name, and
   [app passwords](#app-passwords) for each device.
 - **Organisations:** domains of one company grouped together, the boundary
-  for sharing between mailboxes later on (see [Organisations](#organisations)).
+  for sharing between mailboxes (see [Organisations](#organisations)).
+- **Shared mailboxes** such as info@ or support@ that several people read
+  and send from with their own sign-in, and personal mailboxes shared with
+  an assistant (see [Shared mailboxes](#shared-mailboxes)).
 - **Forwarding:** extra addresses that deliver to mailboxes or to outside
   addresses, and an address that catches everything else on a domain.
+  A forwarding address can be a **distribution group** that accepts mail
+  only from certain senders.
 - **Signed outgoing mail** with a key per domain, so receivers can tell the
   mail really comes from your domain.
 - **DNS records** for mail checked, and set up with one click when the
@@ -34,8 +39,8 @@ its reverse name and your DNS records. Read [Before you start](#before-you-start
 
 Not there yet: a webmail in the browser, virus scanning, mailbox users
 changing their own password and app passwords (an area for them is
-planned, see [[Groupware architecture|Groupware-Architecture]]), sharing
-between mailboxes, reports from receivers about your mail, and
+planned, see [[Groupware architecture|Groupware-Architecture]]), reports
+from receivers about your mail, and
 outgoing encryption policies (MTA-STS, DANE). See [[Roadmap|Roadmap]].
 
 ## Before you start
@@ -43,8 +48,8 @@ outgoing encryption policies (MTA-STS, DANE). See [[Roadmap|Roadmap]].
 1. **Port 25 must be open in both directions.** Many hosting providers block
    outgoing port 25 on new servers (Hetzner, AWS, Google Cloud, Azure, many
    others) and unblock it on request. Ask before you rely on sending.
-   Incoming 25, 465, 587 and 993 must be reachable; the installer opens them
-   in ufw.
+   Incoming 25, 465, 587, 993 and 4190 must be reachable; the installer opens
+   them in ufw.
 2. **A mail server name.** Pick a name such as `mail.example.com` and point it
    at the server (A and, if the server has IPv6, AAAA record). Mail
    programs connect to it and other servers deliver to it.
@@ -109,6 +114,7 @@ outgoing encryption policies (MTA-STS, DANE). See [[Roadmap|Roadmap]].
 | Password | the mailbox's password |
 | Incoming (IMAP) | port 993, SSL/TLS |
 | Outgoing (SMTP) | port 465, SSL/TLS, or port 587, STARTTLS |
+| Filters (ManageSieve) | port 4190, STARTTLS (see [Filters with a mail program](#filters-with-a-mail-program-managesieve)) |
 
 Most programs find these settings by themselves: Thunderbird and others
 ask `autoconfig.<domain>` (or `<domain>/.well-known/autoconfig/…` when the
@@ -120,7 +126,8 @@ mailbox gives a profile to install; it contains no password and asks for it
 during installation (it is not signed, so the device shows it as
 unverified).
 A mailbox can send as its own address and as forwarding addresses that
-deliver to it (not as addresses the catch-all covers).
+deliver to it (not as addresses the catch-all covers), and for shared
+mailboxes it may send for (see [Sending for a shared mailbox](#sending-for-a-shared-mailbox)).
 
 ### Display name
 
@@ -173,8 +180,15 @@ signed in with the full address and the mailbox password. There they can
 - **create and revoke app passwords** (shown once, with copy), see when each
   was last used in the last 30 days, and switch **Only allow mail programs
   with app passwords** on or off;
+- set an **out-of-office reply**, **forwarding** and **filters** (see
+  [Out-of-office and filters](#out-of-office-and-filters));
 - read the **settings for mail programs** and download the **setup for
-  Apple devices**.
+  Apple devices** (mail, calendars and contacts in one);
+- see their **calendars and address books**, download each as a file and
+  import an `.ics` or `.vcf` file (up to 10 MB) into one, see
+  [Calendars and contacts](#calendars-and-contacts);
+- **share their mailbox** with colleagues and see which mailboxes they have
+  access to (see [Sharing your own mailbox](#sharing-your-own-mailbox)).
 
 Only the mailbox password signs in there, also when mail programs may only
 use app passwords; app passwords never do. The page signs out after 30
@@ -193,14 +207,73 @@ The page needs a mail server name of its own, other than the panel's
 address (**Mail health** warns otherwise), and the mail service's web socket
 (set up by `install.sh`).
 
+### Calendars and contacts
+
+Every mailbox has calendars and address books on the server that sync to
+phones and computers: a calendar "Calendar" and an address book "Contacts"
+to start with (created the first time they are used), more can be added in
+the programs. Each mailbox also sees a read-only address book
+**Directory** with everyone in its organisation (the mailboxes with their
+display names, and the forwarding addresses, not the catch-all), for
+completing addresses while writing.
+
+| | |
+|---|---|
+| Server address | `https://<mail server name>/dav/` (most programs only need the mail server name or even only the e-mail address) |
+| User name | the full e-mail address |
+| Password | the mailbox password, or an app password (with **Only allow mail programs with app passwords**, only an app password) |
+
+- **iPhone, iPad, Mac:** download the **setup for Apple devices** on the
+  mailbox's own page (or in the panel) and install it: it adds the mail
+  account, the calendars and the contacts, and asks for the password once
+  for each. By hand: Settings → Calendar → Accounts → Add Account → Other →
+  Add CalDAV Account (and Add CardDAV Account in Contacts) with the mail
+  server name, the address and the password.
+- **Android:** install **DAVx5**, add an account with "Login with e-mail
+  address" and the address and password (or an app password); DAVx5 finds
+  the server through the domain's records. If it does not, choose "Login
+  with URL and user name" and enter `https://<mail server name>/dav/`.
+- **Thunderbird:** its automatic mail setup cannot carry calendars. In
+  Thunderbird 115 or later: Calendar → New Calendar → On the Network, enter
+  the address and as location the mail server name (or
+  `https://<mail server name>/dav/`); it lists the calendars to add.
+  Address books: Address Book → New Address Book → Add CardDAV Address
+  Book, with the address and `https://<mail server name>/dav/`.
+- **Outlook (Windows):** Outlook has no built-in support. Use the free
+  add-on **CalDav Synchronizer** with the server address
+  `https://<mail server name>/dav/calendars/<address>/calendar/` for the
+  calendar and `https://<mail server name>/dav/addressbooks/<address>/contacts/`
+  for contacts.
+- **GNOME, KDE, Evolution and others:** add a CalDAV/CardDAV account with the
+  server address above.
+
+Programs find the server by themselves through the records
+`_caldavs._tcp` and `_carddavs._tcp` of the address's domain, which the
+domain's DNS records list (recommended) and **Set up records** creates with
+the others, and through `https://<mail server name>/.well-known/caldav`.
+
+Calendars and contacts count towards the mailbox's storage limit: when it
+is full, programs cannot save new entries until something is deleted.
+Limits: 1 MB per entry or contact (photos included), 100 calendars and
+address books per mailbox, 100 000 entries per calendar or address book.
+
+**Moving from Google or Microsoft 365:** export the calendar as `.ics`
+(Google Calendar: Settings → Import & export; Outlook on the web: share or
+publish the calendar and download the `.ics`) and the contacts as `.vcf`
+(Google Contacts: Export → vCard; Outlook: export as CSV, which a program
+like Thunderbird can turn into `.vcf`), then import the files on the
+mailbox's own page. An entry that is there already (same UID) is replaced,
+so the same file can be imported again.
+
 ### Organisations
 
 By default every mail domain stands on its own. When several domains belong
 to one company (for example `example.com` and `example.de`), group them on a
 domain's page under **Organisation → Change**: choose an organisation of
 yours or create one. Mailboxes can only share mail, calendars and contacts
-with mailboxes of the same organisation, and only see those in the address
-book, once those features exist; nothing is shared just by grouping.
+with mailboxes of the same organisation (once sharing exists), and the
+**Directory** address book lists the mailboxes of the organisation;
+nothing else is shared just by grouping.
 
 - You can group only your own domains into your own organisations.
   Grouping domains that belong to different people is for administrators,
@@ -209,6 +282,232 @@ book, once those features exist; nothing is shared just by grouping.
   organisation lets all its domains stand alone.
 - If an administrator put your domain into an organisation of someone
   else, the page says so; you can only take it out.
+
+## Shared mailboxes
+
+A shared mailbox (for example `info@example.com`) receives mail and has
+folders and a storage limit like any mailbox, but nobody signs in to it: it
+has no password and no app passwords. The people who work with it read and
+send from it with their own mailbox and their own sign-in.
+
+### Create one
+
+On the domain's e-mail page, **Create mailbox** and choose **Shared
+mailbox** under **Kind of mailbox** (no password is asked for). The mailbox
+list marks it **Shared**.
+
+### Give people access
+
+Under **People with access** on the shared mailbox, add a mailbox and tick
+what it may do:
+
+| Right | What the person can do |
+|---|---|
+| Read | see the folders and messages; mark them read or unread for themselves |
+| Write | also flag, move and delete messages, create, rename and delete folders (includes Read) |
+| Manage | the shared mailbox's out-of-office reply, forwarding and filters (see [For a shared mailbox](#for-a-shared-mailbox)) |
+| Send as | send with the shared address as sender |
+| Send on behalf | send for the shared address, showing who sent it |
+
+- Only **personal mailboxes of the same organisation** can get access (see
+  [Organisations](#organisations)); a domain that stands alone is its own
+  organisation. Administrators cannot cross organisations either.
+- At most 100 mailboxes per shared mailbox.
+- Changes take effect at once. When access is taken away, a mail program
+  that has one of its folders open is disconnected and no longer shows
+  them after reconnecting; when Write is taken away, the open folder
+  becomes read-only.
+- If a domain later moves to another organisation, access across the new
+  boundary stops working and the panel shows it as **not in effect**; it
+  works again when the domains are grouped again.
+
+### In the mail program
+
+Nothing needs to be set up: the folders of every mailbox a person may read
+appear in their own account under **Shared**, for example
+`Shared/info@example.com/INBOX` and `Shared/info@example.com/Sent`
+(Thunderbird, Apple Mail and iOS show them by themselves; they are always
+subscribed, so programs that show only subscribed folders show them too).
+Mail programs never take these folders as the person's own Sent, Drafts or
+Trash. Messages can be copied and moved between one's own folders and
+shared ones as far as the rights allow; moved mail counts towards the
+storage limit of the mailbox it lands in. Personal folders cannot be named
+`Shared/<address>/…`.
+
+**Read state:** in a shared mailbox everyone has their own read and unread
+state, so a message one person read stays unread for the others; flags and
+everything else are the same for all. Messages that were already read
+before the mailbox became shared, and imported messages, start as unread
+for everyone. In a personal mailbox shared with an assistant (see below)
+the read state is the owner's, shared by everyone with access, and Read
+alone means nothing can be changed there.
+
+### Sending for a shared mailbox
+
+- **Send as:** the message goes out from the shared address (or one of its
+  forwarding addresses); receivers see only the shared address.
+- **Send on behalf:** the message goes out from the shared address with the
+  person's own address as *Sender*; many receiving programs show "Anna on
+  behalf of info@example.com". This needs a mail program that sets the
+  Sender field; most do not offer it, so give **Send as** if people use
+  Thunderbird, Apple Mail or iOS.
+
+To send as the shared address, add it as another sender address in the
+mail program, using the person's own account and outgoing server:
+
+- **Thunderbird:** Account Settings → **Manage Identities…** → **Add**: your
+  name and the shared address as **Email Address**. Choose it in the From
+  field when writing.
+- **Apple Mail (Mac):** Settings → Accounts → the account → **Email
+  Address** → **Edit Email Address…** → add the shared address. It then
+  appears in the From menu.
+- **iPhone and iPad:** Settings → Mail → Accounts → the account → Account →
+  Email → **Add Another Email**.
+
+Replies and bounces go to the shared mailbox. The sending limits of the
+shared mailbox and of the person both count; a shared mailbox that was
+stopped from sending cannot be sent for.
+
+**Keep a copy of sent mail:** on a shared mailbox, this option stores
+everything sent for it in its Sent folder (marked read for the sender), so
+the team sees what was answered. If the mail program also saves a copy
+there, it is not stored twice.
+
+### Sharing your own mailbox
+
+On [their mailbox's own page](#your-mailboxs-own-page), people can share
+their personal mailbox with colleagues of the same organisation (for
+example an assistant who reads and answers the boss's mail), with the same
+rights, under **Your mailbox is shared with**. **You have access to** lists
+the mailboxes they may use and where their folders show up. Domain owners
+and administrators see these shares on the mailbox's **Sharing** panel and
+can remove them (for people who left), but not add them.
+
+### Making a mailbox shared or personal
+
+- **Make shared** removes the mailbox's password and app passwords, signs
+  out every mail program and its own page, and ends its access to other
+  mailboxes. The mail stays.
+- **Make personal** needs a new password; people who had access keep it,
+  now as if the owner had shared the mailbox. Keeping copies of sent mail
+  is turned off.
+
+**Import mail** works for shared mailboxes as for any other.
+
+## Out-of-office and filters
+
+Every mailbox can sort its incoming mail and answer it automatically. The
+person sets this up on the **mailbox's own page** (`https://<mail server
+name>/`), or in a mail program that can edit server filters (see below).
+Filters run when mail arrives, for mail from outside and for mail between
+mailboxes of this server, so an out-of-office reply also answers
+colleagues.
+
+- **Out-of-office reply:** on or off, a subject, the text, an optional first
+  and last day, and how often the same sender gets it (once every 1 to 90
+  days, 7 by default). Each sender gets it at most once in that time. It is
+  sent only when the mailbox's address (or a forwarding address that
+  delivers to it) is in To or Cc, and never to mailing lists, automatic
+  messages, bulk mail, the empty sender, `MAILER-DAEMON`, `owner-…`,
+  `…-request`, `LISTSERV`, its own address, or mail judged as spam. It
+  goes only to senders whose address is confirmed: SPF passed for the
+  sender's domain, or a DKIM signature of that domain passed (mail between
+  mailboxes of this server always counts). Senders of domains without SPF
+  or DKIM get no reply, so forged senders never receive one. Replies are
+  signed for the domain and count against the mailbox's sending limit;
+  when the limit is reached, or sending is blocked for the mailbox, no
+  reply is sent (the mailbox is not blocked for it).
+- **Forwarding:** every message also (or only) goes to another address.
+- **Filters:** rules of conditions (from, to or cc, subject, mailing list;
+  contains or is; all or any of them) and actions (move to a folder, mark
+  as read, forward to an address, delete). The first rule that matches
+  ends the list.
+
+Mail judged as spam still lands in **Junk** unless a filter moves it
+somewhere else; it is never forwarded and never answered. A filter that
+fails, or a folder that no longer exists, keeps the message in the inbox:
+filters never lose mail. Forwards and replies leave only once every
+mailbox the message is for has stored it, so a message the sender has to
+send again is never forwarded twice. If a mailbox of this server that a
+filter forwards to cannot store the message, the whole message is refused
+for now and the sending server tries again.
+
+Forwarding by filters follows the same rules as forwarding addresses
+(rewritten return address, the domain's hourly limit) and in addition:
+they count against the mailbox's own hourly and daily limits, nothing is
+forwarded while sending is blocked for the mailbox, at most 5 addresses per
+message, never to the mailbox's own addresses, and not
+for mail that this mailbox already forwarded once (two mailboxes that
+forward to each other stop after one round). The panel records an activity
+entry when a message was not forwarded and says why.
+
+**For someone who left:** as the domain's owner, open the mailbox in the
+panel, **Out-of-office and forwarding**: set or clear an out-of-office reply
+and forwarding for it. The activity log records it, and the person sees on
+their page who set it. The panel shows whether an out-of-office reply is on
+(also in the list of mailboxes), but not the text the person wrote, nor
+one written for the mailbox by someone with the Manage right (an
+assistant setting their boss's reply); it shows the text only when a
+panel user set it. There
+you can also turn off **Filters of this mailbox may forward mail**
+(on by default).
+
+When the person's filters were written in a mail program, the page and the
+panel show them read-only and offer to replace them.
+
+### For a shared mailbox
+
+Nobody signs in to a shared mailbox, so the people with the **Manage**
+right on it set its out-of-office reply, forwarding and filters (see
+[Give people access](#give-people-access)); the domain's owner can too, in
+the panel, as for any mailbox.
+
+- On their own mailbox's page, under **Out-of-office and filters of other
+  mailboxes**, they choose the shared mailbox; the out-of-office reply,
+  forwarding and filters below are then its own. The same works for a
+  personal mailbox someone shared with them with **Manage** (for example
+  an assistant who sets the boss's out-of-office reply).
+- The page shows who set the reply and forwarding last. Whether someone
+  may still do it is checked on every change: once the right is taken
+  away, the mailbox disappears from the choice.
+- The filters run when mail for the shared mailbox arrives. The
+  out-of-office reply comes from the shared address (or one of its own
+  forwarding addresses), never from the address of the person who set it.
+- **Read state:** a filter's "mark as read" has no effect in a shared
+  mailbox: everyone there has their own read state, so new mail stays
+  unread for everyone. Moving, deleting, forwarding and other flags work
+  as usual.
+- **In a mail program** that edits filters (below), sign in with your own
+  address and password and enter the shared address as the user to act
+  for (the setting is usually called *authorization*; the Sieve add-on for
+  Thunderbird has it in its server settings). The program then shows the
+  shared mailbox's filters.
+
+### Filters with a mail program (ManageSieve)
+
+Mail programs that can edit filters on the server connect to the mail
+server name on **port 4190** with **STARTTLS** and sign in with the full
+address and the mailbox password or an app password (with **Only allow mail
+programs with app passwords** on, only an app password works). The
+connection is encrypted before any password is sent.
+
+In **Thunderbird** this needs the add-on **Sieve** by Thomas Schmid. In its
+settings for the account: server = the mail server name (for example
+`mail.example.com`), port 4190, security **STARTTLS**, user name = the full
+address, password = the mailbox password or an app password. Other programs
+and phones that speak ManageSieve take the same settings.
+
+- A mailbox keeps up to 10 filter scripts of at most 64 KB each; **one** of
+  them is active at a time. The filters set on the mailbox's own page are
+  the script called `ownpanel`.
+- A script with a mistake is refused with the line and the problem; it is
+  not saved, so the filters in use stay as they were.
+- The active script cannot be deleted; switch to another one (or to none)
+  first.
+- Changing the password, revoking the app password or deleting the mailbox
+  signs the program out at once. Three wrong passwords end the connection,
+  and too many from one network hold back further tries for a while, as for
+  IMAP.
 
 ## Forwarding
 
@@ -227,6 +526,27 @@ first mailbox, else to the postmaster address from the settings. The
 postmaster address may be outside (at another provider): then that mail is
 forwarded to it like a forwarding address.
 
+### Distribution groups
+
+A forwarding address that delivers to several mailboxes is a distribution
+group. **Who may write to this address** limits who can send to it:
+
+- **Anyone** (default): also people outside the organisation, for example
+  customers.
+- **Only addresses of this organisation.**
+- **Only its members:** the addresses it delivers to (and their forwarding
+  addresses, or a member sending as a shared mailbox).
+
+Mail from anyone else is refused with "This address accepts mail only from
+certain senders". Mail arriving from outside under one of your own
+addresses must pass that domain's sender checks (SPF or signature), as all
+such mail does, so faking a member's address does not get through. Only the address
+written to is checked, not groups it forwards to. Not available for the
+catch-all.
+
+**Hide from the address book** keeps the address out of the organisation's
+address book once that exists.
+
 ## Limits
 
 | | Default |
@@ -237,6 +557,7 @@ forwarded to it like a forwarding address.
 | Size of a message | 50 MB |
 | Recipients of a message | 100 |
 | Mail domains / mailboxes per member | 20 / 200 |
+| Mailboxes with access to one mailbox | 100 |
 
 Administrators can change the limits of a mailbox; owners can only lower
 them. One message counts once, whatever the number of recipients.
@@ -369,6 +690,11 @@ list of the folders. Thunderbird (ImportExport add-on), Apple Mail and most
 mail programs can open the `.mbox` files; ownpanel imports the zip back
 without loss. One download per mailbox runs at a time.
 
+The zip also holds the mailbox's calendars (`calendars/<name>.ics`) and
+address books (`contacts/<name>.vcf`). Importing the zip into a mailbox
+brings back the mail only; import the calendar and contact files on the
+mailbox's own page.
+
 ## New server address: warm it up
 
 Large providers judge new addresses by their history. For the first weeks,
@@ -382,11 +708,13 @@ later.
 In `/var/lib/ownpanel-mail`, owned by the mail service's own user
 `ownpanel-mail`; the panel itself cannot read it. Backups include it unless
 made with `-no-mail` (see [[Backup and Restore|Backup-and-Restore]]).
-Deleting a mailbox or turning off e-mail for a domain deletes its stored
-mail.
+Calendars and contacts are stored there too, next to the mail. Deleting a
+mailbox or turning off e-mail for a domain deletes its stored mail,
+calendars and contacts.
 
 Administrators can set any mailbox's password, and with it read the
-mailbox; they and the domain's owner can also download all of its mail.
+mailbox and its calendars and contacts; they and the domain's owner can also
+download all of its mail, calendars and contacts.
 Mailbox owners should know this.
 
 ## Troubleshooting
@@ -397,7 +725,7 @@ Mailbox owners should know this.
 - **Mail to Gmail or Outlook lands in spam or is refused:** check Mail health
   (reverse name, blocklists), that all records show as set up, and that
   outgoing port 25 is unblocked.
-- **Mail programs cannot connect:** check that 993, 465 and 587 are open in
-  the firewall and that the certificate check in Mail health is ok.
+- **Mail programs cannot connect:** check that 993, 465 and 587 (and 4190
+  for filters) are open in the firewall and that the certificate check in Mail health is ok.
 - **Logs:** `journalctl -u ownpanel-mail`. Logs never contain message
   contents or passwords.

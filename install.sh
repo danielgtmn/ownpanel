@@ -605,9 +605,9 @@ check_ports() {
     warn "another program listens on port 80 or 443; Caddy cannot serve your sites until it is stopped:"
     printf '%s\n' "$busy" >&2
   fi
-  busy=$(ss -Hltnp '( sport = :25 or sport = :465 or sport = :587 or sport = :993 )' 2>/dev/null | grep -v '"ownpaneld"' || true)
+  busy=$(ss -Hltnp '( sport = :25 or sport = :465 or sport = :587 or sport = :993 or sport = :4190 )' 2>/dev/null | grep -v '"ownpaneld"' || true)
   if [ -n "$busy" ]; then
-    warn "another program listens on a mail port (25, 465, 587 or 993); ownpanel's e-mail cannot use it until that program is stopped (e.g. systemctl disable --now exim4 or postfix):"
+    warn "another program listens on a mail port (25, 465, 587, 993 or 4190); ownpanel's e-mail cannot use it until that program is stopped (e.g. systemctl disable --now exim4 or postfix):"
     printf '%s\n' "$busy" >&2
   fi
   if [ "$installed" = 0 ] && [ -e "$BIN/caddy" ]; then
@@ -762,10 +762,10 @@ migrate_dir() {
 open_firewall() {
   if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; then
     local p
-    for p in 80 443 25 465 587 993; do ufw allow "$p/tcp" >/dev/null; done
-    say "Firewall (ufw): allowed 80, 443 (web) and 25, 465, 587, 993 (e-mail) over TCP."
+    for p in 80 443 25 465 587 993 4190; do ufw allow "$p/tcp" >/dev/null; done
+    say "Firewall (ufw): allowed 80, 443 (web) and 25, 465, 587, 993, 4190 (e-mail) over TCP."
   else
-    say "Firewall: make sure 80, 443 (web) and 25, 465, 587, 993 (e-mail) are open over TCP"
+    say "Firewall: make sure 80, 443 (web) and 25, 465, 587, 993, 4190 (e-mail) are open over TCP"
     say "to the Internet (no ufw active here). Many hosting providers block port 25 until"
     say "you ask them to unblock it; see the E-Mail page of the ownpanel wiki."
   fi
