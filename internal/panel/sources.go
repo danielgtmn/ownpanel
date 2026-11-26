@@ -306,7 +306,7 @@ func (s *Service) LinkableRepositories(ctx context.Context, a Actor, site string
 	if !mayUseGitHub(a) {
 		return out, nil
 	}
-	insts, err := s.store.GitHubInstallations(ctx, 0)
+	insts, err := s.store.GitHubInstallations(ctx, "")
 	if err != nil {
 		return LinkableRepositories{}, storeError(err)
 	}

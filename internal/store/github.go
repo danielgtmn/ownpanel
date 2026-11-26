@@ -65,6 +65,8 @@ var (
 // installationKey is the row id of an installation: GitHub's id as text.
 func installationKey(id int64) string { return strconv.FormatInt(id, 10) }
 
+func parseInstallationKey(key string) (int64, error) { return strconv.ParseInt(key, 10, 64) }
+
 func checkAccountType(t string) error {
 	if t != githubUser && t != githubOrganization {
 		return invalidf("unknown kind of GitHub account %q", t)
@@ -171,7 +173,7 @@ func (s *Store) RecordGitHubCheck(ctx context.Context, id string, at time.Time, 
 }
 
 func installationOf(row githubInstallationRow) (GitHubInstallation, error) {
-	id, err := strconv.ParseInt(row.ID, 10, 64)
+	id, err := parseInstallationKey(row.ID)
 	if err != nil {
 		return GitHubInstallation{}, err
 	}

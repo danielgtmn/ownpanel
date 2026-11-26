@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"time"
+
+	"github.com/danielgtmn/ablage"
 )
 
 // Kinds of a site's source.
@@ -34,76 +36,120 @@ type SiteSource struct {
 	UpdatedAt    time.Time
 }
 
-const sourceCols = `s.site_name, s.kind, coalesce(s.installation_id, 0), coalesce(s.repository_id, 0), s.repository,
-	s.branch, s.publish_on_push, s.deploy_key, s.notify_secret, coalesce(u.name, ''), s.created_at, s.updated_at`
+var errNoSource = notFoundf("the site has no source")
 
-const sourceFrom = ` FROM site_sources s LEFT JOIN users u ON u.id = s.created_by`
-
-func scanSource(row interface{ Scan(...any) error }) (SiteSource, error) {
-	var src SiteSource
-	var created, updated int64
-	err := row.Scan(&src.Site, &src.Kind, &src.InstallationID, &src.RepositoryID, &src.Repository, &src.Branch,
-		&src.PublishOnPush, &src.DeployKey, &src.NotifySecret, &src.CreatedBy, &created, &updated)
-	if err != nil {
-		if noRows(err) {
-			return SiteSource{}, notFoundf("the site has no source")
+// checkSource stands for the table constraints from before ablage.
+func checkSource(src SiteSource) error {
+	switch src.Kind {
+	case SourceGitHub:
+		if src.RepositoryID <= 0 {
+			return invalidf("a GitHub source needs GitHub's id of the repository")
 		}
-		return SiteSource{}, err
+		if len(src.DeployKey) > 0 || len(src.NotifySecret) > 0 {
+			return invalidf("a GitHub source has no deploy key")
+		}
+	case SourceGit:
+		if src.InstallationID != 0 || src.RepositoryID != 0 {
+			return invalidf("a Git source has no GitHub installation or repository")
+		}
+	default:
+		return invalidf("unknown kind of source %q", src.Kind)
 	}
-	src.CreatedAt, src.UpdatedAt = unix(created), unix(updated)
-	return src, nil
+	return nil
+}
+
+func sourcesOf(ctx context.Context, r repos, rows []siteSourceRow) ([]SiteSource, error) {
+	ids := make([]string, len(rows))
+	for i, row := range rows {
+		ids[i] = deref(row.CreatedBy)
+	}
+	names, err := userNames(ctx, r, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SiteSource, len(rows))
+	for i, row := range rows {
+		var inst int64
+		if row.InstallationID != nil {
+			if inst, err = parseInstallationKey(*row.InstallationID); err != nil {
+				return nil, err
+			}
+		}
+		out[i] = SiteSource{Site: row.SiteName, Kind: row.Kind, InstallationID: inst, RepositoryID: deref(row.RepositoryID),
+			Repository: row.Repository, Branch: row.Branch, PublishOnPush: row.PublishOnPush, DeployKey: row.DeployKey,
+			NotifySecret: row.NotifySecret, CreatedBy: names[deref(row.CreatedBy)], CreatedAt: row.CreatedAt,
+			UpdatedAt: row.UpdatedAt}
+	}
+	return out, nil
+}
+
+func sourceRowOf(ctx context.Context, r repos, site string) (siteSourceRow, error) {
+	row, err := r.sources.First(ctx, ablage.Query{Where: ablage.Eq("site_name", site)})
+	return row, missing(err, errNoSource)
 }
 
 // SiteSource returns the source of a site; ErrNotFound if it has none.
 func (s *Store) SiteSource(ctx context.Context, site string) (SiteSource, error) {
-	return scanSource(s.db.QueryRowContext(ctx, `SELECT `+sourceCols+sourceFrom+` WHERE s.site_name = ?`, site))
+	row, err := sourceRowOf(ctx, s.r, site)
+	if err != nil {
+		return SiteSource{}, err
+	}
+	list, err := sourcesOf(ctx, s.r, []siteSourceRow{row})
+	if err != nil {
+		return SiteSource{}, err
+	}
+	return list[0], nil
 }
 
 // SiteSourcesOfRepository lists the sources linked to a GitHub repository,
 // by site name.
 func (s *Store) SiteSourcesOfRepository(ctx context.Context, repositoryID int64) ([]SiteSource, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+sourceCols+sourceFrom+`
-		WHERE s.kind = 'github' AND s.repository_id = ? ORDER BY s.site_name`, repositoryID)
+	rows, err := s.r.sources.Find(ctx, ablage.Query{
+		Where:   ablage.And(ablage.Eq("kind", SourceGitHub), ablage.Eq("repository_id", repositoryID)),
+		OrderBy: []ablage.Order{ablage.Asc("site_name")},
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []SiteSource{}
-	for rows.Next() {
-		src, err := scanSource(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, src)
-	}
-	return out, rows.Err()
+	return sourcesOf(ctx, s.r, rows)
 }
 
 // PutSiteSource links a site to a source, replacing the one it had.
-// by is the user who links it.
-func (s *Store) PutSiteSource(ctx context.Context, src SiteSource, by int64) (SiteSource, error) {
-	if src.Kind != SourceGitHub && src.Kind != SourceGit {
-		return SiteSource{}, invalidf("unknown kind of source %q", src.Kind)
+// by is the id of the user who links it ("" for none).
+func (s *Store) PutSiteSource(ctx context.Context, src SiteSource, by string) (SiteSource, error) {
+	if err := checkSource(src); err != nil {
+		return SiteSource{}, err
 	}
 	now := s.now()
-	err := s.tx(ctx, func(tx *sql.Tx) error {
-		var exists int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sites WHERE name = ?`, src.Site).Scan(&exists); err != nil {
+	row := siteSourceRow{SiteName: src.Site, Kind: src.Kind, Repository: src.Repository, Branch: src.Branch,
+		PublishOnPush: src.PublishOnPush, DeployKey: src.DeployKey, NotifySecret: src.NotifySecret,
+		CreatedBy: optional(by), CreatedAt: now, UpdatedAt: now}
+	if src.InstallationID != 0 {
+		row.InstallationID = ptr(installationKey(src.InstallationID))
+	}
+	if src.RepositoryID != 0 {
+		row.RepositoryID = ptr(src.RepositoryID)
+	}
+	err := s.tx(ctx, func(r repos) error {
+		if ok, err := r.sites.Exists(ctx, src.Site); err != nil {
 			return err
+		} else if !ok {
+			return errSiteNotFound
 		}
-		if exists == 0 {
-			return notFoundf("site not found")
+		have, err := sourceRowOf(ctx, r, src.Site)
+		switch {
+		case errors.Is(err, ErrNotFound):
+			err = r.sources.Create(ctx, &row)
+		case err != nil:
+			return err
+		default:
+			row.ID, row.CreatedAt = have.ID, have.CreatedAt
+			err = r.sources.Replace(ctx, &row)
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO site_sources
-			(site_name, kind, installation_id, repository_id, repository, branch, publish_on_push, deploy_key, notify_secret,
-			 created_by, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT (site_name) DO UPDATE SET kind = excluded.kind, installation_id = excluded.installation_id,
-				repository_id = excluded.repository_id, repository = excluded.repository, branch = excluded.branch,
-				publish_on_push = excluded.publish_on_push, deploy_key = excluded.deploy_key,
-				notify_secret = excluded.notify_secret, created_by = excluded.created_by, updated_at = excluded.updated_at`,
-			src.Site, src.Kind, nullID(src.InstallationID), nullID(src.RepositoryID), src.Repository, src.Branch,
-			src.PublishOnPush, src.DeployKey, src.NotifySecret, nullID(by), now, now)
+		if errors.Is(err, ablage.ErrReference) {
+			// The installation or the user went away in between.
+			return notFoundf("the GitHub installation or the user is gone")
+		}
 		return err
 	})
 	if err != nil {
@@ -114,19 +160,19 @@ func (s *Store) PutSiteSource(ctx context.Context, src SiteSource, by int64) (Si
 
 // RenameSourceRepository stores the name a GitHub repository has now.
 func (s *Store) RenameSourceRepository(ctx context.Context, repositoryID int64, fullName string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE site_sources SET repository = ?
-		WHERE kind = 'github' AND repository_id = ? AND repository <> ?`, fullName, repositoryID, fullName)
+	_, err := s.r.sources.UpdateWhere(ctx, ablage.And(ablage.Eq("kind", SourceGitHub), ablage.Eq("repository_id", repositoryID),
+		ablage.Ne("repository", fullName)), ablage.Row{"repository": fullName})
 	return err
 }
 
 // DeleteSiteSource unlinks a site; ErrNotFound if it had no source.
 func (s *Store) DeleteSiteSource(ctx context.Context, site string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM site_sources WHERE site_name = ?`, site)
+	n, err := s.r.sources.DeleteWhere(ctx, ablage.Eq("site_name", site))
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return notFoundf("the site has no source")
+	if n == 0 {
+		return errNoSource
 	}
 	return nil
 }
