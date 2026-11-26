@@ -149,15 +149,22 @@ func (s *Server) Reconfigure() {
 	if s.ln != nil {
 		s.ln.SetPerIP(dir.Limits().ConnectionsPerIP)
 	}
-	var stale []*session
+	var stale, live []*session
 	for sess := range s.sessions {
 		if box, ok := sess.mailbox(); ok && !signin.Valid(dir, box) {
 			stale = append(stale, sess)
+		} else if ok {
+			live = append(live, sess)
 		}
 	}
 	s.mu.Unlock()
 	for _, sess := range stale {
 		go sess.end()
+	}
+	// Grants may have changed: watches follow them, and a session whose
+	// selected shared folder is no longer readable ends.
+	for _, sess := range live {
+		sess.queueReconfigure(dir)
 	}
 }
 

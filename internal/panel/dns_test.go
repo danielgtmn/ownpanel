@@ -68,8 +68,8 @@ type dnsWorld struct {
 	reject   *hetznertest.Server            // answers every unknown token with 401
 	res      *fakeResolver
 	now      time.Time
-	rootConn int64
-	bobConn  int64
+	rootConn string
+	bobConn  string
 }
 
 func newDNSWorld(t *testing.T) *dnsWorld {
@@ -127,21 +127,21 @@ func (d *dnsWorld) addHetzner(token string, zones ...string) *hetznertest.Server
 	return srv
 }
 
-func (d *dnsWorld) ownConn(a Actor) int64 {
-	if a.UserID == 1 {
+func (d *dnsWorld) ownConn(a Actor) string {
+	if a.UserID == "1" {
 		return d.rootConn
 	}
 	return d.bobConn
 }
 
-func (d *dnsWorld) otherConn(a Actor) int64 {
-	if a.UserID == 1 {
+func (d *dnsWorld) otherConn(a Actor) string {
+	if a.UserID == "1" {
 		return d.bobConn
 	}
 	return d.rootConn
 }
 
-func (d *dnsWorld) conn(id int64) DNSConnection {
+func (d *dnsWorld) conn(id string) DNSConnection {
 	d.t.Helper()
 	c, err := d.svc.store.DNSConnection(context.Background(), id)
 	if err != nil {

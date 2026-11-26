@@ -215,12 +215,10 @@ export function keepsSummary(redirect: Pick<Redirect, 'source_path' | 'keep_path
   return out
 }
 
-export function sortRedirects<T extends Pick<Redirect, 'id' | 'source_domain' | 'source_path'>>(list: T[]): T[] {
+// Ids are opaque, so redirects with the same source keep the order they came in.
+export function sortRedirects<T extends Pick<Redirect, 'source_domain' | 'source_path'>>(list: T[]): T[] {
   return [...list].sort(
-    (a, b) =>
-      a.source_domain.localeCompare(b.source_domain, 'en') ||
-      a.source_path.localeCompare(b.source_path, 'en') ||
-      a.id - b.id,
+    (a, b) => a.source_domain.localeCompare(b.source_domain, 'en') || a.source_path.localeCompare(b.source_path, 'en'),
   )
 }
 

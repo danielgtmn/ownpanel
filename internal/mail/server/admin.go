@@ -22,6 +22,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST "+config.PathOutbound, s.handleOutbound)
 	mux.HandleFunc("POST "+config.PathSend, s.handleSend)
 	s.transferRoutes(mux)
+	s.rulesRoutes(mux)
 	return mux
 }
 

@@ -15,6 +15,18 @@
 //     address exists.
 //   - Many failures for one address from many IPs are recorded as an event
 //     (at most once per EventEvery per address) for the panel.
+//   - App passwords ("op_<id>_<secret>", config.ParseAppPassword) are looked
+//     up by id in the mailbox and checked with one HMAC (never argon2id), so
+//     the time says nothing about how many a mailbox has. Anything of that
+//     form is only ever checked as an app password. With
+//     Mailbox.AppPasswordsOnly the main password is refused here. The use of
+//     an app password is reported (config.EventAppPasswordUsed) at most once
+//     per config.AppPasswordUseEvery, with the network, not the address.
+//
+// Check is for mail programs (IMAP, submission; later DAV and ManageSieve).
+// The self-service area must not use it: there only the main password is
+// valid, also with AppPasswordsOnly; it uses CheckMain on a Checker of its
+// own.
 package signin
 
 import (
@@ -25,6 +37,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -78,6 +91,8 @@ type Options struct {
 type Checker struct {
 	opts Options
 	key  [32]byte
+	// dummyKey checks app passwords when no key is configured.
+	dummyKey string
 	// hashes counts argon2id verifications (tests).
 	hashes atomic.Int64
 
@@ -93,7 +108,19 @@ type Checker struct {
 	cache    map[[32]byte]time.Time
 	byAddr   map[string]*addrFailures
 	reported map[string]time.Time
-	swept    time.Time
+	// appUsed is when the use of an app password (storage id + "/" + id)
+	// was last reported.
+	appUsed map[string]time.Time
+	swept   time.Time
+}
+
+// Grant is a successful sign-in: the mailbox as it was then (a copy) and
+// the credential used. Valid checks it again later.
+type Grant struct {
+	config.Mailbox
+	// AppPassword is the id of the app password used; "" for the main
+	// password.
+	AppPassword string
 }
 
 type pairKey struct {
@@ -128,10 +155,12 @@ func New(opts Options) *Checker {
 		cache:    map[[32]byte]time.Time{},
 		byAddr:   map[string]*addrFailures{},
 		reported: map[string]time.Time{},
+		appUsed:  map[string]time.Time{},
 	}
 	if _, err := rand.Read(c.key[:]); err != nil {
 		panic(err)
 	}
+	c.dummyKey = config.NewAppPasswordKey()
 	return c
 }
 
@@ -150,34 +179,29 @@ func ipKey(ip netip.Addr) netip.Prefix {
 	return p
 }
 
-// Check signs in address with password from ip against dir. On success it
-// returns the mailbox (a copy). address is normalized here (lowercase).
-func (c *Checker) Check(dir *directory.Directory, ip netip.Addr, address, password string) (config.Mailbox, error) {
+// Check signs in address with password (the main password or an app
+// password) from ip against dir. On success it returns the mailbox (a copy)
+// and the credential. address is normalized here (lowercase).
+func (c *Checker) Check(dir *directory.Directory, ip netip.Addr, address, password string) (Grant, error) {
 	address = directory.Normalize(address)
-	ipk := ipKey(ip)
-	pk := pairKey{ipk, address}
 	now := c.opts.Now()
-
-	// Charge the attempt as a failure before any hashing, so parallel
-	// attempts cannot get past the limits; a success refunds exactly this
-	// charge, never one of another attempt.
-	c.mu.Lock()
-	c.sweepLocked(now)
-	throttled := over(c.ips, ipk, now, IPLimit) || over(c.pairs, pk, now, PairLimit) ||
-		full(c.ips, ipk, c.max) || full(c.pairs, pk, c.max)
-	var ipw *window
-	if !throttled {
-		ipw = charge(c.ips, ipk, now)
-		charge(c.pairs, pk, now)
+	pk, ipw, err := c.begin(ip, address, now)
+	if err != nil {
+		return Grant{}, err
 	}
-	c.mu.Unlock()
-	if throttled {
-		return config.Mailbox{}, ErrThrottled
-	}
+	ipk := pk.ip
 
 	m, ok := dir.Mailbox(address)
-	if ok && password != "" && len(password) <= MaxPasswordBytes {
-		ck := c.cacheKey(address, password, m.PasswordHash)
+	if ok && m.Shared() {
+		// Nobody signs in to a shared mailbox: it answers like an unknown
+		// address.
+		m, ok = nil, false
+	}
+	if id, secret, isApp := config.ParseAppPassword(password); isApp {
+		return c.checkApp(dir, ip, now, pk, ipw, m, ok, id, secret)
+	}
+	if ok && !m.AppPasswordsOnly && password != "" && len(password) <= MaxPasswordBytes {
+		ck := c.cacheKey(address, "", password, m.PasswordHash)
 		c.mu.Lock()
 		exp, cached := c.cache[ck]
 		c.mu.Unlock()
@@ -187,15 +211,9 @@ func (c *Checker) Check(dir *directory.Directory, ip netip.Addr, address, passwo
 			if !cached && len(c.cache) < c.max {
 				c.cache[ck] = now.Add(CacheTTL)
 			}
-			delete(c.pairs, pk)
-			// Only in the window this attempt was charged to: when that has
-			// expired meanwhile (the hash waited for a slot), the new one
-			// holds only failures of other attempts.
-			if c.ips[ipk] == ipw && ipw.n > 0 {
-				ipw.n--
-			}
+			c.refundLocked(pk, ipw)
 			c.mu.Unlock()
-			return *m, nil
+			return Grant{Mailbox: *m}, nil
 		}
 	} else if len(password) <= MaxPasswordBytes {
 		// Same work as for a mailbox, so the time does not tell.
@@ -204,15 +222,154 @@ func (c *Checker) Check(dir *directory.Directory, ip netip.Addr, address, passwo
 	if ok {
 		c.addressFailed(now, ipk, m)
 	}
-	return config.Mailbox{}, ErrFailed
+	return Grant{}, ErrFailed
 }
 
-// Valid tells whether a mailbox signed in earlier still exists in dir with
-// the same storage and password hash. Sessions call it after a
-// configuration change and end themselves when it is false.
-func Valid(dir *directory.Directory, m config.Mailbox) bool {
-	cur, ok := dir.Mailbox(m.Address)
-	return ok && cur.StorageID == m.StorageID && cur.PasswordHash == m.PasswordHash
+// begin charges an attempt as a failure before any hashing, so parallel
+// attempts cannot get past the limits; a success refunds exactly this
+// charge (refundLocked), never one of another attempt.
+func (c *Checker) begin(ip netip.Addr, address string, now time.Time) (pairKey, *window, error) {
+	ipk := ipKey(ip)
+	pk := pairKey{ipk, address}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sweepLocked(now)
+	if over(c.ips, ipk, now, IPLimit) || over(c.pairs, pk, now, PairLimit) ||
+		full(c.ips, ipk, c.max) || full(c.pairs, pk, c.max) {
+		return pk, nil, ErrThrottled
+	}
+	ipw := charge(c.ips, ipk, now)
+	charge(c.pairs, pk, now)
+	return pk, ipw, nil
+}
+
+// CheckMain signs in address with its main password, for the mailbox's
+// own area (the self-service API of the mail service):
+//
+//   - only the main password counts: anything of the form of an app
+//     password fails, also a valid one;
+//   - Mailbox.AppPasswordsOnly does not apply (it is about mail programs);
+//   - nothing is cached: sign-ins here are rare and start a session.
+//
+// Throttling, timing and failure events are those of Check. Use a Checker
+// of its own for this (New with its own Slots): its tables and hashing
+// slots are then separate from those of mail programs, so a flood here
+// cannot slow IMAP or sending, nor the other way round.
+func (c *Checker) CheckMain(dir *directory.Directory, ip netip.Addr, address, password string) (Grant, error) {
+	address = directory.Normalize(address)
+	now := c.opts.Now()
+	pk, ipw, err := c.begin(ip, address, now)
+	if err != nil {
+		return Grant{}, err
+	}
+	m, ok := dir.Mailbox(address)
+	if ok && m.Shared() {
+		m, ok = nil, false
+	}
+	if ok && password != "" && len(password) <= MaxPasswordBytes && !config.LooksLikeAppPassword(password) {
+		if c.verify(m.PasswordHash, password) {
+			c.mu.Lock()
+			c.refundLocked(pk, ipw)
+			c.mu.Unlock()
+			return Grant{Mailbox: *m}, nil
+		}
+	} else if len(password) <= MaxPasswordBytes {
+		// Same work as for a mailbox, so the time does not tell.
+		c.verify(c.dummyHash(), password)
+	}
+	if ok {
+		c.addressFailed(now, pk.ip, m)
+	}
+	return Grant{}, ErrFailed
+}
+
+// refundLocked takes back the failure charged for a successful attempt.
+func (c *Checker) refundLocked(pk pairKey, ipw *window) {
+	delete(c.pairs, pk)
+	// Only in the window this attempt was charged to: when that has
+	// expired meanwhile (the hash waited for a slot), the new one holds
+	// only failures of other attempts.
+	if c.ips[pk.ip] == ipw && ipw.n > 0 {
+		ipw.n--
+	}
+}
+
+// checkApp checks an app password: one HMAC whether or not the mailbox
+// and the id exist.
+func (c *Checker) checkApp(dir *directory.Directory, ip netip.Addr, now time.Time, pk pairKey, ipw *window,
+	m *config.Mailbox, ok bool, id, secret string) (Grant, error) {
+	key := dir.Config().AppPasswordKey
+	var ap config.AppPassword
+	found := false
+	if ok {
+		for _, a := range m.AppPasswords {
+			if a.ID == id {
+				ap, found = a, true
+				break
+			}
+		}
+	}
+	if !found || key == "" {
+		// Same work as for a real one, so the time does not tell.
+		ap = config.AppPassword{ID: id, MAC: strings.Repeat("0", 64)}
+		if key == "" {
+			key = c.dummyKey
+		}
+	}
+	sid := ""
+	if ok {
+		sid = m.StorageID
+	}
+	if config.CheckAppPassword(key, sid, ap, secret) && found {
+		c.mu.Lock()
+		c.refundLocked(pk, ipw)
+		report := false
+		uk := m.StorageID + "/" + id
+		if last, seen := c.appUsed[uk]; (!seen || now.Sub(last) >= config.AppPasswordUseEvery) && (seen || len(c.appUsed) < c.max) {
+			c.appUsed[uk], report = now, true
+		}
+		c.mu.Unlock()
+		if report && c.opts.Event != nil {
+			network := config.Network(ip)
+			c.opts.Event(config.Event{
+				Kind: config.EventAppPasswordUsed, StorageID: m.StorageID, Address: m.Address,
+				Detail:  fmt.Sprintf("%s from %s", ap.Name, network),
+				Account: &config.AccountChange{AppPasswordID: id, Network: network},
+			})
+		}
+		return Grant{Mailbox: *m, AppPassword: id}, nil
+	}
+	if ok {
+		c.addressFailed(now, pk.ip, m)
+	}
+	return Grant{}, ErrFailed
+}
+
+// Valid tells whether a sign-in is still good in dir: the mailbox exists
+// with the same storage, and the credential still works — the same main
+// password hash and AppPasswordsOnly off, or the app password still there
+// unchanged. Sessions call it after a configuration change (and an
+// account change) and end themselves when it is false.
+func Valid(dir *directory.Directory, g Grant) bool {
+	cur, ok := dir.Mailbox(g.Address)
+	if !ok || cur.StorageID != g.StorageID || cur.Shared() {
+		return false
+	}
+	if g.AppPassword == "" {
+		return cur.PasswordHash == g.PasswordHash && !cur.AppPasswordsOnly
+	}
+	mac := ""
+	for _, ap := range g.AppPasswords {
+		if ap.ID == g.AppPassword {
+			mac = ap.MAC
+		}
+	}
+	for _, ap := range cur.AppPasswords {
+		if ap.ID == g.AppPassword {
+			return mac != "" && ap.MAC == mac
+		}
+	}
+	return false
 }
 
 func (c *Checker) verify(hash, password string) bool {
@@ -233,9 +390,11 @@ func (c *Checker) dummyHash() string {
 	return c.dummy
 }
 
-func (c *Checker) cacheKey(address, password, hash string) [32]byte {
+// cacheKey keys a cached sign-in by address, credential id ("" for the
+// main password), password and the stored hash.
+func (c *Checker) cacheKey(address, credential, password, hash string) [32]byte {
 	mac := hmac.New(sha256.New, c.key[:])
-	for _, s := range []string{address, password, hash} {
+	for _, s := range []string{address, credential, password, hash} {
 		var n [8]byte
 		binary.BigEndian.PutUint64(n[:], uint64(len(s)))
 		mac.Write(n[:])
@@ -339,6 +498,11 @@ func (c *Checker) sweepLocked(now time.Time) {
 	for k, t := range c.reported {
 		if now.Sub(t) >= EventEvery {
 			delete(c.reported, k)
+		}
+	}
+	for k, t := range c.appUsed {
+		if now.Sub(t) >= config.AppPasswordUseEvery {
+			delete(c.appUsed, k)
 		}
 	}
 }

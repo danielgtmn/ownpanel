@@ -5,7 +5,7 @@ import { Field, FieldDescription, FieldLabel } from '@ui-sdk/react/field'
 import { Input } from '@ui-sdk/react/input'
 import { Meter, MeterIndicator, MeterTrack } from '@ui-sdk/react/meter'
 import { toast } from '@ui-sdk/react/toast'
-import { useState, type FormEvent } from 'react'
+import { useId, useState, type FormEvent } from 'react'
 import { errorMessage, isNotFound, isSavedButNotApplied } from '../../shared/api/index.ts'
 import { formatDateTime } from '../../shared/format/index.ts'
 import { usePageTitle, useResource } from '../../shared/hooks/index.ts'
@@ -28,6 +28,7 @@ import {
   appleProfileHref,
   checkMailDomain,
   createAlias,
+  createAppPassword,
   createMailbox,
   deleteAlias,
   deleteMailbox,
@@ -37,17 +38,50 @@ import {
   getMailStatus,
   listAliases,
   listMailboxes,
+  setMailboxKind,
   setMailboxLimits,
   setMailboxPassword,
   unblockMailbox,
   updateAlias,
+  updateMailbox,
 } from './api.ts'
 import { ImportDialog } from './ImportDialog.tsx'
-import { CreateMailboxDialog, MailboxLimitsDialog, MailboxPasswordDialog } from './MailboxDialogs.tsx'
+import { MailboxAppPasswords } from './MailboxAppPasswords.tsx'
+import {
+  CreateAppPasswordDialog,
+  CreateMailboxDialog,
+  DisplayNameDialog,
+  MailboxLimitsDialog,
+  MailboxPasswordDialog,
+  MakePersonalDialog,
+  NewAppPasswordDialog,
+} from './MailboxDialogs.tsx'
+import { PersonalAccessPanel, SharedAccessPanel } from './MailboxSharing.tsx'
 import { MailboxImports } from './MailboxImports.tsx'
+import { MailboxRulesPanel } from './MailboxRulesPanel.tsx'
+import { OrganisationSection } from './OrganisationSection.tsx'
 import { RecordsSection } from './RecordsSection.tsx'
-import { aliasTitle, clientRows, domainState, sendLimitsText, sortAliases, usageShare, usageText } from './rules.ts'
-import type { LimitsChange, MailAlias, MailDomain, MailImport, Mailbox, MailStatus } from './types.ts'
+import {
+  accessFacts,
+  aliasTitle,
+  clientRows,
+  domainState,
+  sendLimitsText,
+  senderPolicyText,
+  sortAliases,
+  usageShare,
+  usageText,
+} from './rules.ts'
+import type {
+  AliasOptions,
+  LimitsChange,
+  MailAlias,
+  MailDomain,
+  MailImport,
+  Mailbox,
+  MailStatus,
+  NewMailbox,
+} from './types.ts'
 
 // A change that is saved but not yet passed on to the mail server is not a failure for the person.
 async function saved(run: () => Promise<unknown>, success: string) {
@@ -130,38 +164,71 @@ function MailboxRow({
   mailbox,
   isAdmin,
   importsVersion,
+  appsVersion,
   onPassword,
+  onDisplayName,
   onLimits,
+  onCreateAppPassword,
+  onMailboxChanged,
   onImport,
   onChooseFolders,
   onImportsSettled,
   onDownload,
   onUnblock,
   onDelete,
+  onMakeShared,
+  onMakePersonal,
 }: {
   mailbox: Mailbox
   isAdmin: boolean
   importsVersion: number
+  appsVersion: number
   onPassword: (mailbox: Mailbox) => void
+  onDisplayName: (mailbox: Mailbox) => void
   onLimits: (mailbox: Mailbox) => void
+  onCreateAppPassword: (mailbox: Mailbox) => void
+  onMailboxChanged: () => Promise<void>
   onImport: (mailbox: Mailbox) => void
   onChooseFolders: (mailbox: Mailbox, job: MailImport) => void
   onImportsSettled: () => void
   onDownload: (mailbox: Mailbox) => Promise<void>
   onUnblock: (mailbox: Mailbox) => Promise<void>
   onDelete: (mailbox: Mailbox) => Promise<void>
+  onMakeShared: (mailbox: Mailbox) => Promise<void>
+  onMakePersonal: (mailbox: Mailbox) => void
 }) {
   const share = usageShare(mailbox)
   const blocked = mailbox.usage?.blocked ?? false
+  const shared = mailbox.kind === 'shared'
+  const [appsOpen, setAppsOpen] = useState(false)
+  const [accessOpen, setAccessOpen] = useState(false)
+  const appsId = useId()
+  const accessId = useId()
+  const hasAccess = shared || mailbox.access_to.length > 0 || mailbox.shared_with.length > 0
+  const [rulesOpen, setRulesOpen] = useState(false)
+  const rulesId = useId()
+  const away = mailbox.usage?.out_of_office ?? false
   return (
     <li className="record-row">
       <div className="record-main mail-mailbox-main">
         <h3 className="record-title">
           {mailbox.address}
+          {shared ? (
+            <>
+              {' '}
+              <StatusBadge tone="neutral">Shared</StatusBadge>
+            </>
+          ) : null}
           {blocked ? (
             <>
               {' '}
               <StatusBadge tone="warning">Can't send</StatusBadge>
+            </>
+          ) : null}
+          {away ? (
+            <>
+              {' '}
+              <StatusBadge tone="neutral">Out of office</StatusBadge>
             </>
           ) : null}
         </h3>
@@ -182,16 +249,42 @@ function MailboxRow({
           <span className="muted">{usageText(mailbox)}</span>
         </div>
         <ul className="record-facts">
+          {mailbox.display_name ? <li>Display name: {mailbox.display_name}</li> : null}
           <li>{sendLimitsText(mailbox)}</li>
+          {!shared && mailbox.app_passwords_only ? <li>Mail programs sign in with app passwords only</li> : null}
+          {accessFacts(mailbox).map((fact) => (
+            <li key={fact}>{fact}</li>
+          ))}
           {isAdmin && mailbox.owner ? <li>Owner: {mailbox.owner}</li> : null}
         </ul>
       </div>
       <div className="record-actions">
-        <Button onClick={() => onPassword(mailbox)}>
-          Set password<span className="visually-hidden"> of {mailbox.address}</span>
+        {shared ? null : (
+          <Button onClick={() => onPassword(mailbox)}>
+            Set password<span className="visually-hidden"> of {mailbox.address}</span>
+          </Button>
+        )}
+        <Button onClick={() => onDisplayName(mailbox)}>
+          Display name<span className="visually-hidden"> of {mailbox.address}</span>
         </Button>
         <Button onClick={() => onLimits(mailbox)}>
           Limits<span className="visually-hidden"> of {mailbox.address}</span>
+        </Button>
+        {hasAccess ? (
+          <Button aria-expanded={accessOpen} aria-controls={accessId} onClick={() => setAccessOpen((open) => !open)}>
+            {shared ? (accessOpen ? 'Hide people with access' : 'People with access') : accessOpen ? 'Hide sharing' : 'Sharing'}
+            <span className="visually-hidden"> of {mailbox.address}</span>
+          </Button>
+        ) : null}
+        {shared ? null : (
+          <Button aria-expanded={appsOpen} aria-controls={appsId} onClick={() => setAppsOpen((open) => !open)}>
+            {appsOpen ? 'Hide app passwords' : 'App passwords'}
+            <span className="visually-hidden"> of {mailbox.address}</span>
+          </Button>
+        )}
+        <Button aria-expanded={rulesOpen} aria-controls={rulesId} onClick={() => setRulesOpen((open) => !open)}>
+          {rulesOpen ? 'Hide out-of-office and forwarding' : 'Out-of-office and forwarding'}
+          <span className="visually-hidden"> of {mailbox.address}</span>
         </Button>
         <Button onClick={() => onImport(mailbox)}>
           Import mail<span className="visually-hidden"> into {mailbox.address}</span>
@@ -199,9 +292,20 @@ function MailboxRow({
         <Button onClick={() => onDownload(mailbox)}>
           Download all mail<span className="visually-hidden"> of {mailbox.address}</span>
         </Button>
-        <Button className="mail-download" render={<a href={appleProfileHref(mailbox.id)} download />}>
-          Download setup for Apple devices<span className="visually-hidden"> for {mailbox.address}</span>
-        </Button>
+        {shared ? null : (
+          <Button className="mail-download" render={<a href={appleProfileHref(mailbox.id)} download />}>
+            Download setup for Apple devices<span className="visually-hidden"> for {mailbox.address}</span>
+          </Button>
+        )}
+        {shared ? (
+          <Button onClick={() => onMakePersonal(mailbox)}>
+            Make personal<span className="visually-hidden"> {mailbox.address}</span>
+          </Button>
+        ) : (
+          <Button pendingAnnouncement="Changing" onClick={() => onMakeShared(mailbox)}>
+            Make shared<span className="visually-hidden"> {mailbox.address}</span>
+          </Button>
+        )}
         {isAdmin && blocked ? (
           <Button pendingAnnouncement="Allowing" onClick={() => onUnblock(mailbox)}>
             Allow sending<span className="visually-hidden"> from {mailbox.address}</span>
@@ -211,6 +315,33 @@ function MailboxRow({
           Delete<span className="visually-hidden"> {mailbox.address}</span>
         </Button>
       </div>
+      {accessOpen && hasAccess ? (
+        <div id={accessId} className="mail-apps-panel">
+          <h4>{shared ? 'People with access' : 'Sharing'}</h4>
+          {shared ? (
+            <SharedAccessPanel mailbox={mailbox} onMailboxChanged={onMailboxChanged} />
+          ) : (
+            <PersonalAccessPanel mailbox={mailbox} onMailboxChanged={onMailboxChanged} />
+          )}
+        </div>
+      ) : null}
+      {appsOpen && !shared ? (
+        <div id={appsId} className="mail-apps-panel">
+          <h4>App passwords</h4>
+          <MailboxAppPasswords
+            mailbox={mailbox}
+            refreshKey={appsVersion}
+            onCreate={onCreateAppPassword}
+            onMailboxChanged={onMailboxChanged}
+          />
+        </div>
+      ) : null}
+      {rulesOpen ? (
+        <div id={rulesId} className="mail-apps-panel">
+          <h4>Out-of-office and forwarding</h4>
+          <MailboxRulesPanel mailbox={mailbox} onChanged={() => void onMailboxChanged()} />
+        </div>
+      ) : null}
       <MailboxImports
         target={mailbox}
         refreshKey={importsVersion}
@@ -237,6 +368,12 @@ function MailboxesSection({ domain, onChange }: { domain: string; onChange: () =
   const [creating, setCreating] = useState(false)
   const [passwordFor, setPasswordFor] = useState<Mailbox | null>(null)
   const [limitsFor, setLimitsFor] = useState<Mailbox | null>(null)
+  const [nameFor, setNameFor] = useState<Mailbox | null>(null)
+  const [personalFor, setPersonalFor] = useState<Mailbox | null>(null)
+  const [appFor, setAppFor] = useState<Mailbox | null>(null)
+  // The new app password, shown once; dropped when its dialog closes.
+  const [newApp, setNewApp] = useState<{ address: string; name: string; password: string } | null>(null)
+  const [appsVersion, setAppsVersion] = useState(0)
   const [importInto, setImportInto] = useState<{ mailbox: Mailbox; ready: MailImport | null } | null>(null)
   const [importOpen, setImportOpen] = useState(false)
   const [importsVersion, setImportsVersion] = useState(0)
@@ -262,10 +399,59 @@ function MailboxesSection({ domain, onChange }: { domain: string; onChange: () =
     onChange()
   }
 
-  async function create(localPart: string, password: string) {
-    await saved(() => createMailbox(domain, localPart, password), `${localPart}@${domain} was created.`)
+  async function create(mailbox: NewMailbox) {
+    const address = `${mailbox.local_part}@${domain}`
+    await saved(
+      () => createMailbox(domain, mailbox),
+      mailbox.kind === 'shared'
+        ? `${address} was created. Open “People with access” to choose who may use it.`
+        : `${address} was created.`,
+    )
     setCreating(false)
     await refresh()
+  }
+
+  async function makeShared(mailbox: Mailbox) {
+    const yes = await confirm({
+      title: `Make ${mailbox.address} a shared mailbox?`,
+      description:
+        'Nobody can sign in to it directly any more: its password and app passwords are removed, and every mail program and phone signed in to it is signed out at once. The mail stays. Afterwards, choose the people of the organisation who may use it with their own sign-in.',
+      confirmLabel: 'Make shared',
+      cancelLabel: 'Cancel',
+    })
+    if (!yes) return
+    await tryTo(() => saved(() => setMailboxKind(mailbox.id, 'shared'), `${mailbox.address} is now a shared mailbox.`))
+    await refresh()
+  }
+
+  async function makePersonal(password: string) {
+    if (!personalFor) return
+    const mailbox = personalFor
+    await saved(() => setMailboxKind(mailbox.id, 'personal', password), `${mailbox.address} is now a personal mailbox.`)
+    setPersonalFor(null)
+    await refresh()
+  }
+
+  async function setDisplayName(name: string) {
+    if (!nameFor) return
+    if (name !== nameFor.display_name) {
+      await saved(
+        () => updateMailbox(nameFor.id, { display_name: name }),
+        name ? `${nameFor.address} now sends as “${name}”.` : `${nameFor.address} no longer shows a display name.`,
+      )
+    }
+    setNameFor(null)
+    await refresh()
+  }
+
+  async function createApp(name: string) {
+    if (!appFor) return
+    const mailbox = appFor
+    // Errors stay in the form. The server always answers a saved app password with its password.
+    const created = await createAppPassword(mailbox.id, name)
+    setAppFor(null)
+    setNewApp({ address: mailbox.address, name: created.name, password: created.password })
+    setAppsVersion((n) => n + 1)
   }
 
   async function setPassword(password: string) {
@@ -324,21 +510,31 @@ function MailboxesSection({ domain, onChange }: { domain: string; onChange: () =
               mailbox={mailbox}
               isAdmin={isAdmin}
               importsVersion={importsVersion}
+              appsVersion={appsVersion}
               onPassword={setPasswordFor}
+              onDisplayName={setNameFor}
               onLimits={setLimitsFor}
+              onCreateAppPassword={setAppFor}
+              onMailboxChanged={refresh}
               onImport={(box) => openImport(box, null)}
               onChooseFolders={openImport}
               onImportsSettled={() => void mailboxes.reload()}
               onDownload={download}
               onUnblock={unblock}
               onDelete={remove}
+              onMakeShared={makeShared}
+              onMakePersonal={setPersonalFor}
             />
           ))}
         </ul>
       ) : null}
       <CreateMailboxDialog open={creating} onOpenChange={setCreating} domain={domain} onSubmit={create} />
+      <MakePersonalDialog mailbox={personalFor} onClose={() => setPersonalFor(null)} onSubmit={makePersonal} />
       <MailboxPasswordDialog mailbox={passwordFor} onClose={() => setPasswordFor(null)} onSubmit={setPassword} />
       <MailboxLimitsDialog mailbox={limitsFor} isAdmin={isAdmin} onClose={() => setLimitsFor(null)} onSubmit={setLimits} />
+      <DisplayNameDialog mailbox={nameFor} onClose={() => setNameFor(null)} onSubmit={setDisplayName} />
+      <CreateAppPasswordDialog mailbox={appFor} onClose={() => setAppFor(null)} onSubmit={createApp} />
+      <NewAppPasswordDialog created={newApp} onClose={() => setNewApp(null)} />
       <ImportDialog
         key={importInto ? `${importInto.mailbox.id}:${importInto.ready?.id ?? 'new'}` : 'none'}
         target={importInto?.mailbox ?? null}
@@ -365,11 +561,14 @@ function AliasesSection({ domain, onChange }: { domain: string; onChange: () => 
     onChange()
   }
 
-  async function save(localPart: string, targets: string[]) {
+  async function save(localPart: string, targets: string[], options: AliasOptions) {
     const existing = dialog.existing
     const label = localPart === '*' ? `Mail to all other addresses on ${domain}` : `Mail to ${localPart}@${domain}`
     await saved(
-      () => (existing ? updateAlias(existing.id, localPart, targets) : createAlias(domain, localPart, targets)),
+      () =>
+        existing
+          ? updateAlias(existing.id, localPart, targets, options)
+          : createAlias(domain, localPart, targets, options),
       `${label} now goes to ${targets.join(', ')}.`,
     )
     setDialog((current) => ({ ...current, open: false }))
@@ -416,6 +615,12 @@ function AliasesSection({ domain, onChange }: { domain: string; onChange: () => 
               <div className="record-main">
                 <h3 className="record-title">{aliasTitle(alias)}</h3>
                 <p className="muted mail-targets">Goes to {alias.targets.join(', ')}</p>
+                {senderPolicyText(alias.sender_policy) || alias.hide_from_directory ? (
+                  <ul className="record-facts">
+                    {senderPolicyText(alias.sender_policy) ? <li>{senderPolicyText(alias.sender_policy)}</li> : null}
+                    {alias.hide_from_directory ? <li>Hidden from the address book</li> : null}
+                  </ul>
+                ) : null}
               </div>
               <div className="record-actions">
                 <Button onClick={() => setDialog({ open: true, existing: alias })}>
@@ -633,6 +838,7 @@ export function MailDomainPage({ domain }: { domain: string }) {
       />
       <MailboxesSection domain={mail.domain} onChange={reload} />
       <AliasesSection domain={mail.domain} onChange={reload} />
+      <OrganisationSection mail={mail} onChange={reload} />
       {serverNamed ? <RecordsSection domain={mail.domain} onApplied={reload} /> : null}
       {status.status === 'ready' ? <ClientSection data={status.data} /> : null}
       <DangerSection mail={mail} />

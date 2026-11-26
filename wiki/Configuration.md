@@ -27,6 +27,7 @@ On a server installed with `install.sh`, flags live in `/etc/ownpanel/ownpaneld.
 | `-acme-email` | empty | Contact address given to the certificate authority. Optional; only used with `-tls acme`. Overrides the panel settings (see below). |
 | `-panel-domain` | empty | Serve the panel itself through Caddy on this domain, with a certificate like any site. The domain cannot also be used by a site. Also makes `/mcp` reachable on that domain and builds upload links on it. Overrides the panel settings (see below). |
 | `-mail-admin` | empty | Admin socket of the mail service (`ownpaneld mail`) as `unix:///absolute/path.sock`; the installer passes `unix:///run/ownpanel-mail/admin.sock`. Empty: no mail service; mail domains and mailboxes are only stored. See [[E-Mail architecture|E-Mail-Architecture]]. |
+| `-mail-web` | empty | Web socket of the mail service (`ownpaneld mail -web`) as `unix:///absolute/path.sock`; the installer passes `unix:///run/ownpanel-mail-web/web.sock`. With it, and a mail server name different from the panel domain, Caddy serves the mail server name over HTTPS for mailbox users (their sign-in page). Empty: no such site. See [[Groupware architecture|Groupware-Architecture]]. |
 | `-mail-host` | empty | Name of the mail server (MX target, what mail programs connect to), e.g. `mail.example.com`. It cannot be a site, redirect or mail domain; it may be the panel domain. Overrides the panel settings (see below). |
 | `-reconcile-interval` | `30s` | How often the web server is re-synced in the background (a Go duration such as `30s` or `1m`). |
 | `-releases-api` | `https://api.github.com` | Where the panel looks for new releases ([[Installation|Installation#updating]]). Only change it for testing. |
@@ -77,10 +78,13 @@ The mail service ([[E-Mail|E-Mail]]). `install.sh` runs it as `ownpanel-mail.ser
 |---|---|---|
 | `-data` | `/var/lib/ownpanel-mail` | Its data: last configuration, mail index, messages, queue. |
 | `-admin` | `/run/ownpanel-mail/admin.sock` | Unix socket the panel configures it through (`-mail-admin unix://…` of `serve`). |
+| `-web` | empty | Unix socket for the web requests of the mail server name that Caddy passes on (account pages; later calendars and contacts), as `unix:///absolute/path.sock`; the installer passes `unix:///run/ownpanel-mail-web/web.sock` (`-mail-web` of `serve`). Empty: closed. It trusts `X-Forwarded-For` from Caddy, so only Caddy may be able to connect (see [[Installation|Installation]]). |
+| `-web-group` | empty | Group the web socket and its directory are handed to (the installer's unit: `ownpanel-mail-web`, of which only Caddy's user is a member). The service must be a member itself. Empty: they keep the service's group. |
 | `-smtp` | `:25` | Incoming mail from other servers. |
 | `-submission` | `:587` | Mail programs sending mail (STARTTLS before sign-in); `""` turns it off. |
 | `-submissions` | `:465` | Mail programs sending mail over TLS; `""` turns it off. |
 | `-imaps` | `:993` | Mail programs reading mail (IMAP over TLS); `""` turns it off. |
+| `-managesieve` | `:4190` | Mail programs editing a mailbox's filters (ManageSieve, STARTTLS before sign-in); `""` turns it off. |
 | `-ipv6-outbound` | off | Also deliver outgoing mail over IPv6. Only turn it on when the server's IPv6 address has the mail server name as reverse name. |
 | `-allow-private-mx` | off | **For test setups only.** Also deliver outgoing mail to mail servers whose addresses are loopback, private (e.g. `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`), link-local or otherwise not public. Off, mail to a domain whose mail servers have only such addresses is returned to the sender, so nobody can make the server connect into its own network. |
 
@@ -95,6 +99,8 @@ Everything the daemon owns is inside the `-data` directory:
 ```
 <data>/
   ownpanel.db            SQLite database (WAL mode: also ownpanel.db-wal, ownpanel.db-shm while running)
+  ownpanel.db.pre-ablage-<time>  copy of the database from before its one-time conversion (only after that update)
+  ownpanel.db.pre-auth-ref-<time>  copy from before a one-time fix of the users table (only for a database converted by a nightly build before the fix)
   secret.key             32-byte key that encrypts stored DNS tokens (mode 0600)
   setup-code             one-time first-run code; exists only while no user exists
   sites/
@@ -105,7 +111,7 @@ Everything the daemon owns is inside the `-data` directory:
   state.json.imported    only if sites were imported from an old state.json
 ```
 
-- **`ownpanel.db`** holds users (password hashes), sessions, access tokens (hashed), sites and their domains, DNS connections (token encrypted), the activity log and settings. It is created with mode 0600. The schema is migrated automatically at start.
+- **`ownpanel.db`** holds users (password hashes), sessions, access tokens (hashed), sites and their domains, DNS connections (token encrypted), the activity log and settings. It is created with mode 0600. The schema is migrated automatically at start. A database from before the panel kept its data with [ablage](https://github.com/danielgtmn/ablage) is converted once at start; the copy from before is kept as `ownpanel.db.pre-ablage-<UTC time>` (mode 0600) and may be deleted once the new version runs well (see [[Installation|Installation#updating]]). A database converted by a nightly build before panel users referenced their sign-in account gets that reference once at start, after a copy `ownpanel.db.pre-auth-ref-<UTC time>` (mode 0600); it may be deleted the same way.
 - **`secret.key`** is created on first start. Without it the stored DNS tokens cannot be used; connections must be added again. It is included in backups.
 - **`setup-code`** is created when no user exists and deleted once the first admin is created (or at start, if a user already exists).
 - **`sites/<site>/releases/<id>`**: an id looks like `20260131T120000.000Z-ab12cd`. The newest five versions of a site are kept; the live one is never removed.

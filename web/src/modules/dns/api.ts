@@ -3,6 +3,7 @@ import { connectionPath } from '../../shared/dns/index.ts'
 import type { RecordBody, RecordSet, RecordTemplate, TemplateResult } from './types.ts'
 
 export {
+  addDomain,
   adoptZone,
   createZone,
   deleteZone,
@@ -12,18 +13,18 @@ export {
   releaseZone,
 } from '../../shared/dns/index.ts'
 
-export const recordsPath = (connectionId: number, zone: string) =>
+export const recordsPath = (connectionId: string, zone: string) =>
   `${connectionPath(connectionId)}/zones/${encodeSegment(zone)}/records`
 
-export const recordPath = (connectionId: number, zone: string, name: string, type: string) =>
+export const recordPath = (connectionId: string, zone: string, name: string, type: string) =>
   `${recordsPath(connectionId, zone)}/${encodeSegment(name)}/${encodeSegment(type)}`
 
-export async function listRecords(connectionId: number, zone: string): Promise<RecordSet[]> {
+export async function listRecords(connectionId: string, zone: string): Promise<RecordSet[]> {
   return (await request<RecordSet[] | null>(recordsPath(connectionId, zone))) ?? []
 }
 
 export function saveRecord(
-  connectionId: number,
+  connectionId: string,
   zone: string,
   name: string,
   type: string,
@@ -32,7 +33,7 @@ export function saveRecord(
   return request<RecordSet>(recordPath(connectionId, zone, name, type), { method: 'PUT', body })
 }
 
-export function deleteRecord(connectionId: number, zone: string, name: string, type: string): Promise<void> {
+export function deleteRecord(connectionId: string, zone: string, name: string, type: string): Promise<void> {
   return request<void>(recordPath(connectionId, zone, name, type), { method: 'DELETE' })
 }
 

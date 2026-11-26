@@ -25,7 +25,7 @@ Other clients need the same two things: the address and the header `Authorizatio
 
 ## Tools
 
-Version ids come from `get_site`; a version id starts with a UTC timestamp. Errors are returned as tool errors with a readable sentence.
+Version ids come from `get_site`; a version id starts with a UTC timestamp. Other ids (`id`, `connection_id`, `mailbox_id`, `grantee_id`) and mail import ids (`import_id`) are strings such as `"42"`: pass them on exactly as a list returned them. Errors are returned as tool errors with a readable sentence.
 
 | Tool | Arguments | What it does |
 |---|---|---|
@@ -54,18 +54,32 @@ Version ids come from `get_site`; a version id starts with a UTC timestamp. Erro
 | `set_mailbox_limits` | `id`, `quota_bytes`, `send_per_hour`, `send_per_day` (each optional) | Changes the limits; owners can only lower them. |
 | `unblock_mailbox` | `id` | Lifts a sending block of the mail service (admins only). |
 | `delete_mailbox` | `id`, `confirm_address` | Deletes a mailbox and its stored mail. `confirm_address` must equal its address. |
-| `list_mail_aliases` | `domain` (optional) | Lists aliases with `id`, `address`, `catch_all`, `targets`. Read-only. |
-| `set_mail_alias` | `id` (optional), `domain` (for new aliases), `local_part`, `targets` | Creates an alias, or replaces the one with `id`. `*` is the catch-all. An address is either a mailbox or an alias. |
+| `list_mail_aliases` | `domain` (optional) | Lists aliases with `id`, `address`, `catch_all`, `targets`, `sender_policy`, `hide_from_directory`. Read-only. |
+| `set_mail_alias` | `id` (optional), `domain` (for new aliases), `local_part`, `targets`, `sender_policy`, `hide_from_directory` (both optional) | Creates an alias, or replaces the one with `id`. `*` is the catch-all. An address is either a mailbox or an alias. `sender_policy` makes it a distribution group: who may write to it, `anyone`, `organisation` or `members` (not for the catch-all); `hide_from_directory` leaves it out of the organisation's address book. Left out, both stay (`anyone` and `false` for a new alias). |
 | `delete_mail_alias` | `id`, `confirm_address` | Deletes an alias. `confirm_address` must equal its address. |
 | `list_mail_imports` | `id` (mailbox) | Lists the imports of mail into a mailbox, newest first: `id`, `source` (user and server, or file name), `state`, `error`, counts of messages copied, skipped as already there and failed, `bytes`, `created`, `finished`. Read-only. |
 | `cancel_mail_import` | `id` (mailbox), `import_id` | Stops an import that has not finished (copied mail stays), or removes a finished one from the list. |
+| `set_mailbox_display_name` | `id`, `display_name` | Sets the name shown as the sender and in address books (at most 64 characters, no `<>"`); empty removes it. |
+| `get_mailbox_out_of_office` | `id` | Whether the mailbox has an out-of-office reply, whether it is being sent now, its dates and who set it (not the person's own text). Read-only. |
+| `set_mailbox_out_of_office` | `id`, `text`, `subject`, `start`, `end`, `zone`, `days`, `replace` (all but `id` and `text` optional) | Sets an out-of-office reply for a mailbox of your domains (for someone who left). The activity log records it and the person sees who set it. Fails while the person's filters were written in a mail program unless `replace` is set. |
+| `clear_mailbox_out_of_office` | `id` | Turns the out-of-office reply off. |
+| `list_mail_organisations` | none | Lists the organisations you manage (admins: all) with `id`, `name`, `owner` and `domains` (only the domains you may see). Read-only. |
+| `set_mail_organisation` | `id` (optional), `name` | Creates an organisation, or renames the one with `id`. |
+| `delete_mail_organisation` | `id`, `confirm_name` | Deletes an organisation; its domains stand alone again. `confirm_name` must equal its name. |
+| `set_mail_domain_organisation` | `domain`, `organisation` | Puts a mail domain into one of your organisations, or lets it stand alone (`organisation` empty). Grouping domains of different owners is for admins only. |
+| `set_mailbox_kind` | `id`, `kind` (optional, only `shared`), `keep_sent_copy` (optional) | Makes a personal mailbox shared: its password and app passwords are removed, everyone signed in to it is signed out, and its access to other mailboxes ends. `keep_sent_copy` (shared mailboxes) keeps mail sent for it in its Sent folder. Making a mailbox personal again needs a password and is done in the web interface. Returns the mailbox. |
+| `set_mailbox_access` | `id` (a shared mailbox), `address`, `rights` | Gives a personal mailbox of the same organisation access to a shared mailbox, or changes its rights: `read`, `write` (includes read), `manage`, `send-as`, `send-on-behalf`. Its folders then appear under `Shared/<address>` in that person's mail program. Returns the shared mailbox. |
+| `remove_mailbox_access` | `id`, `grantee_id` | Takes away a mailbox's access (`mailbox_id` from `shared_with`) to a shared mailbox, or to a personal mailbox its owner shared. Mail programs with one of its folders open are disconnected. |
 | `list_dns_domains` | `available` (optional) | Lists the domains (zones) in the panel through your own DNS connections: chosen ones and those your own sites, redirects or e-mail use (for administrators also the panel domain). Each with `connection_id`, `connection_name`, `domain`, `read_only`, `nameservers`, `adopted`, `used_by`; connections that fail are in `problems`. With `available: true`, the zones not in the panel yet. Read-only. |
 | `manage_dns_domain` | `connection_id`, `domain` | Manages a zone of your own connection in the panel. Nothing changes at the provider. Safe to repeat. |
 | `stop_managing_dns_domain` | `connection_id`, `domain` | Takes a chosen zone out of the panel; it stays at the provider. Refused while something of yours uses it. |
 | `list_dns_record_templates` | none | Lists the record templates (`id`, `title`, `description`, `params`, `own_mail`): ready-made records for Google Workspace, Microsoft 365 or Fastmail mail, or a text that proves you own the domain. `own_mail` marks e-mail on this server, which is set up with `set_up_mail_records` instead. Read-only. |
 | `apply_dns_record_template` | `connection_id`, `domain`, `template`, `params` (optional), `confirm` (optional) | Without `confirm` (the default) only returns what would change: for each record set `action` (`add`, `change`, `ok`, `conflict`), `current` and `new` values and a `note`; nothing is written, also with a `read` token. Show it to the user and call again with `confirm: true` only if they agree. Other TXT values are kept, the template's sender is merged into an existing SPF record, replaced MX records move the domain's mail. If any change is a `conflict`, nothing is written. Safe to repeat. |
+| `list_domains` | | Lists the domains you added whose DNS is managed elsewhere, each with `domain`, `created_at` and `used_by`. Read-only. |
+| `add_domain` | `domain` | Adds a domain whose DNS is managed elsewhere (a registrable domain like `example.com`), so it shows up in the panel on its own. Nothing changes at any provider. Safe to repeat. |
+| `remove_domain` | `domain` | Removes such a domain from your list; nothing changes at any provider. `still_used_by` says what of yours still keeps it in the panel. |
 
-Tools that change something need a `write` token. Read-only tools are `list_sites`, `get_site`, `check_site_domains`, `list_redirects`, `get_mail_status`, `get_mail_records`, `get_mail_health`, `list_mail_domains`, `list_mailboxes`, `list_mail_aliases`, `list_mail_imports`, `list_dns_domains` and `list_dns_record_templates`; `apply_dns_record_template` without `confirm` writes nothing either. Tokens limited to sites cannot use the e-mail tools.
+Tools that change something need a `write` token. Read-only tools are `list_sites`, `get_site`, `check_site_domains`, `list_redirects`, `get_mail_status`, `get_mail_records`, `get_mail_health`, `list_mail_domains`, `list_mailboxes`, `list_mail_aliases`, `list_mail_imports`, `list_mail_organisations`, `list_dns_domains` and `list_domains`. `list_mail_domains` also shows each domain's `organisation`, `list_mailboxes` the `display_name`, `app_passwords_only`, `kind` (`personal` or `shared`), `keep_sent_copy`, `shared_with` (who has access, each with `mailbox_id`, `address`, `display_name`, `rights`, `active`) and `access_to` (the mailboxes it may use, with `kind`); `active` is false when an access is not in effect because the domains are no longer in one organisation. Tokens limited to sites cannot use the e-mail, DNS and domain tools.
 
 ### `publish_files`
 
@@ -95,6 +109,8 @@ curl --fail-with-body -X POST --data-binary @site.zip '<url>'
 
 ## Not available
 
-Connecting DNS accounts and changing single records is not possible through MCP; use the web interface or the [[API|API]]. Choosing which domains are managed in the panel is (`manage_dns_domain`), and so is applying a record template (`apply_dns_record_template`).
+Connecting DNS accounts and changing records is not possible through MCP; use the web interface or the [[API|API]]. Choosing which domains are managed in the panel is (`manage_dns_domain`), and so is adding a domain whose DNS is managed elsewhere (`add_domain`).
 
-Mailboxes cannot be created and their passwords cannot be set through MCP, on purpose: mailbox passwords should never pass through an AI agent. For the same reason imports of mail cannot be started (they take another account's password) and mailboxes cannot be downloaded (it reads all their mail); use the web interface or the [[API|API]]. Use the web interface or the [[API|API]] (`POST /api/mail/domains/{domain}/mailboxes`, `POST /api/mail/mailboxes/{id}/password`).
+Applying a record template is possible (`apply_dns_record_template`): it writes only after a preview the user agreed to.
+
+Mailboxes cannot be created or made personal again, and their passwords cannot be set, through MCP, on purpose: mailbox passwords should never pass through an AI agent. The same holds for app passwords: no tool creates, shows or revokes them, and "mail programs only with app passwords" is changed only in the web interface or the API. For the same reason imports of mail cannot be started (they take another account's password) and mailboxes cannot be downloaded (it reads all their mail); use the web interface or the [[API|API]]. Use the web interface or the [[API|API]] (`POST /api/mail/domains/{domain}/mailboxes`, `POST /api/mail/mailboxes/{id}/password`).

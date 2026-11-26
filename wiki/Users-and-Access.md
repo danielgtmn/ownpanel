@@ -19,7 +19,7 @@ Refused by design:
 
 - **User name:** 3 to 32 characters: lowercase letters, digits, dots, underscores and hyphens. Input is trimmed and lowercased.
 - **Password:** 10 to 200 characters. No other rules. Stored as an argon2id hash.
-- **E-mail address:** optional. Each address can belong to one person only (compared without regard to case). People can sign in with it instead of their name, and a link to choose a new password goes only to it. Admins set it when adding or editing a person; everyone can set or remove their own under **E-mail address** in the account menu.
+- **E-mail address:** optional. Each address can belong to one person only (compared without regard to case). People can sign in with it instead of their name, and a link to choose a new password goes only to it. Admins set it when adding or editing a person; everyone can set or remove their own under **E-mail address** in the account menu, which asks for their current password.
 
 ## Forgot password
 
@@ -49,7 +49,7 @@ Requests made with the cookie that change something must send the header `X-Ownp
 
 ## Login throttling
 
-After 5 failed attempts for the same account within 15 minutes, from whatever address, further attempts are refused (`429`, "try again in N minutes") until the window passes. A successful sign-in clears the count. The same limit applies to the "current password" check when changing a password, and to the setup code (per address). In addition, one address may try at most 20 sign-ins within 15 minutes across all names. The counts are stored in the database, so restarting ownpaneld does not reset them.
+After 5 failed attempts for the same account within 15 minutes, from whatever address, further attempts are refused (`429`, "try again in N minutes") until the window passes. A successful sign-in clears the count. The same limit applies to the "current password" check when changing your password or e-mail address, and to the setup code (per address). In addition, one address may fail at most 20 sign-ins within 15 minutes across all names; successful sign-ins do not count, so people sharing an address (an office, a VPN) are not turned away. The counts are stored in the database, so restarting ownpaneld does not reset them.
 
 Because the limit is per account, someone who knows a name or address can keep that person from signing in for 15 minutes at a time; see [[Security|Security]].
 
@@ -112,7 +112,7 @@ Admins can read the newest entries (web interface: **Activity**; API: `GET /api/
 | `account.login` | someone signed in |
 | `account.password` | someone changed their own password |
 | `account.email` | someone changed or removed their own e-mail address |
-| `account.password_reset` | someone chose a new password with a link from an e-mail |
+| `account.password_reset` | a person chose a new password with a link from an e-mail (entries from before ownpanel named the person show "Someone") |
 | `account.password_reset_failed` | a link to choose a new password could not be sent |
 | `account.logout_everywhere` | someone signed out everywhere |
 | `user.create`, `user.update`, `user.delete` | admin changes to people |
@@ -122,6 +122,7 @@ Admins can read the newest entries (web interface: **Activity**; API: `GET /api/
 | `site.upload-link` | upload link created |
 | `dns.connect`, `dns.disconnect` | DNS connection added or removed |
 | `dns.zone.adopt`, `dns.zone.release` | a domain is managed in the panel, or no longer |
+| `domain.add`, `domain.remove` | a domain whose DNS is managed elsewhere was added to the panel, or removed |
 | `dns.record.set`, `dns.record.delete`, `dns.point` | DNS changes |
 
 Passwords, tokens, links to choose a new password and DNS API tokens are never logged, and e-mail addresses are not written to the activity log; TXT values longer than 60 characters are replaced by their length. Failed sign-ins are not logged.

@@ -13,14 +13,19 @@ Group=ownpanel-mail
 # 0750, the service creates admin.sock in it with mode 0660. The user ownpanel
 # is a member of the group ownpanel-mail (install.sh), so ownpaneld can push
 # the configuration; other local users cannot reach the socket.
-RuntimeDirectory=ownpanel-mail
+# Web socket: systemd creates /run/ownpanel-mail-web the same way; the service
+# (a member of the group ownpanel-mail-web) hands it and web.sock to that group
+# (-web-group). Only Caddy's user is a member: Caddy passes the mail host's
+# account pages, calendars and contacts to web.sock and cannot reach admin.sock.
+RuntimeDirectory=ownpanel-mail ownpanel-mail-web
 RuntimeDirectoryMode=0750
+SupplementaryGroups=ownpanel-mail-web
 StateDirectory=ownpanel-mail
 StateDirectoryMode=0700
 UMask=0077
 # The last configuration the panel pushed is in /var/lib/ownpanel-mail, so
 # mail keeps working while the panel is stopped or updated.
-ExecStart=/usr/local/bin/ownpaneld mail -data /var/lib/ownpanel-mail -admin /run/ownpanel-mail/admin.sock
+ExecStart=/usr/local/bin/ownpaneld mail -data /var/lib/ownpanel-mail -admin /run/ownpanel-mail/admin.sock -web unix:///run/ownpanel-mail-web/web.sock -web-group ownpanel-mail-web
 Restart=on-failure
 # Running SMTP transactions get time to finish on stop.
 TimeoutStopSec=45

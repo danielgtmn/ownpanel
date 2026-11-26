@@ -57,10 +57,7 @@ func (s *Server) createDNSConnection(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) checkDNSConnection(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "DNS connection")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	c, err := s.Panel.CheckDNSConnection(r.Context(), actorOf(r), id)
 	if err != nil {
 		writeFailure(w, err)
@@ -70,10 +67,7 @@ func (s *Server) checkDNSConnection(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteDNSConnection(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "DNS connection")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	if err := s.Panel.DeleteDNSConnection(r.Context(), actorOf(r), id); err != nil {
 		writeFailure(w, err)
 		return
@@ -100,10 +94,7 @@ func (s *Server) listAvailableDNSZones(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adoptDNSZone(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "DNS connection")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	z, err := s.Panel.AdoptDNSZone(r.Context(), actorOf(r), id, r.PathValue("zone"))
 	if err != nil {
 		writeFailure(w, err)
@@ -113,10 +104,7 @@ func (s *Server) adoptDNSZone(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) releaseDNSZone(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "DNS connection")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	if err := s.Panel.ReleaseDNSZone(r.Context(), actorOf(r), id, r.PathValue("zone")); err != nil {
 		writeFailure(w, err)
 		return
@@ -125,10 +113,7 @@ func (s *Server) releaseDNSZone(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listDNSRecords(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "DNS connection")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	list, err := s.Panel.DNSRecords(r.Context(), actorOf(r), id, r.PathValue("zone"))
 	if err != nil {
 		writeFailure(w, err)
@@ -138,10 +123,7 @@ func (s *Server) listDNSRecords(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) putDNSRecord(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "DNS connection")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	var body struct {
 		TTL    *int     `json:"ttl"`
 		Values []string `json:"values"`
@@ -158,10 +140,7 @@ func (s *Server) putDNSRecord(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteDNSRecord(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "DNS connection")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	if err := s.Panel.DeleteDNSRecord(r.Context(), actorOf(r), id, r.PathValue("zone"), r.PathValue("name"), r.PathValue("type")); err != nil {
 		writeFailure(w, err)
 		return

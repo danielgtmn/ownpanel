@@ -10,13 +10,14 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"net/netip"
 	"os"
 	"regexp"
 	"strings"
 	"time"
 
-	"github.com/danielgtmn/sesam"
-	"github.com/danielgtmn/sesam/plugins/password"
+	"github.com/danielgtmn/sesam/v2"
+	"github.com/danielgtmn/sesam/v2/plugins/password"
 
 	"github.com/danielgtmn/ownpanel/internal/store"
 )
@@ -49,7 +50,7 @@ var userNameRe = regexp.MustCompile(`^[a-z0-9._-]{3,32}$`)
 
 // User is what callers see of a user. Email is "" when none is set.
 type User struct {
-	ID        int64     `json:"id"`
+	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Email     string    `json:"email"`
 	Role      string    `json:"role"`
@@ -67,6 +68,27 @@ type Credentials struct {
 	Password  string
 	ClientIP  string
 	UserAgent string
+}
+
+// clientKey is the unit the panel's own attempt limits count per client in:
+// the address for IPv4, the /48 for IPv6 (one customer often gets a whole
+// /48, and a /64 is cheap to vary), like the mail service's sign-in
+// throttle. Anything that is not an address is used as it is. (Sign-in
+// itself is limited by sesam, per address as given.)
+func clientKey(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	a = a.Unmap()
+	if !a.Is6() {
+		return a.String()
+	}
+	p, err := a.WithZone("").Prefix(48)
+	if err != nil {
+		return ip
+	}
+	return p.String()
 }
 
 func (c Credentials) meta() sesam.SessionMeta {
@@ -311,9 +333,19 @@ func (s *Service) ChangePassword(ctx context.Context, a Actor, current, next str
 }
 
 // SetOwnEmail sets or (with "") removes the actor's own e-mail address,
-// where password reset links are sent.
-func (s *Service) SetOwnEmail(ctx context.Context, a Actor, email string) (User, error) {
+// where password reset links are sent. It needs the current password, so a
+// session left open somewhere cannot redirect the reset links.
+func (s *Service) SetOwnEmail(ctx context.Context, a Actor, current, email string) (User, error) {
 	if err := needSession(a, "changing the e-mail address"); err != nil {
+		return User{}, err
+	}
+	if _, err := normalizeEmail(email); err != nil {
+		return User{}, err
+	}
+	if current == "" {
+		return User{}, errorf(Invalid, "enter your current password")
+	}
+	if err := s.verifyPassword(ctx, a, current); err != nil {
 		return User{}, err
 	}
 	u, err := s.store.User(ctx, a.UserID)
@@ -328,6 +360,17 @@ func (s *Service) SetOwnEmail(ctx context.Context, a Actor, email string) (User,
 		s.record(ctx, a, "account.email", u.Name, changed)
 	}
 	return userView(u, au), nil
+}
+
+// verifyPassword checks the actor's current password. Wrong guesses count
+// against the same per-person limit as changing the password.
+func (s *Service) verifyPassword(ctx context.Context, a Actor, password string) error {
+	release, err := s.passwordCheck()
+	if err != nil {
+		return err
+	}
+	defer release()
+	return authError(s.pw.VerifyPassword(ctx, a.authUserID, password))
 }
 
 // setEmail sets a user's e-mail address. changed describes the change for
@@ -414,7 +457,7 @@ func (s *Service) Setup(ctx context.Context, code string, c Credentials) (User, 
 	} else if !needed {
 		return User{}, "", alreadySetUp
 	}
-	key := "setup-code:" + c.ClientIP
+	key := "setup-code:" + clientKey(c.ClientIP)
 	if err := s.auth.Limit(ctx, key, loginMaxPerName, loginWindow); err != nil {
 		return User{}, "", authError(err)
 	}

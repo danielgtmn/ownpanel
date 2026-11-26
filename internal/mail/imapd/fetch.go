@@ -23,7 +23,8 @@ func (s *session) Fetch(w *imapserver.FetchWriter, numSet imap.NumSet, options *
 		return s.fail(err)
 	}
 
-	// Reading a body without PEEK sets \Seen, in read-write mode only.
+	// Reading a body without PEEK sets \Seen, in read-write mode only (and
+	// in a shared mailbox the reader's own \Seen, unless after EXAMINE).
 	markSeen := false
 	for _, bs := range options.BodySection {
 		markSeen = markSeen || !bs.Peek
@@ -32,7 +33,7 @@ func (s *session) Fetch(w *imapserver.FetchWriter, numSet imap.NumSet, options *
 		markSeen = markSeen || !bs.Peek
 	}
 	seen := map[uint32]bool{}
-	if markSeen && !sel.readOnly {
+	if markSeen && (!sel.readOnly || sel.t.reader != "" && !sel.examine) {
 		var unseen []uint32
 		for _, e := range entries {
 			if m, ok := msgs[e.uid]; ok && !m.HasFlag(storage.FlagSeen) {
@@ -40,7 +41,7 @@ func (s *session) Fetch(w *imapserver.FetchWriter, numSet imap.NumSet, options *
 			}
 		}
 		if len(unseen) > 0 {
-			updated, err := s.srv.opts.Store.SetFlags(s.ctx, s.id(), sel.name, unseen, storage.FlagsAdd, []string{storage.FlagSeen})
+			updated, err := s.srv.opts.Store.SetFlagsAs(s.ctx, sel.t.sid, sel.t.folder, unseen, storage.FlagsAdd, []string{storage.FlagSeen}, sel.t.reader)
 			if err != nil {
 				return s.fail(err)
 			}

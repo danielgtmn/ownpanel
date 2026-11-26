@@ -1,10 +1,10 @@
 import { request } from '../api/client.ts'
 import { encodeSegment } from '../api/path.ts'
-import type { Connection, NewConnection, Zone, ZoneList } from './types.ts'
+import type { AddedDomain, Connection, NewConnection, RemovedDomain, Zone, ZoneList } from './types.ts'
 
-export const connectionPath = (id: number) => `/dns/connections/${encodeSegment(String(id))}`
+export const connectionPath = (id: string) => `/dns/connections/${encodeSegment(id)}`
 
-const zonePath = (connectionId: number, zone: string) => `${connectionPath(connectionId)}/zones/${encodeSegment(zone)}`
+const zonePath = (connectionId: string, zone: string) => `${connectionPath(connectionId)}/zones/${encodeSegment(zone)}`
 
 export function listConnections(): Promise<Connection[]> {
   return request<Connection[]>('/dns/connections')
@@ -14,11 +14,11 @@ export function createConnection(connection: NewConnection): Promise<Connection>
   return request<Connection>('/dns/connections', { method: 'POST', body: connection })
 }
 
-export function checkConnection(id: number): Promise<Connection> {
+export function checkConnection(id: string): Promise<Connection> {
   return request<Connection>(`${connectionPath(id)}/check`, { method: 'POST' })
 }
 
-export function deleteConnection(id: number): Promise<void> {
+export function deleteConnection(id: string): Promise<void> {
   return request<void>(connectionPath(id), { method: 'DELETE' })
 }
 
@@ -41,20 +41,38 @@ export function listAvailableZones(): Promise<ZoneList> {
 }
 
 /** Starts managing a domain of a connected account in the panel; nothing changes at the provider. */
-export async function adoptZone(connectionId: number, zone: string): Promise<Zone> {
+export async function adoptZone(connectionId: string, zone: string): Promise<Zone> {
   return zoneOf(await request<Zone>(`${zonePath(connectionId, zone)}/managed`, { method: 'PUT' }))
 }
 
 /** Stops managing a domain in the panel; it stays at the provider unchanged. */
-export function releaseZone(connectionId: number, zone: string): Promise<void> {
+export function releaseZone(connectionId: string, zone: string): Promise<void> {
   return request<void>(`${zonePath(connectionId, zone)}/managed`, { method: 'DELETE' })
 }
 
 /** Creates a domain at the provider; it is managed in the panel right away. */
-export async function createZone(connectionId: number, name: string): Promise<Zone> {
+export async function createZone(connectionId: string, name: string): Promise<Zone> {
   return zoneOf(await request<Zone>(`${connectionPath(connectionId)}/zones`, { method: 'POST', body: { name } }))
 }
 
-export function deleteZone(connectionId: number, zone: string, confirm: string): Promise<void> {
+export function deleteZone(connectionId: string, zone: string, confirm: string): Promise<void> {
   return request<void>(zonePath(connectionId, zone), { method: 'DELETE', body: { confirm } })
 }
+
+/** The domains the person added by hand because their DNS is managed elsewhere. */
+export async function listAddedDomains(): Promise<AddedDomain[]> {
+  return ((await request<AddedDomain[] | null>('/domains')) ?? []).map(addedOf)
+}
+
+/** Keeps a domain whose DNS is managed elsewhere in the panel; nothing changes at any provider. Adding again is fine. */
+export async function addDomain(name: string): Promise<AddedDomain> {
+  return addedOf(await request<AddedDomain>('/domains', { method: 'POST', body: { name } }))
+}
+
+/** Removes a domain added by hand. used_by says what of the person still keeps it in the panel. */
+export async function removeAddedDomain(name: string): Promise<RemovedDomain> {
+  const removed = await request<RemovedDomain>(`/domains/${encodeSegment(name)}`, { method: 'DELETE' })
+  return { ...removed, used_by: removed.used_by ?? [] }
+}
+
+const addedOf = (domain: AddedDomain): AddedDomain => ({ ...domain, used_by: domain.used_by ?? [] })

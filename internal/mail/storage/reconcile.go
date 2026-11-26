@@ -2,10 +2,11 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
+
+	"github.com/danielgtmn/ablage"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 )
@@ -24,6 +25,14 @@ type ReconcileReport struct {
 	// QueueStray are queue files without a row (removed: never accepted).
 	QueueMissing int
 	QueueStray   int
+	// DAVMissing are calendar and contact rows whose file was gone
+	// (dropped); DAVIndexed files without a row indexed again; DAVStray
+	// files without a row that could not be (removed). NewDAVEpoch is set
+	// when every sync token, ETag and ctag changed.
+	DAVMissing  int
+	DAVIndexed  int
+	DAVStray    int
+	NewDAVEpoch bool
 }
 
 // Reconcile brings index and files in line; call it once at start, before
@@ -46,37 +55,22 @@ func (s *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 	}
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	err := s.writeLocked(ctx, func(tx *sql.Tx, _ *changes) error {
+	err := s.writeLocked(ctx, func(tx *repos, _ *changes) error {
 		// Rows without a file.
-		type row struct {
-			id   int64
-			sid  string
-			file string
-			size int64
-		}
-		rows, err := tx.Query(`SELECT id, storage_id, file, size FROM messages`)
+		msgs, err := tx.messages.Find(ctx, ablage.Query{})
 		if err != nil {
 			return err
 		}
-		var missing []row
+		var missing []string
 		known := map[string]bool{}
-		for rows.Next() {
-			var r row
-			if err := rows.Scan(&r.id, &r.sid, &r.file, &r.size); err != nil {
-				rows.Close()
-				return err
-			}
-			known[r.sid+"/"+r.file] = true
-			if _, err := os.Stat(filepath.Join(s.mailboxDir(r.sid), r.file)); errors.Is(err, os.ErrNotExist) {
-				missing = append(missing, r)
+		for _, m := range msgs {
+			known[m.StorageID+"/"+m.File] = true
+			if _, err := os.Stat(filepath.Join(s.mailboxDir(m.StorageID), m.File)); errors.Is(err, os.ErrNotExist) {
+				missing = append(missing, m.ID)
 			}
 		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		for _, r := range missing {
-			if _, err := tx.Exec(`DELETE FROM messages WHERE id = ?`, r.id); err != nil {
+		if len(missing) > 0 {
+			if _, err := tx.messages.DeleteWhere(ctx, ablage.In("id", missing...)); err != nil {
 				return err
 			}
 		}
@@ -104,55 +98,55 @@ func (s *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 				if err != nil {
 					return err
 				}
-				if err := s.ensureMailbox(tx, sid); err != nil {
+				if err := s.ensureMailbox(ctx, tx, sid); err != nil {
 					return err
 				}
-				inbox, err := folderByName(tx, sid, Inbox)
+				inbox, err := folderByName(ctx, tx, sid, Inbox)
 				if errors.Is(err, ErrNoFolder) {
-					id, cerr := s.createFolder(tx, sid, Inbox, "", true)
-					if cerr != nil {
-						return cerr
-					}
-					inbox = folderRow{id: id, uidNext: 1}
-				} else if err != nil {
+					inbox, err = s.createFolder(ctx, tx, sid, Inbox, "", true)
+				}
+				if err != nil {
 					return err
 				}
-				if _, err := tx.Exec(`INSERT INTO messages (folder_id, storage_id, uid, file, size, internal_date, flags) VALUES (?, ?, ?, ?, ?, ?, '')`,
-					inbox.id, sid, inbox.uidNext, f.Name(), info.Size(), info.ModTime().Unix()); err != nil {
+				if err := tx.messages.Create(ctx, &messageRec{FolderID: inbox.ID, StorageID: sid, UID: inbox.UIDNext, File: f.Name(),
+					Size: info.Size(), InternalDate: sec(info.ModTime())}); err != nil {
 					return err
 				}
-				if _, err := tx.Exec(`UPDATE folders SET uid_next = uid_next + 1 WHERE id = ?`, inbox.id); err != nil {
+				if err := tx.folders.Patch(ctx, inbox.ID, ablage.Row{"uid_next": ablage.Incr(1)}); err != nil {
 					return err
 				}
 				rep.IndexedFiles++
 			}
 		}
 
-		// Usage counters from the rows, so they can never drift.
-		if _, err := tx.Exec(`UPDATE mailboxes SET
-			used_bytes = (SELECT coalesce(sum(size), 0) FROM messages WHERE messages.storage_id = mailboxes.storage_id),
-			messages = (SELECT count(*) FROM messages WHERE messages.storage_id = mailboxes.storage_id)`); err != nil {
+		dav, newEpoch, err := s.reconcileDAV(ctx, tx, rep.Restored)
+		if err != nil {
+			return err
+		}
+		rep.DAVMissing, rep.DAVIndexed, rep.DAVStray, rep.NewDAVEpoch = dav.missing, dav.indexed, dav.stray, newEpoch
+
+		if err := recountUsage(ctx, tx); err != nil {
 			return err
 		}
 
 		if rep.MissingFiles > 0 || rep.IndexedFiles > 0 || rep.Restored {
-			ids, err := folderIDs(tx)
+			folders, err := tx.folders.Find(ctx, ablage.Query{})
 			if err != nil {
 				return err
 			}
-			for _, id := range ids {
-				v, err := s.nextUIDValidity(tx)
+			for _, f := range folders {
+				v, err := s.nextUIDValidity(ctx, tx)
 				if err != nil {
 					return err
 				}
-				if _, err := tx.Exec(`UPDATE folders SET uid_validity = ? WHERE id = ?`, v, id); err != nil {
+				if err := tx.folders.Patch(ctx, f.ID, ablage.Row{"uid_validity": int64(v)}); err != nil {
 					return err
 				}
 			}
 			rep.NewUIDValidity = true
 		}
 		var qerr error
-		rep.QueueMissing, rep.QueueStray, qerr = s.reconcileQueue(tx)
+		rep.QueueMissing, rep.QueueStray, qerr = s.reconcileQueue(ctx, tx)
 		return qerr
 	})
 	if err != nil {
@@ -169,21 +163,66 @@ func (s *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 	return rep, nil
 }
 
-func folderIDs(tx *sql.Tx) ([]int64, error) {
-	rows, err := tx.Query(`SELECT id FROM folders ORDER BY id`)
+// recountUsage sets the usage counters of every mailbox from the rows, so
+// they can never drift. Calendars and contacts count towards the quota
+// too.
+func recountUsage(ctx context.Context, tx *repos) error {
+	boxes, err := tx.mailboxes.Find(ctx, ablage.Query{})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer rows.Close()
-	var out []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+	type usage struct{ bytes, messages int64 }
+	use := map[string]*usage{}
+	for _, b := range boxes {
+		use[b.ID] = &usage{}
+	}
+	add := func(sid string, bytes, messages int64) {
+		if u := use[sid]; u != nil {
+			u.bytes += bytes
+			u.messages += messages
 		}
-		out = append(out, id)
 	}
-	return out, rows.Err()
+	msgs, err := tx.messages.Aggregate(ctx, ablage.Aggregation{GroupBy: []string{"storage_id"}, Values: []ablage.Agg{ablage.CountAll("n"), ablage.Sum("size", "bytes")}})
+	if err != nil {
+		return err
+	}
+	for _, r := range msgs {
+		add(r["storage_id"].(string), r["bytes"].(int64), r["n"].(int64))
+	}
+	objs, err := tx.davObjects.Aggregate(ctx, ablage.Aggregation{GroupBy: []string{"storage_id"}, Values: []ablage.Agg{ablage.CountAll("n"), ablage.Sum("size", "bytes")}})
+	if err != nil {
+		return err
+	}
+	for _, r := range objs {
+		add(r["storage_id"].(string), r["bytes"].(int64)+DAVObjectOverhead*r["n"].(int64), 0)
+	}
+	dels, err := tx.davDeletions.Aggregate(ctx, ablage.Aggregation{GroupBy: []string{"collection_id"}, Values: []ablage.Agg{ablage.CountAll("n")}})
+	if err != nil {
+		return err
+	}
+	if len(dels) > 0 {
+		colls, err := tx.davCollections.Find(ctx, ablage.Query{})
+		if err != nil {
+			return err
+		}
+		owner := map[string]string{}
+		for _, c := range colls {
+			owner[c.ID] = c.StorageID
+		}
+		for _, r := range dels {
+			add(owner[r["collection_id"].(string)], DAVDeletionOverhead*r["n"].(int64), 0)
+		}
+	}
+	for _, b := range boxes {
+		u := use[b.ID]
+		if u.bytes == b.UsedBytes && u.messages == b.Messages {
+			continue
+		}
+		if err := tx.mailboxes.Patch(ctx, b.ID, ablage.Row{"used_bytes": u.bytes, "messages": u.messages}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func clearDir(dir string) error {
@@ -207,7 +246,7 @@ func (s *Store) DeleteMailbox(ctx context.Context, id string) error {
 	}
 	dir := s.mailboxDir(id)
 	gone := filepath.Join(s.dir, trashDir, id+"-"+randHex(8))
-	err := s.write(ctx, func(tx *sql.Tx, ch *changes) error {
+	err := s.write(ctx, func(tx *repos, ch *changes) error {
 		// Move the directory away first: if the commit fails it is moved
 		// back; if the process dies, the trash is emptied at start and the
 		// rows without files are dropped.
@@ -219,18 +258,27 @@ func (s *Store) DeleteMailbox(ctx context.Context, id string) error {
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		for _, q := range []string{
-			`DELETE FROM messages WHERE storage_id = ?`,
-			`DELETE FROM folders WHERE storage_id = ?`,
-			`DELETE FROM mailboxes WHERE storage_id = ?`,
-			`DELETE FROM bindings WHERE storage_id = ?`,
-			`DELETE FROM blocks WHERE storage_id = ?`,
+		// Folders with their messages and read states, and the mailbox's
+		// imports, also go with the mailbox row (cascade).
+		if _, err := tx.messages.DeleteWhere(ctx, ablage.Eq("storage_id", id)); err != nil {
+			return err
+		}
+		for _, del := range []func() (int64, error){
+			func() (int64, error) { return tx.folders.DeleteWhere(ctx, ablage.Eq("storage_id", id)) },
+			func() (int64, error) { return tx.mailboxes.DeleteWhere(ctx, ablage.Eq("id", id)) },
+			func() (int64, error) { return tx.bindings.DeleteWhere(ctx, ablage.Eq("id", id)) },
+			func() (int64, error) { return tx.blocks.DeleteWhere(ctx, ablage.Eq("id", id)) },
+			func() (int64, error) { return tx.sharedSeen.DeleteWhere(ctx, ablage.Eq("reader", id)) },
+			func() (int64, error) { return tx.sieveScripts.DeleteWhere(ctx, ablage.Eq("storage_id", id)) },
+			func() (int64, error) { return tx.sieveReplies.DeleteWhere(ctx, ablage.Eq("storage_id", id)) },
+			func() (int64, error) { return tx.sieveDuplicates.DeleteWhere(ctx, ablage.Eq("storage_id", id)) },
+			func() (int64, error) { return tx.sendLog.DeleteWhere(ctx, ablage.In("key", mailboxSendKeys(id)...)) },
 		} {
-			if _, err := tx.Exec(q, id); err != nil {
+			if _, err := del(); err != nil {
 				return err
 			}
 		}
-		if _, err := tx.Exec(`DELETE FROM send_log WHERE key IN (?, ?, ?, ?)`, mailboxSendKeys(id)...); err != nil {
+		if err := s.deleteDAV(ctx, tx, ch, id); err != nil {
 			return err
 		}
 		ch.add(id, Change{Kind: MailboxDeleted})

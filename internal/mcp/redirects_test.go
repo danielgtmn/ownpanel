@@ -25,7 +25,7 @@ func TestRedirectTools(t *testing.T) {
 		"source_domain": "www.blog.example.com", "target": "https://blog.example.com", "keep_path": true, "keep_query": true,
 	}), &dom)
 	r := dom.Redirect
-	if r.ID == 0 || r.Owner != "root" || r.Code != 301 || r.SourcePath != "" || !r.KeepPath || !r.KeepQuery || r.CreatedAt == "" {
+	if r.ID == "" || r.Owner != "root" || r.Code != 301 || r.SourcePath != "" || !r.KeepPath || !r.KeepQuery || r.CreatedAt == "" {
 		t.Fatalf("created %+v", r)
 	}
 	var path redirectOutput
@@ -57,12 +57,12 @@ func TestRedirectTools(t *testing.T) {
 	refused(t, call_(t, cs, "set_redirect", map[string]any{"source_domain": "panel.example.com", "target": "https://example.com"}), "address of the panel itself")
 	refused(t, call_(t, cs, "set_redirect", map[string]any{"source_domain": "x.example.com", "target": "https://x.example.com/"}), "redirect again forever")
 	refused(t, call_(t, cs, "set_redirect", map[string]any{"source_domain": "x.example.com", "target": "https://example.com", "code": 303}), "301, 302, 307 or 308")
-	refused(t, call_(t, cs, "set_redirect", map[string]any{"id": 9999, "source_domain": "x.example.com", "target": "https://example.com"}), "not found")
+	refused(t, call_(t, cs, "set_redirect", map[string]any{"id": "9999", "source_domain": "x.example.com", "target": "https://example.com"}), "not found")
 	refused(t, call_(t, e.connect(t, e.read), "set_redirect", map[string]any{"source_domain": "x.example.com", "target": "https://example.com"}), "can only read")
 
 	// delete_redirect needs the source repeated.
 	refused(t, call_(t, cs, "delete_redirect", map[string]any{"id": path.Redirect.ID, "confirm_source": "blog.example.com"}), "does not match")
-	refused(t, call_(t, cs, "delete_redirect", map[string]any{"id": 9999, "confirm_source": "x"}), "not found")
+	refused(t, call_(t, cs, "delete_redirect", map[string]any{"id": "9999", "confirm_source": "x"}), "not found")
 	var del deleteRedirectOutput
 	ok(t, call_(t, cs, "delete_redirect", map[string]any{"id": path.Redirect.ID, "confirm_source": "blog.example.com/old/*"}), &del)
 	if del.Deleted != "blog.example.com/old/*" {

@@ -8,7 +8,7 @@ export function problemMessage(problem: ZoneProblem): string {
 
 export type ZoneRow = {
   key: string
-  connectionId: number
+  connectionId: string
   connectionName: string
   name: string
   readOnly: boolean
@@ -17,7 +17,7 @@ export type ZoneRow = {
 
 export type ZonesView = {
   rows: ZoneRow[]
-  notices: { key: number; text: string }[]
+  notices: { key: string; text: string }[]
 }
 
 export function describeZones(list: ZoneList): ZonesView {
@@ -35,13 +35,12 @@ export function describeZones(list: ZoneList): ZonesView {
   return { rows, notices }
 }
 
-export function findZone(list: ZoneList, connectionId: number, name: string): Zone | undefined {
+export function findZone(list: ZoneList, connectionId: string, name: string): Zone | undefined {
   return list.zones.find((zone) => zone.connection_id === connectionId && zone.name === name)
 }
 
-export function parseConnectionId(segment: string | undefined): number | null {
-  if (!segment || !/^[1-9]\d*$/.test(segment)) return null
-  return Number(segment)
+export function parseConnectionId(segment: string | undefined): string | null {
+  return segment ? segment : null
 }
 
 export function normalizeZoneName(value: string): string {

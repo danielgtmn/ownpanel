@@ -47,6 +47,11 @@ type Config struct {
 	// Filter configures the checks of incoming mail; zero values mean the
 	// defaults.
 	Filter Filter `json:"filter"`
+	// AppPasswordKey is the server key app passwords are checked with
+	// (AppPasswordMAC; 64 hex characters). The panel generates it once and
+	// keeps it sealed. Empty: no app passwords (then no mailbox may have
+	// any). It is a secret like the rest of the configuration.
+	AppPasswordKey string `json:"app_password_key,omitempty"`
 }
 
 // Filter configures the checks of incoming mail on port 25.
@@ -122,6 +127,11 @@ type Domain struct {
 	DKIM []DKIMKey `json:"dkim"`
 	// SendPerHour caps the messages all mailboxes of the domain send per hour.
 	SendPerHour int `json:"send_per_hour"`
+	// Organisation is an opaque, stable id of the organisation the domain
+	// belongs to (ValidOrganisation): mailboxes may share only within one.
+	// It says nothing about who owns the domain. Empty means the domain is
+	// its own organisation (StandaloneOrganisation).
+	Organisation string `json:"organisation,omitempty"`
 }
 
 // DKIMKey is one DKIM key of a domain.
@@ -146,6 +156,47 @@ type Mailbox struct {
 	// SendPerHour and SendPerDay cap the messages the mailbox sends.
 	SendPerHour int `json:"send_per_hour"`
 	SendPerDay  int `json:"send_per_day"`
+	// DisplayName is the person's or team's name (ValidDisplayName); may be
+	// empty.
+	DisplayName string `json:"display_name,omitempty"`
+	// AppPasswords are the mailbox's app passwords (at most
+	// MaxAppPasswords).
+	AppPasswords []AppPassword `json:"app_passwords,omitempty"`
+	// AppPasswordsOnly: mail programs (IMAP, SMTP) sign in only with app
+	// passwords; the main password works only for the self-service area.
+	AppPasswordsOnly bool `json:"app_passwords_only,omitempty"`
+	// Revision is the highest revision of the mailbox's own changes in the
+	// mail service (AccountChange.Revision) that the panel has recorded. The
+	// mail service keeps newer changes of its own over what this
+	// configuration says until a push carries a Revision that includes them.
+	Revision int64 `json:"revision,omitempty"`
+	// PasswordSetAt, DisplayNameSetAt and AppPasswordsOnlySetAt are when
+	// the panel last set that field itself (an admin; Unix seconds, 0:
+	// never). A change of the same field the mailbox made in the mail
+	// service at or before that time is dropped even if Revision does not
+	// include it yet, so a reset by an admin takes effect with this push.
+	// The panel decides the same way when it records the change.
+	PasswordSetAt         int64 `json:"password_set_at,omitempty"`
+	DisplayNameSetAt      int64 `json:"display_name_set_at,omitempty"`
+	AppPasswordsOnlySetAt int64 `json:"app_passwords_only_set_at,omitempty"`
+
+	// Kind is KindPersonal ("" too) or KindShared. A shared mailbox has no
+	// password (PasswordHash ""), no app passwords and cannot sign in.
+	Kind string `json:"kind,omitempty"`
+	// Grants give personal mailboxes of the same organisation rights on
+	// this mailbox (at most MaxGrants): set by the panel for a shared
+	// mailbox, by the person (self-service) for a personal one.
+	Grants []Grant `json:"grants,omitempty"`
+	// KeepSentCopy (shared mailboxes only): mail sent as or on behalf of
+	// the mailbox is also stored in its Sent folder.
+	KeepSentCopy bool `json:"keep_sent_copy,omitempty"`
+	// GrantsSetAt is when the panel last changed Grants itself (Unix
+	// seconds, 0: never), like PasswordSetAt: a self-delegation the
+	// mailbox made at or before that time no longer counts.
+	GrantsSetAt int64 `json:"grants_set_at,omitempty"`
+	// NoForwarding: the mailbox's filters may not forward mail (redirect);
+	// the domain owner decides, forwarding is allowed by default.
+	NoForwarding bool `json:"no_forwarding,omitempty"`
 }
 
 // Alias delivers mail for Address to Targets.
@@ -154,6 +205,13 @@ type Alias struct {
 	Address string `json:"address"`
 	// Targets are addresses: mailboxes of this service or external ones.
 	Targets []string `json:"targets"`
+	// SenderPolicy says who may write to the address when it is used as a
+	// distribution group: SenderAnyone ("" too), SenderOrganisation or
+	// SenderMembers. Not for the catch-all.
+	SenderPolicy string `json:"sender_policy,omitempty"`
+	// HideFromDirectory keeps the address out of the organisation's
+	// address book.
+	HideFromDirectory bool `json:"hide_from_directory,omitempty"`
 }
 
 // Limits of the whole service.
@@ -194,6 +252,7 @@ var (
 	localPartRe = regexp.MustCompile(`^[a-z0-9!#$%&'*+/=?^_{|}~-]+(\.[a-z0-9!#$%&'*+/=?^_{|}~-]+)*$`)
 	selectorRe  = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 	storageIDRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	importIDRe  = regexp.MustCompile(`^[0-9a-z]{1,32}$`)
 )
 
 // ValidDomain tells whether d is a lowercase ASCII host name with at least
@@ -237,6 +296,12 @@ func ValidAddress(addr string) bool {
 // hex characters).
 func ValidStorageID(id string) bool { return storageIDRe.MatchString(id) }
 
+// ValidImportID tells whether id has the form of an import job id: 1 to 32
+// lowercase letters and digits (older jobs have digits only, newer ones 26
+// characters). The service names files after it, so anything else must be
+// refused before it reaches a path.
+func ValidImportID(id string) bool { return importIDRe.MatchString(id) }
+
 // Validate checks the configuration. It does not need the network.
 func (c *Config) Validate() error {
 	if c.Hostname != "" && !ValidDomain(c.Hostname) {
@@ -252,39 +317,25 @@ func (c *Config) Validate() error {
 	}
 	domains := map[string]bool{}
 	for _, d := range c.Domains {
-		if !ValidDomain(d.Name) {
-			return fmt.Errorf("domain %q is not valid", d.Name)
+		if err := validateDomain(d); err != nil {
+			return err
 		}
 		if domains[d.Name] {
 			return fmt.Errorf("domain %q is listed twice", d.Name)
 		}
 		domains[d.Name] = true
-		active := 0
-		selectors := map[string]bool{}
-		for _, k := range d.DKIM {
-			if !selectorRe.MatchString(k.Selector) || selectors[k.Selector] {
-				return fmt.Errorf("domain %s: DKIM selector %q is not valid or listed twice", d.Name, k.Selector)
-			}
-			selectors[k.Selector] = true
-			if _, err := ParseDKIMKey(k.PrivateKeyPEM); err != nil {
-				return fmt.Errorf("domain %s: DKIM key %s: %v", d.Name, k.Selector, err)
-			}
-			if k.Active {
-				active++
-			}
-		}
-		if len(d.DKIM) > 0 && active != 1 {
-			return fmt.Errorf("domain %s: exactly one DKIM key must be active", d.Name)
-		}
-		if d.SendPerHour < 0 {
-			return fmt.Errorf("domain %s: negative send limit", d.Name)
+	}
+	if c.AppPasswordKey != "" {
+		if k, err := hex.DecodeString(c.AppPasswordKey); err != nil || len(k) != AppPasswordKeyBytes || strings.ToLower(c.AppPasswordKey) != c.AppPasswordKey {
+			return errors.New("the app password key is not valid")
 		}
 	}
 	addresses := map[string]bool{}
 	storage := map[string]bool{}
+	appIDs := map[string]bool{}
 	for _, m := range c.Mailboxes {
-		if !ValidAddress(m.Address) {
-			return fmt.Errorf("mailbox address %q is not valid", m.Address)
+		if err := validateMailbox(m); err != nil {
+			return err
 		}
 		_, d, _ := SplitAddress(m.Address)
 		if !domains[d] {
@@ -294,34 +345,46 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("address %s is used twice", m.Address)
 		}
 		addresses[m.Address] = true
-		if !ValidStorageID(m.StorageID) || storage[m.StorageID] {
+		if storage[m.StorageID] {
 			return fmt.Errorf("mailbox %s: storage id is not valid or used twice", m.Address)
 		}
 		storage[m.StorageID] = true
-		if !passwd.WellFormed(m.PasswordHash) {
-			return fmt.Errorf("mailbox %s: password hash is not an argon2id hash", m.Address)
+		if len(m.AppPasswords) > MaxAppPasswords {
+			return fmt.Errorf("mailbox %s: more than %d app passwords", m.Address, MaxAppPasswords)
 		}
-		if m.QuotaBytes < 0 || m.SendPerHour < 0 || m.SendPerDay < 0 {
-			return fmt.Errorf("mailbox %s: negative limit", m.Address)
+		if len(m.AppPasswords) > 0 && c.AppPasswordKey == "" {
+			return fmt.Errorf("mailbox %s: app passwords need an app password key", m.Address)
+		}
+		for _, ap := range m.AppPasswords {
+			if err := validateAppPassword(ap); err != nil || appIDs[ap.ID] {
+				if err == nil {
+					err = fmt.Errorf("app password id %q is not valid or used twice", ap.ID)
+				}
+				return fmt.Errorf("mailbox %s: %w", m.Address, err)
+			}
+			appIDs[ap.ID] = true
+		}
+	}
+	byStorage, orgs := c.mailboxesByStorage(), c.domainOrganisations()
+	for _, m := range c.Mailboxes {
+		for _, g := range m.Grants {
+			if p := GrantProblem(m, g, byStorage, orgs); p != "" {
+				return fmt.Errorf("mailbox %s: a grant is not valid: %s", m.Address, p)
+			}
 		}
 	}
 	for _, a := range c.Aliases {
-		l, d, ok := SplitAddress(a.Address)
-		if !ok || (l != "*" && !ValidLocalPart(l)) || !domains[d] {
+		_, d, _ := SplitAddress(a.Address)
+		if err := validateAlias(a); err != nil {
+			return err
+		}
+		if !domains[d] {
 			return fmt.Errorf("alias %q is not valid or its domain is not configured", a.Address)
 		}
 		if addresses[a.Address] {
 			return fmt.Errorf("address %s is used twice", a.Address)
 		}
 		addresses[a.Address] = true
-		if len(a.Targets) == 0 || len(a.Targets) > MaxTargets {
-			return fmt.Errorf("alias %s needs 1 to %d targets", a.Address, MaxTargets)
-		}
-		for _, t := range a.Targets {
-			if !ValidAddress(t) {
-				return fmt.Errorf("alias %s: target %q is not a valid address", a.Address, t)
-			}
-		}
 	}
 	if c.PostmasterAddress != "" {
 		if _, err := mail.ParseAddress(c.PostmasterAddress); err != nil || !ValidAddress(c.PostmasterAddress) {
@@ -343,6 +406,296 @@ func (c *Config) Validate() error {
 		return errors.New("junk score out of range")
 	}
 	return nil
+}
+
+// validateDomain checks one domain on its own.
+func validateDomain(d Domain) error {
+	if !ValidDomain(d.Name) {
+		return fmt.Errorf("domain %q is not valid", d.Name)
+	}
+	if err := validateDKIM(d.DKIM); err != nil {
+		return fmt.Errorf("domain %s: %w", d.Name, err)
+	}
+	if d.SendPerHour < 0 {
+		return fmt.Errorf("domain %s: negative send limit", d.Name)
+	}
+	if d.Organisation != "" && !ValidOrganisation(d.Organisation) {
+		return fmt.Errorf("domain %s: organisation %q is not valid", d.Name, d.Organisation)
+	}
+	return nil
+}
+
+func validateDKIMKey(k DKIMKey) error {
+	if !selectorRe.MatchString(k.Selector) {
+		return fmt.Errorf("DKIM selector %q is not valid or listed twice", k.Selector)
+	}
+	if _, err := ParseDKIMKey(k.PrivateKeyPEM); err != nil {
+		return fmt.Errorf("DKIM key %s: %v", k.Selector, err)
+	}
+	return nil
+}
+
+func validateDKIM(keys []DKIMKey) error {
+	active := 0
+	selectors := map[string]bool{}
+	for _, k := range keys {
+		if selectors[k.Selector] {
+			return fmt.Errorf("DKIM selector %q is not valid or listed twice", k.Selector)
+		}
+		if err := validateDKIMKey(k); err != nil {
+			return err
+		}
+		selectors[k.Selector] = true
+		if k.Active {
+			active++
+		}
+	}
+	if len(keys) > 0 && active != 1 {
+		return errors.New("exactly one DKIM key must be active")
+	}
+	return nil
+}
+
+// validateMailbox checks one mailbox on its own, without its app
+// passwords and without what depends on the others.
+func validateMailbox(m Mailbox) error {
+	if !ValidAddress(m.Address) {
+		return fmt.Errorf("mailbox address %q is not valid", m.Address)
+	}
+	if !ValidStorageID(m.StorageID) {
+		return fmt.Errorf("mailbox %s: storage id is not valid or used twice", m.Address)
+	}
+	if !validKind(m.Kind) {
+		return fmt.Errorf("mailbox %s: unknown kind %q", m.Address, m.Kind)
+	}
+	if m.Shared() {
+		if m.PasswordHash != "" || len(m.AppPasswords) > 0 || m.AppPasswordsOnly {
+			return fmt.Errorf("mailbox %s: a shared mailbox has no password", m.Address)
+		}
+	} else {
+		if !passwd.WellFormed(m.PasswordHash) {
+			return fmt.Errorf("mailbox %s: password hash is not an argon2id hash", m.Address)
+		}
+		if m.KeepSentCopy {
+			return fmt.Errorf("mailbox %s: only shared mailboxes keep copies of sent mail", m.Address)
+		}
+	}
+	if err := CheckGrants(m, m.Grants); err != nil {
+		return fmt.Errorf("mailbox %s: %w", m.Address, err)
+	}
+	if m.QuotaBytes < 0 || m.SendPerHour < 0 || m.SendPerDay < 0 || m.Revision < 0 ||
+		m.PasswordSetAt < 0 || m.DisplayNameSetAt < 0 || m.AppPasswordsOnlySetAt < 0 || m.GrantsSetAt < 0 {
+		return fmt.Errorf("mailbox %s: negative limit", m.Address)
+	}
+	if !ValidDisplayName(m.DisplayName) {
+		return fmt.Errorf("mailbox %s: the display name is not valid", m.Address)
+	}
+	return nil
+}
+
+func validateAppPassword(ap AppPassword) error {
+	if !ValidAppPasswordID(ap.ID) {
+		return fmt.Errorf("app password id %q is not valid or used twice", ap.ID)
+	}
+	if !macRe.MatchString(ap.MAC) || ap.Name == "" || !ValidDisplayName(ap.Name) {
+		return fmt.Errorf("app password %s is not valid", ap.ID)
+	}
+	return nil
+}
+
+// validateAlias checks one alias on its own, without its domain.
+func validateAlias(a Alias) error {
+	l, _, ok := SplitAddress(a.Address)
+	if !ok || (l != "*" && !ValidLocalPart(l)) {
+		return fmt.Errorf("alias %q is not valid or its domain is not configured", a.Address)
+	}
+	if len(a.Targets) == 0 || len(a.Targets) > MaxTargets {
+		return fmt.Errorf("alias %s needs 1 to %d targets", a.Address, MaxTargets)
+	}
+	for _, t := range a.Targets {
+		if !ValidAddress(t) {
+			return fmt.Errorf("alias %s: target %q is not a valid address", a.Address, t)
+		}
+	}
+	if !ValidSenderPolicy(a.SenderPolicy) || l == "*" && a.SenderPolicy != "" && a.SenderPolicy != SenderAnyone {
+		return fmt.Errorf("alias %s: sender policy %q is not valid", a.Address, a.SenderPolicy)
+	}
+	return nil
+}
+
+// DropInvalid takes out of c, or cuts down, every domain, mailbox and alias
+// that Validate would refuse, so that the data of one of them never stops
+// the configuration of everyone from being loaded. It returns what it did,
+// one line each, without secrets. What concerns the whole service
+// (hostname, certificates, keys, filter, limits, postmaster) is left to
+// Validate.
+//
+//   - A domain with an invalid name, listed twice or with a negative limit
+//     is left out, and with it its mailboxes and aliases. Invalid DKIM keys
+//     are left out; if then not exactly one is active, the domain is pushed
+//     without DKIM keys. An invalid organisation id makes it stand alone.
+//   - A mailbox that is not valid on its own, or whose address or storage id
+//     is used twice, is left out. An invalid display name is removed.
+//     Invalid app passwords and ids used twice are left out, and beyond
+//     MaxAppPasswords the newest ones (the list is oldest first).
+//   - Personal mailboxes do not keep copies of sent mail (turned off).
+//     Grants that are not valid on their own, listed twice or beyond
+//     MaxGrants are left out, and so are grants that name a mailbox left
+//     out, a shared mailbox or another organisation (GrantProblem).
+//   - An alias that is not valid or whose address is used twice is left
+//     out; invalid targets are left out, beyond MaxTargets the last ones.
+//     An invalid sender policy becomes SenderMembers.
+func (c *Config) DropInvalid() []string {
+	var out []string
+	note := func(format string, args ...any) { out = append(out, fmt.Sprintf(format, args...)) }
+
+	domains := map[string]bool{}
+	keptDomains := make([]Domain, 0, len(c.Domains))
+	for _, d := range c.Domains {
+		if !ValidDomain(d.Name) || domains[d.Name] || d.SendPerHour < 0 {
+			note("domain %q left out: not valid or listed twice", d.Name)
+			continue
+		}
+		if d.Organisation != "" && !ValidOrganisation(d.Organisation) {
+			note("domain %s: organisation id not valid; it stands alone", d.Name)
+			d.Organisation = ""
+		}
+		if validateDKIM(d.DKIM) != nil {
+			keys := make([]DKIMKey, 0, len(d.DKIM))
+			selectors := map[string]bool{}
+			for _, k := range d.DKIM {
+				if err := validateDKIMKey(k); err != nil || selectors[k.Selector] {
+					note("domain %s: DKIM key %q left out", d.Name, k.Selector)
+					continue
+				}
+				selectors[k.Selector] = true
+				keys = append(keys, k)
+			}
+			if validateDKIM(keys) != nil {
+				note("domain %s: no single active DKIM key; mail is sent without a DKIM signature", d.Name)
+				keys = []DKIMKey{}
+			}
+			d.DKIM = keys
+		}
+		domains[d.Name] = true
+		keptDomains = append(keptDomains, d)
+	}
+	c.Domains = keptDomains
+
+	addresses := map[string]bool{}
+	storage := map[string]bool{}
+	appIDs := map[string]bool{}
+	keptMailboxes := make([]Mailbox, 0, len(c.Mailboxes))
+	for _, m := range c.Mailboxes {
+		if !ValidDisplayName(m.DisplayName) {
+			note("mailbox %q: display name not valid; removed", m.Address)
+			m.DisplayName = ""
+		}
+		if m.Shared() && (m.PasswordHash != "" || len(m.AppPasswords) > 0 || m.AppPasswordsOnly) {
+			// Nobody signs in to a shared mailbox: what would let someone is
+			// removed, the mailbox stays (it still receives mail).
+			note("mailbox %q: a shared mailbox has no password or app passwords; removed", m.Address)
+			m.PasswordHash, m.AppPasswords, m.AppPasswordsOnly = "", nil, false
+		}
+		if m.KeepSentCopy && !m.Shared() {
+			note("mailbox %q: keeping copies of sent mail is only for shared mailboxes; turned off", m.Address)
+			m.KeepSentCopy = false
+		}
+		if len(m.Grants) > 0 {
+			grants := make([]Grant, 0, min(len(m.Grants), MaxGrants))
+			for _, g := range m.Grants {
+				switch {
+				case validateGrantForm(m, g) != nil || slices.ContainsFunc(grants, func(x Grant) bool { return x.StorageID == g.StorageID }):
+					note("mailbox %q: grant to %q left out: not valid or listed twice", m.Address, g.StorageID)
+				case len(grants) == MaxGrants:
+					note("mailbox %q: grant to %q left out: more than %d", m.Address, g.StorageID, MaxGrants)
+				default:
+					grants = append(grants, g)
+				}
+			}
+			m.Grants = grants
+		}
+		_, d, _ := SplitAddress(m.Address)
+		if err := validateMailbox(m); err != nil || !domains[d] || addresses[m.Address] || storage[m.StorageID] {
+			note("mailbox %q left out: not valid, its domain left out, or its address or storage id used twice", m.Address)
+			continue
+		}
+		addresses[m.Address], storage[m.StorageID] = true, true
+		if len(m.AppPasswords) > 0 && c.AppPasswordKey == "" {
+			note("mailbox %s: app passwords left out: no app password key", m.Address)
+			m.AppPasswords = nil
+		}
+		if len(m.AppPasswords) > 0 {
+			aps := make([]AppPassword, 0, min(len(m.AppPasswords), MaxAppPasswords))
+			for _, ap := range m.AppPasswords {
+				if validateAppPassword(ap) != nil || appIDs[ap.ID] {
+					note("mailbox %s: app password %q left out: not valid or its id used twice", m.Address, ap.ID)
+					continue
+				}
+				if len(aps) == MaxAppPasswords {
+					note("mailbox %s: app password %q left out: more than %d", m.Address, ap.ID, MaxAppPasswords)
+					continue
+				}
+				appIDs[ap.ID] = true
+				aps = append(aps, ap)
+			}
+			m.AppPasswords = aps
+		}
+		keptMailboxes = append(keptMailboxes, m)
+	}
+	c.Mailboxes = keptMailboxes
+	// Grants that name a mailbox left out, a shared mailbox or another
+	// organisation are left out; the mailbox stays.
+	byStorage, orgs := c.mailboxesByStorage(), c.domainOrganisations()
+	for i := range c.Mailboxes {
+		m := &c.Mailboxes[i]
+		if len(m.Grants) == 0 {
+			continue
+		}
+		kept := make([]Grant, 0, len(m.Grants))
+		for _, g := range m.Grants {
+			if p := GrantProblem(*m, g, byStorage, orgs); p != "" {
+				note("mailbox %s: grant to %s left out: %s", m.Address, g.StorageID, p)
+				continue
+			}
+			kept = append(kept, g)
+		}
+		m.Grants = kept
+	}
+
+	keptAliases := make([]Alias, 0, len(c.Aliases))
+	for _, a := range c.Aliases {
+		if l, _, _ := SplitAddress(a.Address); !ValidSenderPolicy(a.SenderPolicy) || l == "*" && a.SenderPolicy != "" && a.SenderPolicy != SenderAnyone {
+			// The strictest policy: a group nobody may write to by mistake
+			// is better than one open to everyone.
+			note("alias %q: sender policy not valid; only members may write to it", a.Address)
+			a.SenderPolicy = SenderMembers
+			if l == "*" {
+				a.SenderPolicy = ""
+			}
+		}
+		targets := make([]string, 0, min(len(a.Targets), MaxTargets))
+		for _, t := range a.Targets {
+			switch {
+			case !ValidAddress(t):
+				note("alias %q: target %q left out: not a valid address", a.Address, t)
+			case len(targets) == MaxTargets:
+				note("alias %q: target %q left out: more than %d", a.Address, t, MaxTargets)
+			default:
+				targets = append(targets, t)
+			}
+		}
+		a.Targets = targets
+		_, d, _ := SplitAddress(a.Address)
+		if validateAlias(a) != nil || !domains[d] || addresses[a.Address] {
+			note("alias %q left out: not valid, its domain left out, or its address used twice", a.Address)
+			continue
+		}
+		addresses[a.Address] = true
+		keptAliases = append(keptAliases, a)
+	}
+	c.Aliases = keptAliases
+	return out
 }
 
 // Hash is a fingerprint of the configuration: the panel compares it with

@@ -105,10 +105,10 @@ func TestMailHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.MailHost != testMailHost || len(h.Checks) != 9 {
+	if h.MailHost != testMailHost || len(h.Checks) != 10 {
 		t.Fatalf("%+v", h)
 	}
-	order := []string{HealthService, HealthMailHostDNS, HealthMailHostSPF, HealthPTR, HealthOutboundPort, HealthCertificate, HealthListeners, HealthPostmaster, HealthBlocklists}
+	order := []string{HealthService, HealthMailHostDNS, HealthMailHostSPF, HealthPTR, HealthOutboundPort, HealthCertificate, HealthListeners, HealthPostmaster, HealthBlocklists, HealthSelfService}
 	for i, c := range h.Checks {
 		if c.ID != order[i] || c.Found == nil || c.Expected == nil || c.Detail == "" {
 			t.Fatalf("check %d: %+v", i, c)

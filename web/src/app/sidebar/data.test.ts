@@ -26,13 +26,13 @@ describe('loading the addresses of a domain', () => {
       '/api/dns/zones': () => json({ zones: [] }),
       '/api/redirects': () =>
         json([
-          { id: 1, source_domain: 'go.example.com', source_path: '', target: 'https://example.org' },
-          { id: 2, source_domain: 'docs.example.com', source_path: '/old', target: '/new' },
-          { id: 3, source_domain: 'docs.example.com', source_path: '/a/*', target: '/b' },
+          { id: '1', source_domain: 'go.example.com', source_path: '', target: 'https://example.org' },
+          { id: '2', source_domain: 'docs.example.com', source_path: '/old', target: '/new' },
+          { id: '3', source_domain: 'docs.example.com', source_path: '/a/*', target: '/b' },
         ]),
     })
     const sources = await loadSources()
-    expect(sources.redirects).toEqual([{ id: 1, source: 'go.example.com', target: 'https://example.org' }])
+    expect(sources.redirects).toEqual([{ id: '1', source: 'go.example.com', target: 'https://example.org' }])
     expect(sources.pathRedirectHosts).toEqual(['docs.example.com'])
   })
 
@@ -51,6 +51,21 @@ describe('loading the addresses of a domain', () => {
     expect((await loadSources()).mailDomains).toBeUndefined()
   })
 
+  it('loads the domains added by hand, and none when they may not be seen', async () => {
+    const base = {
+      '/api/sites': () => json([]),
+      '/api/dns/zones': () => json({ zones: [] }),
+      '/api/redirects': () => json([]),
+    }
+    mockRoutes({
+      ...base,
+      '/api/domains': () => json([{ name: 'elsewhere.org', created_at: '2026-01-01T00:00:00Z', used_by: [] }]),
+    })
+    expect((await loadSources()).domains).toEqual(['elsewhere.org'])
+    mockRoutes({ ...base, '/api/domains': () => json({ error: 'limited to sites' }, 403) })
+    expect((await loadSources()).domains).toBeUndefined()
+  })
+
   it('reads the record names of each DNS account and reports the ones that failed', async () => {
     const fetchMock = mockRoutes({
       '/api/dns/connections/1/zones/example.com/records': () =>
@@ -61,8 +76,8 @@ describe('loading the addresses of a domain', () => {
       '/api/dns/connections/2/zones/example.com/records': () => json({ error: 'token expired' }, 502),
     })
     const result = await loadZoneRecords([
-      { connectionId: 1, connectionName: 'Hetzner', name: 'example.com' },
-      { connectionId: 2, connectionName: 'Old', name: 'example.com' },
+      { connectionId: '1', connectionName: 'Hetzner', name: 'example.com' },
+      { connectionId: '2', connectionName: 'Old', name: 'example.com' },
     ])
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(result.failed).toEqual(['example.com'])
