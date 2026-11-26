@@ -147,6 +147,9 @@ type Service struct {
 	setupHosts setupHostsState
 	// importRate limits imports per person (mailtransfer.go).
 	importRate importRate
+	// previewSecret derives the addresses and keys of previews
+	// (previews.go). Set once in New.
+	previewSecret []byte
 }
 
 // New returns a Service. It rejects invalid web server options up front, and
@@ -228,6 +231,9 @@ func New(cfg Config) (*Service, error) {
 		if err := s.loadSettings(context.Background()); err != nil {
 			return nil, err
 		}
+		if err := s.initPreviewSecret(context.Background()); err != nil {
+			return nil, fmt.Errorf("preview secret: %w", err)
+		}
 		if err := s.initAuth(context.Background()); err != nil {
 			return nil, fmt.Errorf("sign-in: %w", err)
 		}
@@ -242,15 +248,34 @@ type Site struct {
 	Owner    string   `json:"owner"`
 	Current  string   `json:"current_release"`
 	Releases []string `json:"releases"`
+	// Versions are the kept releases, newest first, with their state.
+	Versions []Version `json:"versions"`
+	// PreviewAddresses: versions can be opened on their own address (an
+	// admin has set a domain for previews).
+	PreviewAddresses bool `json:"preview_addresses"`
+}
+
+// Version is one kept release of a site.
+type Version struct {
+	ID   string `json:"id"`
+	Live bool   `json:"live"`
+	// Pending: published without being made live, and not live since.
+	Pending bool `json:"pending"`
+	// PreviewURL opens this version on its own address, whether it is live
+	// or not; "" when previews have no addresses. Anyone with the link can
+	// open it.
+	PreviewURL string `json:"preview_url"`
 }
 
 func (s *Service) view(site store.Site) Site {
 	return Site{
-		Name:     site.Name,
-		Domains:  site.Domains,
-		Owner:    site.Owner,
-		Current:  s.deploys.Current(site.Name),
-		Releases: s.deploys.Releases(site.Name),
+		Name:             site.Name,
+		Domains:          site.Domains,
+		Owner:            site.Owner,
+		Current:          s.deploys.Current(site.Name),
+		Releases:         s.deploys.Releases(site.Name),
+		Versions:         s.versionsView(site.Name),
+		PreviewAddresses: s.previewsServed(),
 	}
 }
 
@@ -320,6 +345,11 @@ func (s *Service) SaveSite(ctx context.Context, a Actor, name string, domains []
 	}
 	if d := s.MailHost(); d != "" && slices.Contains(clean, d) {
 		return Site{}, errorf(Invalid, "domain %q is the name of the mail server", d)
+	}
+	for _, d := range clean {
+		if s.underPreviewDomain(d) {
+			return Site{}, errUnderPreviewDomain(d, s.PreviewDomain())
+		}
 	}
 
 	existing, err := s.store.Site(ctx, name)
@@ -418,35 +448,62 @@ func (s *Service) DeleteSite(ctx context.Context, a Actor, name string) error {
 
 // Publish unpacks an archive as a new release and makes it live.
 func (s *Service) Publish(ctx context.Context, a Actor, name string, archive io.Reader) (Site, error) {
+	p, err := s.PublishVersion(ctx, a, name, archive, true)
+	return p.Site, err
+}
+
+// Publication is the site after publishing, with the new version.
+type Publication struct {
+	Site
+	// Release is the id of the new version.
+	Release string `json:"published_release"`
+	// Live: the new version is what visitors see now.
+	Live bool `json:"published_live"`
+	// PreviewURL opens the new version on its own address; "" when
+	// previews have no addresses.
+	PreviewURL string `json:"preview_url"`
+}
+
+// PublishVersion unpacks an archive as a new release. With live it is made
+// live at once; without, the live release stays as it is (a site that has
+// none keeps showing that it has no content yet) and the new one can be
+// opened as a preview and made live later with MakeLive. If only the web
+// server update fails, the publication is returned with a NotSynced error.
+func (s *Service) PublishVersion(ctx context.Context, a Actor, name string, archive io.Reader, live bool) (Publication, error) {
 	site, err := s.visibleSite(ctx, a, name)
 	if err != nil {
-		return Site{}, err
+		return Publication{}, err
 	}
 	if err := needWrite(a); err != nil {
-		return Site{}, err
+		return Publication{}, err
 	}
 	first := s.deploys.Current(site.Name) == ""
-	id, err := s.deploys.Deploy(ctx, site.Name, archive)
+	add, action := s.deploys.Deploy, "site.publish"
+	if !live {
+		add, action = s.deploys.Add, "site.publish-not-live"
+	}
+	id, err := add(ctx, site.Name, archive)
 	if err != nil {
 		kind := Internal
 		if errors.Is(err, deploy.ErrBadArchive) {
 			kind = Invalid
 		}
-		return Site{}, newError(kind, err)
+		return Publication{}, newError(kind, err)
 	}
-	slog.Info("deployed", "site", site.Name, "release", id)
-	s.record(ctx, a, "site.publish", site.Name, id)
-	view := s.view(site)
-	// Only the first deployment changes web server config (placeholder ->
-	// files); later ones are just a symlink switch.
-	if first {
-		return view, s.syncSaved(ctx)
+	slog.Info("deployed", "site", site.Name, "release", id, "live", live)
+	s.record(ctx, a, action, site.Name, id)
+	p := Publication{Site: s.view(site), Release: id, Live: live, PreviewURL: s.previewURL(site.Name, id)}
+	// Making a release live is a symlink switch; the web server config
+	// changes only for the first one (placeholder -> files) and for
+	// previews (one route per kept release).
+	if (live && first) || s.previewsServed() {
+		return p, s.syncSaved(ctx)
 	}
-	return view, nil
+	return p, nil
 }
 
 // MakeLive switches a site to an existing release; an empty release means the
-// one before the current.
+// one before the current that was live itself.
 func (s *Service) MakeLive(ctx context.Context, a Actor, name, release string) (Site, error) {
 	site, err := s.visibleSite(ctx, a, name)
 	if err != nil {
@@ -455,6 +512,7 @@ func (s *Service) MakeLive(ctx context.Context, a Actor, name, release string) (
 	if err := needWrite(a); err != nil {
 		return Site{}, err
 	}
+	first := s.deploys.Current(site.Name) == ""
 	id, err := s.deploys.Rollback(site.Name, release)
 	if err != nil {
 		kind := Internal
@@ -465,6 +523,11 @@ func (s *Service) MakeLive(ctx context.Context, a Actor, name, release string) (
 	}
 	slog.Info("made live", "site", site.Name, "release", id)
 	s.record(ctx, a, "site.make-live", site.Name, id)
+	if first {
+		// The site had only versions that were never live: it served the
+		// placeholder until now.
+		return s.view(site), s.syncSaved(ctx)
+	}
 	return s.view(site), nil
 }
 
@@ -491,8 +554,9 @@ func (s *Service) sync(ctx context.Context) error {
 		sites = append(sites, caddy.Site{
 			Name:    site.Name,
 			Domains: site.Domains,
-			Root:    s.deploys.Root(site.Name),
-			Live:    s.deploys.Current(site.Name) != "",
+			Root:     s.deploys.Root(site.Name),
+			Live:     s.deploys.Current(site.Name) != "",
+			Previews: s.caddyPreviews(site.Name),
 		})
 	}
 	redirects, err := s.caddyRedirects(ctx)

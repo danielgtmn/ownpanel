@@ -28,7 +28,8 @@ const maxRequestBytes = 64 << 20
 const instructions = "ownpanel is a hosting panel for static web sites: each site is a set of files " +
 	"(HTML, CSS, JavaScript, images) that ownpanel serves on one or more domains with automatic HTTPS. " +
 	"Every publish creates a new version of the site and makes it live; older versions are kept and " +
-	"can be made live again with make_version_live. Use publish_files for small sites you write " +
+	"can be made live again with make_version_live. With live false a version is only added, so it can " +
+	"be checked at its preview address before it goes live. Use publish_files for small sites you write " +
 	"yourself and create_upload_link for large archives. It also hosts e-mail: mail domains, " +
 	"mailboxes and aliases (mailbox passwords are only set in the web interface, never through " +
 	"these tools). Destructive tools such as delete_site require an explicit confirmation."

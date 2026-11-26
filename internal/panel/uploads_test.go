@@ -32,7 +32,7 @@ func TestUploadLinkSingleUseAndExpiry(t *testing.T) {
 	}
 	creator, _ := tokenActor(t, svc, "ci")
 
-	link, err := svc.CreateUploadLink(ctx, creator, "blog")
+	link, err := svc.CreateUploadLink(ctx, creator, "blog", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestUploadLinkSingleUseAndExpiry(t *testing.T) {
 	wantKind(t, err, NotFound)
 
 	// Expired links are refused, and used up by the attempt.
-	link, err = svc.CreateUploadLink(ctx, creator, "blog")
+	link, err = svc.CreateUploadLink(ctx, creator, "blog", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,12 +70,12 @@ func TestUploadLinkRequiresWriteAccessToTheSite(t *testing.T) {
 		t.Fatal(err)
 	}
 	reader := Actor{UserID: 1, Name: "root", Admin: true, ReadOnly: true, Via: ViaToken, tokenName: "r"}
-	_, err := svc.CreateUploadLink(ctx, reader, "blog")
+	_, err := svc.CreateUploadLink(ctx, reader, "blog", true)
 	wantKind(t, err, Forbidden)
 	other := Actor{UserID: 1, Name: "root", Admin: true, Sites: []string{"x"}, Via: ViaToken, tokenName: "o"}
-	_, err = svc.CreateUploadLink(ctx, other, "blog")
+	_, err = svc.CreateUploadLink(ctx, other, "blog", true)
 	wantKind(t, err, NotFound)
-	_, err = svc.CreateUploadLink(ctx, Actor{}, "blog")
+	_, err = svc.CreateUploadLink(ctx, Actor{}, "blog", true)
 	wantKind(t, err, Unauthenticated)
 }
 
@@ -86,7 +86,7 @@ func TestUploadLinkPublishesAsItsCreator(t *testing.T) {
 		t.Fatal(err)
 	}
 	tok, _ := tokenActor(t, svc, "ci")
-	link, err := svc.CreateUploadLink(ctx, tok, "blog")
+	link, err := svc.CreateUploadLink(ctx, tok, "blog", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,11 +115,11 @@ func TestUploadLinkLimitPerUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < maxOpenUploadLinks; i++ {
-		if _, err := svc.CreateUploadLink(ctx, admin, "blog"); err != nil {
+		if _, err := svc.CreateUploadLink(ctx, admin, "blog", true); err != nil {
 			t.Fatal(err)
 		}
 	}
-	_, err := svc.CreateUploadLink(ctx, admin, "blog")
+	_, err := svc.CreateUploadLink(ctx, admin, "blog", true)
 	wantKind(t, err, Conflict)
 }
 
@@ -130,7 +130,7 @@ func TestUploadLinkEndsWithItsToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	tok, id := tokenActor(t, svc, "ci")
-	link, err := svc.CreateUploadLink(ctx, tok, "blog")
+	link, err := svc.CreateUploadLink(ctx, tok, "blog", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,4 +139,28 @@ func TestUploadLinkEndsWithItsToken(t *testing.T) {
 	}
 	_, err = svc.PublishWithUploadLink(ctx, link.ID, tarGz(t, map[string]string{"index.html": "x"}))
 	wantKind(t, err, NotFound)
+}
+
+func TestUploadLinkWithoutMakingLive(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _ := newService(t)
+	if _, err := svc.SaveSite(ctx, admin, "blog", []string{"blog.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	live, err := svc.Publish(ctx, admin, "blog", tarGz(t, map[string]string{"index.html": "live"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, _ := tokenActor(t, svc, "ci")
+	link, err := svc.CreateUploadLink(ctx, tok, "blog", false)
+	if err != nil || link.Live {
+		t.Fatalf("%+v %v", link, err)
+	}
+	p, err := svc.PublishWithUploadLink(ctx, link.ID, tarGz(t, map[string]string{"index.html": "new"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Live || p.Current != live.Current || p.Release == live.Current || !p.Versions[0].Pending {
+		t.Fatalf("%+v", p)
+	}
 }

@@ -468,6 +468,7 @@ func TestSettingsChecks(t *testing.T) {
 	want := SettingsChecks{
 		DNS:         DNSCheck{State: CheckNotConfigured, Found: []string{}, Expected: []string{}},
 		Certificate: CertificateCheck{State: CheckNotConfigured, Detail: "No panel domain is set yet."},
+		PreviewDNS:  PreviewDNS{State: CheckNotConfigured, Found: []string{}, Expected: []string{}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("without a domain: %+v", got)
