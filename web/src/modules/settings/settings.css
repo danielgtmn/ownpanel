@@ -330,6 +330,13 @@
   font-size: 0.875rem;
 }
 
+.preview-dns {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+}
+
 .build-status {
   display: flex;
   flex-direction: column;

@@ -172,6 +172,68 @@ else
   bad "site without domains: $status $out / $outputs"
 fi
 
+# --- Without making live ---------------------------------------------------
+
+live_before=$(admin "$panel/api/sites/blog" | jq -r .current_release)
+publish OWNPANEL_LIVE=false
+pv=$(sed -n 's/^version=//p' <<<"$outputs")
+purl=$(sed -n 's/^preview-url=//p' <<<"$outputs")
+live_after=$(admin "$panel/api/sites/blog" | jq -r .current_release)
+if [ "$status" != 0 ]; then
+  bad "live false: exit $status: $out"
+elif [ -z "$pv" ] || [ "$pv" = "$live_before" ] || [ "$live_after" != "$live_before" ]; then
+  bad "live false: version '$pv', live before '$live_before', after '$live_after'"
+elif [ -n "$purl" ] || ! grep -q '^::warning.*domain for previews' <<<"$out"; then
+  bad "live false without a preview domain: preview-url '$purl', log: $out"
+elif ! grep -qF "| Live | no" <<<"$summary"; then
+  bad "live false: summary: $summary"
+else
+  ok "live false adds version $pv and leaves $live_before live"
+fi
+check "the version that is not live is unpacked" test -f "$work/data/sites/blog/releases/$pv/index.html"
+
+admin -o /dev/null -X PUT "$panel/api/settings" -d '{"preview_domain": "preview.example.test"}' || die "set preview domain"
+publish OWNPANEL_LIVE=false
+purl=$(sed -n 's/^preview-url=//p' <<<"$outputs")
+pv2=$(sed -n 's/^version=//p' <<<"$outputs")
+listed=$(admin "$panel/api/sites/blog" | jq -r --arg v "$pv2" '.versions[] | select(.id == $v) | .preview_url')
+if [ "$status" = 0 ] && [[ $purl =~ ^http://[a-z2-7]{26}\.preview\.example\.test:18080/\?ownpanel-preview=[a-z2-7]{32}$ ]] &&
+  [ "$purl" = "$listed" ] && grep -qF "Preview: $purl" <<<"$out" && grep -qF "| Preview | $purl |" <<<"$summary"; then
+  ok "live false with a preview domain sets preview-url"
+else
+  bad "preview-url '$purl' (listed '$listed'): $out / $summary"
+fi
+publish
+if [ "$status" = 0 ] && grep -q '^preview-url=http' <<<"$outputs" && grep -qF "| Live | yes |" <<<"$summary"; then
+  ok "a live version has a preview address too"
+else
+  bad "live publish with previews: $outputs / $summary"
+fi
+v2=$(sed -n 's/^version=//p' <<<"$outputs")
+expect_fail "bad live input" "must be true or false" OWNPANEL_LIVE=maybe
+
+# A panel from before versions could be published without going live would
+# make the version live: nothing may be uploaded to it.
+old_port=$(free_port)
+cat >"$work/old.py" <<'EOF2'
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b'{"name":"blog","domains":[],"owner":"x","current_release":"","releases":[]}'
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
+    def do_POST(self):
+        open(sys.argv[2], "w").write("posted")
+        self.send_response(500); self.end_headers()
+    def log_message(self, *a): pass
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+EOF2
+python3 -I "$work/old.py" "$old_port" "$work/old-posted" &
+pids+=($!)
+wait_for "http://127.0.0.1:$old_port/" || die "old panel stub did not start"
+expect_fail "live false on an older panel" "cannot publish without making the version live" OWNPANEL_PANEL="http://127.0.0.1:$old_port" OWNPANEL_LIVE=false
+check "nothing was uploaded to the older panel" test ! -e "$work/old-posted"
+
 # --- Failures ---------------------------------------------------------------
 
 expect_fail "wrong token" "HTTP 401" OWNPANEL_TOKEN=op_wrongwrongwrong

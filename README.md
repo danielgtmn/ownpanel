@@ -113,9 +113,9 @@ made with the cookie must send `X-Ownpanel-Request: 1`.
 | `GET` | `/api/sites` | list sites |
 | `GET` `PUT` | `/api/sites/{name}` | show; create or update with `{"domains": ["example.com"]}` |
 | `DELETE` | `/api/sites/{name}` | remove site and its files |
-| `POST` | `/api/sites/{name}/deployments` | upload a `.zip` or `tar.gz` (max 512 MB); its root becomes the web root (a single top-level folder is unwrapped) |
+| `POST` | `/api/sites/{name}/deployments` | upload a `.zip` or `tar.gz` (max 512 MB); its root becomes the web root (a single top-level folder is unwrapped); `?live=false` adds the version without making it live |
 | `POST` | `/api/uploads/{id}` | upload a `.zip` or `tar.gz` through a one-time upload link (the link is the credential; see MCP) |
-| `POST` | `/api/sites/{name}/rollback` | previous release, or body `{"release": "<id>"}` |
+| `POST` | `/api/sites/{name}/rollback` | make a version live: the last earlier one that was live, or body `{"release": "<id>"}` |
 | `GET` | `/api/sites/{name}/icon` | the site's icon from its live release (`<link rel="icon">` in `index.html`, else `favicon.svg`/`.png`/`.ico`, `apple-touch-icon.png`); `404` if none |
 | `GET` `POST` | `/api/users` | admins: list, create with `{"name", "email", "password", "role"}` (`email` optional) |
 | `PUT` `DELETE` | `/api/users/{id}` | admins: change any of `{"role", "email", "password"}`, delete |
@@ -162,7 +162,9 @@ repository, using a write token limited to the one site (stored as a secret):
     path: dist
 ```
 
-It packs `path`, uploads it, and sets the outputs `version` and `url`. See
+It packs `path`, uploads it, and sets the outputs `version`, `url` and
+`preview-url`. With `live: "false"` the version is only added, to be checked
+at its preview address before it is made live. See
 the wiki page [GitHub Action](https://github.com/danielgtmn/ownpanel/wiki/GitHub-Action)
 for examples (Vite, Astro, Hugo, Jekyll, plain HTML) and error messages.
 
@@ -185,12 +187,12 @@ anything, a token limited to some sites only sees and publishes those.
 
 | Tool | Does |
 |---|---|
-| `list_sites`, `get_site` | sites with domains, owner, live version and all versions (newest first, with time) |
+| `list_sites`, `get_site` | sites with domains, owner, live version and all versions (newest first, with time, state and preview address) |
 | `create_site`, `set_site_domains` | create a site; replace its list of domains |
 | `delete_site` | delete a site with all files; needs `confirm_name` equal to the name |
-| `publish_files` | publish files given directly (text or base64; up to 2000 files, 10 MB) as a new live version |
+| `publish_files` | publish files given directly (text or base64; up to 2000 files, 10 MB) as a new version, live at once or (`live: false`) only added for a preview first |
 | `create_upload_link` | one-time link and `curl` command (valid 15 minutes) to upload a `.zip` or `tar.gz` up to 512 MB |
-| `make_version_live` | switch to a kept version; without one, back to the previous |
+| `make_version_live` | switch to a kept version; without one, back to the last earlier one that was live |
 | `check_site_domains` | do the domains point at this server? |
 
 Without `-panel-domain`, `/mcp` is only reachable on the daemon's own

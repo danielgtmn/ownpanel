@@ -75,7 +75,7 @@ func newSettingsEnv(t *testing.T, flagDomain string) (*env, *failingWeb) {
 
 var settingsKeys = []string{"panel_domain", "panel_domain_locked", "server_ips", "server_ips_locked", "detected_ips",
 	"acme_email", "acme_email_locked", "tls_mode", "setup_complete", "ip_access",
-	"mail_host", "mail_host_locked", "postmaster_address",
+	"mail_host", "mail_host_locked", "postmaster_address", "preview_domain",
 	"mail_blocklists", "mail_blocklists_default", "mail_junk_score", "mail_greylisting"}
 
 type settingsBody struct {
@@ -133,7 +133,7 @@ func TestSettingsRoutesJSONShapes(t *testing.T) {
 
 	rec = e.as("GET", "/api/settings/checks", "")
 	wantStatus(t, rec, 200, "")
-	wantKeys(t, rec.Body.Bytes(), "dns", "certificate")
+	wantKeys(t, rec.Body.Bytes(), "dns", "certificate", "preview_dns")
 	var checks map[string]json.RawMessage
 	json.Unmarshal(rec.Body.Bytes(), &checks)
 	wantKeys(t, checks["dns"], "state", "found", "expected")
