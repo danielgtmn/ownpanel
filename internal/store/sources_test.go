@@ -99,6 +99,11 @@ func TestSiteSources(t *testing.T) {
 		if err != nil || len(list) != 2 || list[0].Site != "blog" || list[1].Site != "docs" {
 			t.Fatalf("sources of the repository: %+v %v", list, err)
 		}
+		// Only GitHub sources, by site name (shop has a Git source now).
+		all, err := s.GitHubSiteSources(ctx)
+		if err != nil || len(all) != 2 || all[0].Site != "blog" || all[1].Site != "docs" {
+			t.Fatalf("GitHub sources: %+v %v", all, err)
+		}
 		if err := s.RenameSourceRepository(ctx, 9001, "acme/website"); err != nil {
 			t.Fatal(err)
 		}

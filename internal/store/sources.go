@@ -136,6 +136,19 @@ func (s *Store) SiteSourcesOfRepository(ctx context.Context, repositoryID int64)
 	return sourcesOf(ctx, s.r, rows)
 }
 
+// GitHubSiteSources lists every source linked to a GitHub repository, by
+// site name.
+func (s *Store) GitHubSiteSources(ctx context.Context) ([]SiteSource, error) {
+	rows, err := s.r.sources.Find(ctx, ablage.Query{
+		Where:   ablage.Eq("kind", SourceGitHub),
+		OrderBy: []ablage.Order{ablage.Asc("site_name")},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return sourcesOf(ctx, s.r, rows)
+}
+
 // PutSiteSource links a site to a source, replacing the one it had.
 // by is the id of the user who links it ("" for none).
 func (s *Store) PutSiteSource(ctx context.Context, src SiteSource, by string) (SiteSource, error) {

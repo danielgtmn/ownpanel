@@ -2,6 +2,7 @@ package panel
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/ed25519"
@@ -15,9 +16,11 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/danielgtmn/ownpanel/internal/build/buildtest"
 	"github.com/danielgtmn/ownpanel/internal/gitsource"
 	"github.com/danielgtmn/ownpanel/internal/gitsource/gitsourcetest"
 	"github.com/danielgtmn/ownpanel/internal/store"
@@ -622,4 +625,54 @@ func TestGitChecksAreRateLimited(t *testing.T) {
 	if _, err := g.svc.InspectGitRepository(ctx, admin, "bobsite", g.addr); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// A build of a site linked by address gets the commit's files through the
+// panel's own fetcher.
+func TestGitSourceBuildCommit(t *testing.T) {
+	g := newGitWorld(t)
+	ctx := context.Background()
+	fake := buildtest.Start(t)
+	g.svc.builds = fake.Client()
+	g.svc.build.poll = 5 * time.Millisecond
+	rec := &teeSources{inner: g.svc.build.sources}
+	g.svc.build.sources = rec
+	g.link(bob, "bobsite")
+	commit := g.repo.Head("main")
+	res, err := g.svc.BuildCommit(ctx, bob, SourceRef{Site: "bobsite", Commit: commit}, settings, true, "")
+	if err != nil || res.Status != RunSucceeded {
+		t.Fatalf("%+v %v", res, err)
+	}
+	files := untar(t, io.NopCloser(bytes.NewReader(rec.buf.Bytes())))
+	if files["index.html"] != "<h1>bob</h1>" || files["a/b.txt"] != "b" {
+		t.Fatalf("source handed to the build: %v", files)
+	}
+	// A commit the branch no longer points at: the reason is told.
+	g.repo.Commit("newer", map[string]string{"index.html": "newer"})
+	_, err = g.svc.BuildCommit(ctx, bob, SourceRef{Site: "bobsite", Commit: commit}, settings, true, "")
+	wantKind(t, err, Unavailable)
+	if !strings.Contains(err.Error(), "now points at commit") {
+		t.Fatalf("message: %v", err)
+	}
+	// GitHub sources are not fetched by the panel yet.
+	_, err = g.svc.BuildCommit(ctx, admin, SourceRef{Site: "rootsite", Commit: commit}, settings, true, "")
+	wantKind(t, err, Unavailable)
+}
+
+// teeSources keeps a copy of what the fetcher hands to the build.
+type teeSources struct {
+	inner SourceFetcher
+	buf   bytes.Buffer
+}
+
+func (t *teeSources) FetchSource(ctx context.Context, ref SourceRef) (io.ReadCloser, int, error) {
+	r, strip, err := t.inner.FetchSource(ctx, ref)
+	if err != nil {
+		return nil, 0, err
+	}
+	t.buf.Reset()
+	return struct {
+		io.Reader
+		io.Closer
+	}{io.TeeReader(r, &t.buf), r}, strip, nil
 }

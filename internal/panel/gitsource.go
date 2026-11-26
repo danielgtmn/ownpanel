@@ -759,3 +759,19 @@ func validCommit(s string) bool {
 	}
 	return true
 }
+
+// siteSources is the SourceFetcher of builds when Config.Sources is nil:
+// sources of kind git are fetched by FetchGitSource; fetching a commit
+// from a GitHub connection is not there yet.
+type siteSources struct{ s *Service }
+
+func (f siteSources) FetchSource(ctx context.Context, ref SourceRef) (io.ReadCloser, int, error) {
+	src, err := f.s.store.SiteSource(ctx, ref.Site)
+	if err != nil {
+		return nil, 0, storeError(err)
+	}
+	if src.Kind != store.SourceGit {
+		return nil, 0, errorf(Unavailable, "fetching a commit from a GitHub connection is not available yet")
+	}
+	return f.s.FetchGitSource(ctx, ref.Site, ref.Commit)
+}

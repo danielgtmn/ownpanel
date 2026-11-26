@@ -271,6 +271,10 @@ func serve(args []string) error {
 	// An update restarts the daemon: put its result in the activity log.
 	go svc.WatchUpdateResult(ctx, 3*time.Second, 10*time.Minute)
 
+	// Builds the build service knows from before this start have lost
+	// their caller: stop and remove them.
+	go svc.RemoveStaleBuilds(ctx)
+
 	// Initial sync, then heal drift (e.g. Caddy restarted).
 	go svc.Run(ctx, *interval)
 
