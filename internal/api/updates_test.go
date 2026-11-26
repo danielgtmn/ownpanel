@@ -328,7 +328,13 @@ func TestUpdateResultIsWatchedAfterRestart(t *testing.T) {
 		close(done)
 	}()
 	time.Sleep(50 * time.Millisecond)
-	os.WriteFile(status, []byte(`{"id":"auto","state":"succeeded","started_at":"2999-01-01T00:00:00Z","finished_at":"2999-01-01T00:01:00Z","from":"v1.1.0","to":"v1.2.0"}`), 0o640)
+	// Replace the file in one step, as the update worker does: a plain
+	// write truncates it first, and the watcher could read it empty.
+	tmp := status + ".tmp"
+	os.WriteFile(tmp, []byte(`{"id":"auto","state":"succeeded","started_at":"2999-01-01T00:00:00Z","finished_at":"2999-01-01T00:01:00Z","from":"v1.1.0","to":"v1.2.0"}`), 0o640)
+	if err := os.Rename(tmp, status); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
