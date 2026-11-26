@@ -106,7 +106,11 @@ export function OutOfOfficeSection({ data, locked, save }: { data: Filters; lock
   return (
     <Section
       title="Out-of-office reply"
-      description="Answers mail automatically while you're away, for example on holiday."
+      description={
+        data.mailbox
+          ? `Answers mail to ${data.mailbox} automatically, for example during holidays.`
+          : "Answers mail automatically while you're away, for example on holiday."
+      }
     >
       <form className="form" onSubmit={submit} noValidate>
         {setBy ? (
@@ -119,7 +123,7 @@ export function OutOfOfficeSection({ data, locked, save }: { data: Filters; lock
             draft={draft}
             errors={errors}
             switchLabel="Reply automatically"
-            switchDescription="People who write to you get this reply, each of them once in the period set below."
+            switchDescription={`People who write to ${data.mailbox ?? 'you'} get this reply, each of them once in the period set below.`}
             onChange={(change) => {
               setDraft((current) => ({ ...current, ...change }))
               setErrors({})
@@ -173,7 +177,14 @@ export function ForwardingSection({ data, locked, save }: { data: Filters; locke
   }
 
   return (
-    <Section title="Forwarding" description="Sends all your new mail on to another address.">
+    <Section
+      title="Forwarding"
+      description={
+        data.mailbox
+          ? `Sends all new mail of ${data.mailbox} on to another address.`
+          : 'Sends all your new mail on to another address.'
+      }
+    >
       <form className="form" onSubmit={submit} noValidate>
         {off ? (
           <p className="notice account-notice-first">
@@ -189,7 +200,7 @@ export function ForwardingSection({ data, locked, save }: { data: Filters; locke
           <ForwardingFields
             draft={draft}
             error={error}
-            switchLabel="Forward my mail"
+            switchLabel={data.mailbox ? 'Forward its mail' : 'Forward my mail'}
             onChange={(change) => {
               setDraft((current) => ({ ...current, ...change }))
               setError(null)

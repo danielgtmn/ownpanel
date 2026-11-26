@@ -168,6 +168,24 @@ describe('account area', () => {
     expect(html).not.toContain('makes it yours')
   })
 
+  it('speaks of the managed mailbox, not of the person, in its out-of-office reply and forwarding', () => {
+    const data = { ...filters, mailbox: 'team@example.com' }
+    const save = async () => null
+    const html = renderToStaticMarkup(
+      <>
+        <OutOfOfficeSection data={data} locked={false} save={save} />
+        <ForwardingSection data={data} locked={false} save={save} />
+      </>,
+    )
+    expect(html).toContain('Answers mail to team@example.com automatically')
+    expect(html).toContain('People who write to team@example.com get this reply')
+    expect(html).toContain('Sends all new mail of team@example.com on to another address.')
+    expect(html).toContain('Forward its mail')
+    expect(html).not.toMatch(/you&#x27;re away|write to you|your new mail|Forward my mail/)
+    const own = renderToStaticMarkup(<OutOfOfficeSection data={filters} locked={false} save={save} />)
+    expect(own).toContain('People who write to you get this reply')
+  })
+
   it('shows who set the out-of-office reply and locks the editors for filters from a mail program', () => {
     const save = async () => null
     const html = renderToStaticMarkup(
