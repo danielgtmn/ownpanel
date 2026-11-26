@@ -501,3 +501,22 @@ func TestGracefulShutdown(t *testing.T) {
 		t.Fatal("message lost")
 	}
 }
+
+// A generation started by a configuration change and retired before its
+// Serve registered the listener must not keep Shutdown waiting.
+func TestShutdownRightAfterReconfigure(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		e := start(t, testConfig(t))
+		cfg := testConfig(t)
+		cfg.Limits.MaxRecipients = 9 + i
+		e.dir.Store(directory.New(cfg))
+		e.srv.Reconfigure()
+		done := make(chan error, 1)
+		go func() { done <- e.srv.Shutdown(context.Background()) }()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("round %d: Shutdown still waiting", i)
+		}
+	}
+}

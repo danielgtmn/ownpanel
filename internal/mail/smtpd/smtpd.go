@@ -269,6 +269,11 @@ func (s *Server) retire(g *generation, ctx context.Context) {
 	if err := g.srv.Shutdown(ctx); err != nil {
 		g.srv.Close()
 	}
+	// go-smtp closes only listeners its Serve has registered. A generation
+	// retired right after it was started (a configuration change followed
+	// by a shutdown) may not have got that far, and its Accept would wait
+	// forever; closing our own listener ends it either way.
+	g.ln.Close()
 	g.run.Wait()
 }
 
