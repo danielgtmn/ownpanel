@@ -1,7 +1,7 @@
 // Package store keeps the panel's data: users, access tokens, sites with
 // their domains, redirects, DNS connections, mail domains with mailboxes and
-// aliases, settings and the activity log. It knows nothing about
-// permissions; internal/panel decides who may do what.
+// aliases, GitHub connections, settings and the activity log. It knows
+// nothing about permissions; internal/panel decides who may do what.
 //
 // The data lives in typed ablage repositories (github.com/danielgtmn/ablage):
 // on SQLite in ownpanel.db (Open), or in memory for tests (New with a

@@ -218,6 +218,137 @@ type noForwardingRow struct {
 	MailboxID string `db:",unique,ref=mailboxes,cascade"`
 }
 
+// githubAppRow is a GitHub App the panel created. AppID is GitHub's id of
+// the App (external data, unique); the row id is the panel's own.
+// OwnerType is "User" or "Organization", checked in Go (checkGitHubApp).
+// PrivateKey, WebhookSecret and ClientSecret are sealed by the panel
+// (internal/panel/github.go names the purposes); they are never stored in
+// the clear and never leave the panel.
+type githubAppRow struct {
+	ID            string
+	AppID         int64 `db:",unique"`
+	Slug          string
+	Name          string
+	ClientID      string
+	OwnerLogin    string
+	OwnerType     string
+	HTMLURL       string `db:"html_url"`
+	PrivateKey    []byte
+	WebhookSecret []byte
+	ClientSecret  []byte
+	CreatedBy     *string `db:",ref=users,setnull,index"`
+	CreatedAt     time.Time
+	LastCheckedAt *time.Time
+	LastError     string
+}
+
+// githubInstallationRow is an installation as GitHub last reported it
+// (GitHub stays the source of truth; a refresh replaces the rows of an
+// App). The id is GitHub's installation id in decimal: it is the natural
+// key, GitHub's webhooks and the install redirect name it, and it never
+// changes. AccountType ("User", "Organization") and RepositorySelection
+// ("all", "selected") are checked in Go (checkGitHubInstallation).
+// RepositoryCount is nil until the repositories were listed once.
+type githubInstallationRow struct {
+	ID                  string
+	AppID               string `db:",ref=github_apps,cascade,index"`
+	AccountLogin        string
+	AccountType         string
+	RepositorySelection string
+	Suspended           bool
+	RepositoryCount     *int
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+// siteSourceRow is where a site's code comes from: at most one per site
+// (unique SiteName), removed with the site. Kind is "github" or "git";
+// checkSource stands for the former table constraints.
+//
+// Kind github: a repository of a GitHub App installation, identified by
+// GitHub's numeric RepositoryID (external data, it survives renames);
+// Repository holds owner/name for display and is refreshed whenever the
+// panel sees the repository. InstallationID becomes nil when the
+// installation or its whole connection is removed: the source stays, so
+// the site shows "connection missing" with the repository it was linked
+// to, until someone links it again or unlinks it.
+//
+// Kind git: any Git host, fetched with a deploy key (#111). Repository
+// holds the clone address; DeployKey and NotifySecret are sealed by the
+// panel and stay empty until #111 fills them in.
+type siteSourceRow struct {
+	ID             string
+	SiteName       string `db:",ref=sites,cascade,unique"`
+	Kind           string
+	InstallationID *string `db:",ref=github_installations,setnull,index"`
+	RepositoryID   *int64  `db:",index"`
+	Repository     string
+	Branch         string
+	PublishOnPush  bool
+	DeployKey      []byte
+	NotifySecret   []byte
+	CreatedBy      *string `db:",ref=users,setnull,index"`
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// siteRunRow is one run of a site: one entry per push (later also "Build
+// now") that should build and publish it. A run is only recorded here;
+// building it is #113, which takes queued runs and reports their end
+// (internal/panel/runs.go). The panel keeps the last runs of each site and
+// removes older ones. The id is ablage's (ascending in the order the runs
+// were recorded, so "newest first" is by id).
+//
+// Status is queued, running, succeeded, failed, cancelled or skipped;
+// CommitSHA is 40 hex digits; both are checked in Go (runs.go). SourceKind,
+// RepositoryID (GitHub's id, external data) and Repository are the source
+// as it was when the run was recorded. Everything about the commit comes
+// from GitHub's signed delivery and is text for display only: Message
+// (first line), AuthorName, AuthorLogin and Pusher are shortened and never
+// interpreted. Detail says why a run was skipped, failed or cancelled.
+type siteRunRow struct {
+	ID           string
+	SiteName     string `db:",ref=sites,cascade"`
+	Trigger      string
+	Status       string
+	SourceKind   string
+	RepositoryID int64
+	Repository   string
+	Ref          string
+	CommitSHA    string
+	Message      string
+	AuthorName   string
+	AuthorLogin  string
+	Pusher       string
+	Detail       string
+	CreatedAt    time.Time
+	StartedAt    *time.Time
+	FinishedAt   *time.Time
+}
+
+// githubDeliveryRow is a GitHub delivery already handled, so one that
+// arrives again is ignored. The id is GitHub's X-GitHub-Delivery (the
+// natural key: it is what a repeat is recognised by). Kept for a bounded
+// time; AppID is the panel's id of the App that signed it.
+type githubDeliveryRow struct {
+	ID         string
+	AppID      string    `db:",ref=github_apps,cascade,index"`
+	ReceivedAt time.Time `db:",index"`
+}
+
+// githubRepositoryGoneRow is a repository GitHub reported as no longer
+// seen by an installation (taken away from it, or deleted). The id is
+// "<installation>/<repository>" with GitHub's ids. Removed when GitHub
+// shows the repository again or a site is linked to it anew, and with the
+// installation (InstallationID references its row, whose id is GitHub's
+// installation id).
+type githubRepositoryGoneRow struct {
+	ID             string
+	InstallationID string `db:",ref=github_installations,cascade,index"`
+	RepositoryID   int64
+	Since          time.Time
+}
+
 // formatRow marks the storage format: a row with id formatAblage means the
 // database is kept by ablage (legacy.go).
 type formatRow struct {
@@ -247,6 +378,12 @@ type repos struct {
 	appPasswords *ablage.Repository[appPasswordRow]
 	grants       *ablage.Repository[grantRow]
 	noForwarding *ablage.Repository[noForwardingRow]
+	githubApps   *ablage.Repository[githubAppRow]
+	githubInsts  *ablage.Repository[githubInstallationRow]
+	sources      *ablage.Repository[siteSourceRow]
+	runs         *ablage.Repository[siteRunRow]
+	deliveries   *ablage.Repository[githubDeliveryRow]
+	reposGone    *ablage.Repository[githubRepositoryGoneRow]
 	format       *ablage.Repository[formatRow]
 }
 
@@ -298,6 +435,19 @@ func newRepos(st ablage.Store) (repos, error) {
 	add(err)
 	r.noForwarding, err = ablage.NewRepository[noForwardingRow](st, "mailbox_no_forwarding")
 	add(err)
+	r.githubApps, err = ablage.NewRepository[githubAppRow](st, "github_apps")
+	add(err)
+	r.githubInsts, err = ablage.NewRepository[githubInstallationRow](st, "github_installations")
+	add(err)
+	r.sources, err = ablage.NewRepository[siteSourceRow](st, "site_sources")
+	add(err)
+	r.runs, err = ablage.NewRepository[siteRunRow](st, "site_runs", ablage.WithIndex("site_name", "status"),
+		ablage.WithIndex("status", "site_name"))
+	add(err)
+	r.deliveries, err = ablage.NewRepository[githubDeliveryRow](st, "github_deliveries")
+	add(err)
+	r.reposGone, err = ablage.NewRepository[githubRepositoryGoneRow](st, "github_repositories_gone")
+	add(err)
 	r.format, err = ablage.NewRepository[formatRow](st, "store_format")
 	add(err)
 	return r, errors.Join(errs...)
@@ -326,6 +476,12 @@ func (r repos) with(tx ablage.Store) repos {
 		appPasswords: r.appPasswords.With(tx),
 		grants:       r.grants.With(tx),
 		noForwarding: r.noForwarding.With(tx),
+		githubApps:   r.githubApps.With(tx),
+		githubInsts:  r.githubInsts.With(tx),
+		sources:      r.sources.With(tx),
+		runs:         r.runs.With(tx),
+		deliveries:   r.deliveries.With(tx),
+		reposGone:    r.reposGone.With(tx),
 		format:       r.format.With(tx),
 	}
 }

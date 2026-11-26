@@ -82,6 +82,33 @@ A new version can also be added while the live one stays: visitors keep seeing t
 
 A site whose first version is published this way keeps answering "no content yet" on its domains until a version is made live. Who may publish this way is the same as for publishing: write access to the site.
 
+## Building a site from its source
+
+On a server where builds are set up ([[Installation|Installation#building-sites]]), the panel can also build a site and publish what the build produces: the source goes to the isolated build service, the build command runs there (for example `npm ci && npm run build`), and the output folder (for example `dist`) becomes a new version through the same path as an uploaded archive, with the same limits and checks. Building from a linked repository on every push comes with [#58](https://github.com/danielgtmn/ownpanel/issues/58); for now an administrator can build from an uploaded source archive:
+
+| Way | How |
+|---|---|
+| API | `POST /api/sites/{name}/builds` with the parts `settings` and `source`; see [[API|API]] |
+| MCP | `build_site` with the source files; see [[MCP|MCP]] |
+
+```sh
+cat > settings.json <<'JSON'
+{"command": "npm ci\nnpm run build", "output": "dist", "image": "node-24",
+ "env": {"NODE_ENV": "production"}, "secrets": {}, "live": false}
+JSON
+tar -czf source.tar.gz --exclude node_modules --exclude .git .
+curl --fail-with-body -H "Authorization: Bearer $TOKEN" \
+  -F 'settings=<settings.json' -F 'source=@source.tar.gz' \
+  https://panel.example.com/api/sites/demo/builds
+```
+
+- `command` runs with `sh` in the source folder and stops at the first failing line. `output` is relative to the source; `.` is the source itself. `image` is one of the build images (`node-24`, `node-22`; `GET /api/builds/status` lists them).
+- `env` and `secrets` are environment variables of the build. The values of `secrets` are replaced with `***` in the build's log; neither appears in the panel's log, the activity log, error messages or answers. Masking is a courtesy, not a barrier ([[Security|Security#builds]]): give a build only the secrets it needs.
+- The answer comes when the build has ended. A build that **fails, is cancelled or runs out of time never changes the site**: no version is added and the live version stays. An output that contains a link, a device or anything but plain files and folders, or that is too large, fails the build the same way. After success the output is a new version, live or not (`live`), exactly as if it had been uploaded.
+- **One build per site at a time.** A build requested while another of the same site runs waits; a newer request replaces one that waits (it ends as `skipped`). The build service also limits how many builds run on the server at once; when too many wait there, the request is refused with `429` and can be repeated later.
+- The panel waits for a build at most the longest build time plus half an hour (90 minutes); closing the request cancels the build. Builds that run longer than about an hour may lose their answer: the HTTP request is limited too.
+- When the panel restarts, builds the build service still runs for it are stopped and removed: their requests are gone, so nobody would publish them.
+
 ## Versions
 
 Every publish creates a version. Its id starts with a UTC timestamp, for example `20260131T120000.000Z-ab12cd`, so ids sort by time.
@@ -114,6 +141,19 @@ Every kept version, live or not, can be opened on an address of its own once an 
 - A preview disappears when its version is removed (pruned or the site deleted); its address then answers `404` "Unknown preview.". Addresses stay the same across restarts and when the preview domain changes only the domain part changes; a backup restored without its `secret.key` gives every version a new address.
 - **Certificates** are obtained only when a preview is opened for the first time, one per opened version, and only after the web server asked the panel that this exact name is a kept version. Names below the preview domain that are not previews get no certificate. See [[Security|Security]].
 - The preview domain and everything below it are reserved: no site, redirect, panel domain or mail server name may be below it.
+
+## Source: repository and branch
+
+A site can be linked to a **repository and branch** its code comes from, with **publish on push** on or off. On the site page, the **Source** section shows the repository (with a link to it), the branch, whether a push publishes, and who linked it; **Link repository** or **Change** opens a dialog to choose the repository and one of its branches, **Unlink** removes the link.
+
+> **Not yet:** a push to the linked branch is recorded as a run of the site (the Source section shows the latest one, see [[GitHub|GitHub#what-happens-on-a-push]]), but nothing is built or published yet: the run waits until building on the server is available ([#113](https://github.com/danielgtmn/ownpanel/issues/113)). Until then, publish files as before. The answers of the API and MCP say so with `"publishing_available": false`.
+
+- **Where repositories come from:** a GitHub account or organisation connected under Settings → GitHub ([[GitHub|GitHub]]). The panel keeps GitHub's numeric id of the repository, so a renamed repository stays linked; the name shown is refreshed whenever the panel sees the repository.
+- **Who may link:** linking (and changing the branch or publish on push, which links anew) needs the same rights as changing the site (its owner or an administrator, a `write` token, a token limited to sites only for its sites) **and** the repository must be usable by that person: only administrators may use the connected repositories. A member therefore cannot link their site to an organisation's repository; to them those repositories do not exist. Members see a link an administrator made on their site and may unlink it.
+- **Checks:** the panel asks GitHub, as the connection, whether the repository is still shared with the panel and whether the branch exists, and refuses otherwise. Branch names follow Git's rules: at most 255 characters, no spaces or control characters, none of `~ ^ : ? * [ \`, no `..`, `//` or `@{`, no leading `-` or `/`, no part starting with `.` or ending in `.lock`, not `@` or `HEAD`.
+- **Status:** `linked`; `connection_missing` (the GitHub connection or its installation was removed: link again or unlink); `suspended` (access is paused on GitHub); `repository_missing` (the connection no longer sees the repository); `unchecked` (GitHub could not be asked; `problem` says why).
+- A site has at most one source. Deleting the site deletes its link; a new site of the same name starts without one. Linking and unlinking appear in the activity log (repository, branch and publish on push; never a token).
+- Later, any Git host with a deploy key ([#111](https://github.com/danielgtmn/ownpanel/issues/111)) is a second kind of source; the stored link already has room for it.
 
 ## Recognised kinds of sites
 

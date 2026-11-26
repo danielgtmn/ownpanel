@@ -11,6 +11,7 @@ What it does today:
 - **DNS at Hetzner.** Add or remove domains at Hetzner, edit their DNS records, check whether a domain points at the server, and fix it with one click.
 - **Redirects.** Choose whether a site lives at `example.com` or `www.example.com`, redirect old paths, or send a whole domain to another address.
 - **E-mail.** Its own mail server: mailboxes for mail programs, forwarding, signed outgoing mail, spam checks, DNS records set up for you, and limits that stop a hijacked mailbox from sending.
+- **GitHub connection.** Administrators connect a GitHub account or organisation in a few clicks: the panel creates its own app on GitHub and sees the repositories you choose. Publishing from them on push is planned.
 - **MCP for AI agents.** The same operations are available as tools for AI assistants such as Claude Code, under the same permission rules.
 
 ## Status
@@ -32,6 +33,7 @@ Using it:
 - [[Sites and Publishing|Sites-and-Publishing]]: sites, domains, archives, versions
 - [[Users and Access|Users-and-Access]]: roles, sign-in, access tokens, activity log
 - [[DNS|DNS]]: connect Hetzner, manage domains and records, point domains at the server
+- [[GitHub|GitHub]]: connect GitHub accounts and organisations
 - [[Redirects|Redirects]]: main address with or without www, path and domain redirects
 - [[E-Mail|E-Mail]]: mailboxes, forwarding, mail programs, DNS records, limits
 - [[MCP|MCP]]: connect AI agents

@@ -11,4 +11,5 @@ var _ = expectTools(map[string]toolWant{
 	"publish_files":      {},
 	"check_site_domains": {readOnly: true, idempotent: true},
 	"create_upload_link": {},
+	"build_site":         {},
 })

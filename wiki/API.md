@@ -34,10 +34,11 @@ Errors are JSON with a readable sentence:
 | `401` | not signed in, wrong credentials, or an invalid token |
 | `403` | known, but not allowed (read-only or site-limited token, not an admin, missing header) |
 | `404` | missing, or not visible to you (the two look the same); unknown endpoint |
+| `422` | a build ran and failed; the answer carries its result |
 | `409` | cannot be done in the current state: name taken, nothing to go back to, last admin, user still owns sites, setup already done, another import of the mailbox running |
 | `413` | a file or part of an upload is too large |
-| `429` | too many failed sign-in attempts, too many sign-ins at the same moment, Hetzner's request limit was reached, or too many mail imports in an hour |
-| `502` | the change is saved but the web server could not be updated yet (the loop retries), or an outside service such as Hetzner or another mail server is unavailable or refused (for an import: its answer, never the password) |
+| `429` | the build service is busy, too many failed sign-in attempts, too many sign-ins at the same moment, Hetzner's or GitHub's request limit was reached, or too many mail imports in an hour |
+| `502` | the change is saved but the web server could not be updated yet (the loop retries), or an outside service such as Hetzner, GitHub or another mail server is unavailable or refused (for an import: its answer, never the password) |
 | `507` | not enough free disk space on the server (mail import) |
 | `500` | something went wrong on the server; the details are only in the log |
 
@@ -55,6 +56,8 @@ Every id the API returns or takes is a **string**: `"id": "42"`, `"connection_id
 
 **Publication** (the answer to publishing): a Site plus `{"published_release", "published_live": bool, "preview_url"}` for the new version. When only the web server could not be updated (`502`), the answer carries the Publication next to `error`: the version exists.
 
+**Build result** (the answer to building a site): `{"status", "reason", "message", "exit_code", "log_tail", "publication"}`. `status` is `succeeded`, `failed`, `cancelled` or `skipped` (a newer build of the site replaced it before it started); `reason` says why it failed: `exit` (the command failed, `exit_code` is set), `timeout`, `memory`, `disk`, `output` (the output folder is missing, holds something that is not a plain file or folder, is too large or cannot be published), `source`, `unprotected` or `internal`. `log_tail` is the end of the build's log with the values of `secrets` replaced by `***`; it is left out when a secret is shorter than 4 characters. `publication` is the Publication after success.
+
 **User:** `{"id", "name", "email", "role", "created_at"}`, role `"admin"` or `"member"`; `email` is `""` when the person has none.
 
 **Token:** `{"id", "name", "access", "sites", "created_at", "last_used_at", "expires_at", "expired"}`. `sites` is `null` for all sites; `expires_at` is `null` for a token that never expires. Creating a token also returns `"token"` (the secret, shown once).
@@ -64,6 +67,14 @@ Every id the API returns or takes is a **string**: `"id": "42"`, `"connection_id
 **DNS connection:** `{"id", "provider", "name", "owner", "created_at", "last_checked_at", "last_error", "can_write", "zone_count"}`. `can_write` and `zone_count` are `null` while unknown; the token is never returned.
 
 **Record set:** `{"name", "type", "ttl", "values": [..], "locked"}`. `name` is `@` for the zone itself; `ttl` is `null` for the zone default; TXT values are plain text.
+
+**GitHub connection:** `{"id", "app_id", "name", "slug", "owner", "owner_type", "html_url", "settings_url", "created_by", "created_at", "last_checked_at", "last_error", "installations": [{"id", "account", "account_type", "repository_selection", "suspended", "repository_count", "settings_url"}, …]}`. `owner_type` and `account_type` are `"user"` or `"organization"`; `repository_selection` is `"all"` or `"selected"`; `repository_count` is `null` until listed. `id` is the panel's id of the connection, a string like every id the panel makes; `app_id`, the installations' `id` and the repositories' `id` are GitHub's own ids and stay numbers. The app's key and secrets are never returned.
+
+**GitHub repository:** `{"id", "installation_id", "owner", "name", "full_name", "private", "archived", "default_branch", "html_url"}`.
+
+**Site source:** `{"site", "source", "publishing_available", "last_run"}`. `source` is `null` when the site is not linked, else `{"kind", "repository", "repository_id", "installation_id", "account", "url", "branch", "publish_on_push", "status", "problem", "linked_by", "linked_at"}`: `kind` is `"github"`; `repository` is `owner/name` as last seen; `installation_id` is left out once the connection was removed; `status` is `linked`, `connection_missing`, `suspended`, `repository_missing` or `unchecked` (then `problem` says why). `publishing_available` is `false` while pushes are not built and published yet. `last_run` is the site's newest run or `null`. See [[Sites and Publishing|Sites-and-Publishing#source-repository-and-branch]].
+
+**Run:** `{"id", "site", "trigger", "status", "repository", "ref", "branch", "commit", "short_commit", "message", "author_name", "author_login", "pusher", "detail", "waiting", "created_at", "started_at", "finished_at"}`. `id` is a string; `trigger` is `"push"`; `status` is `queued`, `running`, `succeeded`, `failed`, `cancelled` or `skipped` (replaced by a newer push before it started); `commit` is the full commit id; `message` (first line, at most 200 characters), `author_name` and `pusher` come from the repository and are plain text, not markup; `waiting` is set on a queued run while the server cannot build yet; `detail` says why a run was skipped, failed or cancelled. See [[GitHub|GitHub#what-happens-on-a-push]].
 
 **Redirect:** `{"id", "owner", "source_domain", "source_path", "target", "code", "keep_path", "keep_query", "created_at"}`. `source_path` is `""` for a whole-domain redirect, otherwise `/exact` or a prefix `/path/*`; `code` is `301`, `302`, `307` or `308`. See [[Redirects|Redirects]].
 
@@ -136,6 +147,13 @@ Domains whose DNS is managed elsewhere: kept in your panel as domains of their o
 | `POST` | `/api/sites/{name}/deployments` | write, own site | raw `.zip` or `.tar.gz` body; `?live=false` adds the version without making it live | `201` Publication |
 | `POST` | `/api/sites/{name}/rollback` | write, own site | optional `{"release": "<id>"}`; no body means the last earlier version that was live | Site |
 | `GET` | `/api/sites/{name}/icon` | anyone, own site | | the icon of the live version: a `<link rel="icon">` (or `shortcut icon`, `apple-touch-icon`) in `index.html` pointing at a file in the same version or a `data:` URL up to 64 KB, else `favicon.svg`, `favicon.png`, `favicon.ico` or `apple-touch-icon.png`; PNG, ICO, SVG, WebP, GIF or JPEG up to 256 KB. Nothing is fetched from elsewhere. `404` if there is none |
+| `POST` | `/api/sites/{name}/builds` | admins (signed in, or an unrestricted write token) | `multipart/form-data` with two parts in this order: `settings` (JSON `{"command", "output", "image", "env": {..}, "secrets": {..}, "live"}`) and `source` (the source tree as `.tar.gz`, up to 512 MB) | `201` Build result once the build has ended. A build that ran and failed answers `422` with `"code": "build_failed"` next to the result; one replaced by a newer build of the site before it started `409` with `"code": "build_replaced"`. `429` when the build service is busy, `502` when it is unavailable. See [[Sites and Publishing\|Sites-and-Publishing#building-a-site-from-its-source]] |
+| `GET` | `/api/sites/{name}/source` | anyone, own site | | Site source. Asks GitHub (through the list kept for a minute) whether the repository is still there and refreshes its name |
+| `PUT` | `/api/sites/{name}/source` | write, own site, and the repository must be usable by you (administrators only) | `{"installation_id", "repository_id", "branch", "publish_on_push"}` | Site source. Links the site, replacing its link. `400` for an invalid branch name or a branch the repository does not have; `404` for a repository you may not use, one the connection does not see, or a site you may not see |
+| `DELETE` | `/api/sites/{name}/source` | write, own site | | `204`; `404` if the site is not linked |
+| `GET` | `/api/sites/{name}/source/repositories` | anyone, own site | | `{"connected", "repositories": [GitHub repository with "account", …], "problems": [..], "truncated"}`: the repositories you may link the site to. Empty (and `connected` false) for anyone but administrators. `problems` lists accounts that could not be listed |
+| `GET` | `/api/sites/{name}/source/branches?installation_id=…&repository_id=…` | own site, repository usable by you | | `{"branches": [..], "default_branch", "truncated"}` |
+| `GET` | `/api/sites/{name}/runs` | anyone, own site | | `{"site", "runs": [Run, …], "kept", "publishing_available"}`: the newest runs, newest first; `kept` is how many the panel keeps per site (30) |
 | `POST` | `/api/uploads/{id}` | open (upload link) | raw archive body | `201` Publication (made live or not, as the link was created); `404` for unknown, used or expired links |
 | `GET` | `/api/previews/certificate-allowed?domain=<name>` | only the web server on this machine | | `200` if the name is the preview address of a kept version, else `404`. Asked by Caddy before it obtains a certificate for a preview ([[Security|Security#previews]]) |
 
@@ -186,6 +204,25 @@ Domains whose DNS is managed elsewhere: kept in your panel as domains of their o
 | `POST` | `/api/redirects` | write; domain redirects need a token that is not limited to sites | `{"source_domain", "source_path", "target", "code", "keep_path", "keep_query"}` | `201` Redirect |
 | `PUT` | `/api/redirects/{id}` | write; owner, admin, or (path redirects) whoever may change the site | same as `POST` | Redirect |
 | `DELETE` | `/api/redirects/{id}` | same | | `204` |
+
+### GitHub
+
+Connecting an account is a browser flow with a stop at GitHub ([[GitHub|GitHub]]). "Admin, signed in" means an administrator with a password sign-in; those steps are bound to that very sign-in. "Admin" also allows an unrestricted `write` token; "admin read" also a read-only token. Members get `403`.
+
+| Method | Path | Who | Request | Response |
+|---|---|---|---|---|
+| `GET` | `/api/github` | admin read | | `{"ready", "problem", "apps": [GitHub connection, …]}`. `ready` is false (and `problem` says why) without a panel domain with HTTPS |
+| `POST` | `/api/github/apps` | admin, signed in | `{"organization": "my-org"}` (`""` for your own account) | `{"url"}`: the panel's page (`/api/github/manifest?state=…`) to open in the browser; it sends you on to GitHub. `409` without a panel domain with HTTPS or when the organisation is already connected |
+| `GET` | `/api/github/manifest?state=…` | admin, signed in, same sign-in | | an HTML page with the form that creates the app on GitHub, with its own content security policy |
+| `GET` | `/api/github/app-created?code=…&state=…` | open (GitHub sends the browser here) | | `303` to `/#/settings?github=created&code=…&state=…`, or `github=failed` for malformed values. Changes nothing |
+| `POST` | `/api/github/apps/finish` | admin, signed in, same sign-in as the start | `{"code", "state"}` | `201` GitHub connection. `400` for a used, expired, foreign or malformed `state`, or a code GitHub does not accept |
+| `POST` | `/api/github/apps/{id}/install` | admin, signed in | | `{"url"}`: GitHub's page where the app is installed and the repositories are chosen |
+| `GET` | `/api/github/installed?installation_id=…&state=…` | open (GitHub sends the browser here) | | `303` to `/#/settings?github=installed&installation_id=…&state=…` (`github=requested` when an organisation owner must approve first). Changes nothing |
+| `POST` | `/api/github/installations` | admin, signed in, same sign-in as the start | `{"installation_id", "state"}` | GitHub connection. `400` for a bad `state`; `404` if GitHub, asked as that app, does not know the installation |
+| `GET` | `/api/github/installations/{id}/repositories` | admin read | | `{"repositories": [GitHub repository, …], "truncated"}` (at most 3000; kept for a minute) |
+| `POST` | `/api/github/refresh` | admin | | the same as `GET /api/github`, after asking GitHub afresh where each app is installed; problems go into `last_error` |
+| `DELETE` | `/api/github/apps/{id}` | admin | | `{"name", "settings_url"}`: the stored key and secrets are gone; `settings_url` is where the app is deleted on GitHub |
+| `POST` | `/api/github/webhook` | GitHub (signed with the app's secret; no session or token) | a GitHub delivery, `application/json`, at most 5 MB | `{"result", "runs"}`: `result` is `handled`, `ignored` (nothing to do) or `duplicate` (this delivery id was seen before), `runs` how many runs it created. Anything that is not a valid, signed delivery of a connected app gets the same `400` `{"error": "The delivery was not accepted"}`; `413` too large; `429` too many deliveries. See [[GitHub|GitHub#what-happens-on-a-push]] and [[Security|Security#github]] |
 
 ### E-mail
 

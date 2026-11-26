@@ -28,6 +28,7 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/build"
 	"github.com/danielgtmn/ownpanel/internal/caddy"
 	"github.com/danielgtmn/ownpanel/internal/deploy"
+	"github.com/danielgtmn/ownpanel/internal/github"
 	mailconfig "github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/mcp"
 	"github.com/danielgtmn/ownpanel/internal/panel"
@@ -133,6 +134,7 @@ func serve(args []string) error {
 		buildWorker = fs.String("build-worker", "", "socket of the build service as unix:///absolute/path.sock (optional; without it sites cannot be built on this server)")
 		mailHost    = fs.String("mail-host", "", "name of the mail server, e.g. mail.example.com (optional; overrides the panel settings)")
 		mailWeb     = fs.String("mail-web", "", "web socket of the mail service as unix:///absolute/path.sock (optional; without it mailbox users have no sign-in page on the mail server's name)")
+		githubURL   = fs.String("github-url", github.DefaultURL, "address of GitHub for connecting repositories (change it only for testing; http only on a loopback address)")
 	)
 	var serverIPFlags listFlag
 	fs.Var(&serverIPFlags, "server-ip", "public IPv4/IPv6 address of this server that domains should point at (repeatable or comma-separated; overrides the panel settings)")
@@ -194,6 +196,11 @@ func serve(args []string) error {
 		}
 	}
 
+	githubClient, err := github.New(*githubURL)
+	if err != nil {
+		return fmt.Errorf("-github-url: %w", err)
+	}
+
 	serverIPs, err := panel.ParseServerIPs(serverIPFlags, *tlsMode == caddy.TLSInternal || *tlsMode == caddy.TLSOff)
 	if err != nil {
 		return fmt.Errorf("-server-ip: %w", err)
@@ -240,6 +247,7 @@ func serve(args []string) error {
 		BuildsStateFile: build.StateFile,
 		MailHost:        *mailHost,
 		MailTLSDir:      filepath.Join(data, "mail-tls"),
+		GitHub:          githubClient,
 	})
 	if err != nil {
 		return err
@@ -252,6 +260,10 @@ func serve(args []string) error {
 
 	// An update restarts the daemon: put its result in the activity log.
 	go svc.WatchUpdateResult(ctx, 3*time.Second, 10*time.Minute)
+
+	// Builds the build service knows from before this start have lost
+	// their caller: stop and remove them.
+	go svc.RemoveStaleBuilds(ctx)
 
 	// Initial sync, then heal drift (e.g. Caddy restarted).
 	go svc.Run(ctx, *interval)

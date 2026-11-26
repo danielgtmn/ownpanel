@@ -21,6 +21,7 @@ import {
 import { ErrorState, FormDialog, LoadingState, PageHeader, Section } from '../../shared/ui/index.ts'
 import { useSession } from '../../shared/session/index.ts'
 import { ConnectedAccountsSection } from './ConnectedAccountsSection.tsx'
+import { GitHubSection } from './GitHubSection.tsx'
 import { ipAccessNotice } from './rules.ts'
 import { MailSection } from './MailSection.tsx'
 import { PreviewsSection } from './PreviewsSection.tsx'
@@ -216,7 +217,7 @@ function Loaded({ initial }: { initial: PanelSettings }) {
 
   return (
     <>
-      <PageHeader title="Settings" description="Your connected accounts, and how people reach this panel, the sites and the mail on this server." />
+      <PageHeader title="Settings" description="Your connected accounts, GitHub, and how people reach this panel, the sites and the mail on this server." />
       {notice ? (
         <div className="notice settings-notice">
           <p>{notice}</p>
@@ -226,6 +227,7 @@ function Loaded({ initial }: { initial: PanelSettings }) {
         </div>
       ) : null}
       <ConnectedAccountsSection />
+      <GitHubSection onSetPanelDomain={settings.panel_domain_locked ? undefined : () => setPanelOpen(true)} />
       <AddressesSection settings={settings} onSaved={setSettings} />
       <PanelAddressSection settings={settings} onSaved={setSettings} open={panelOpen} onOpenChange={setPanelOpen} />
       <CertificateSection settings={settings} onSaved={setSettings} />

@@ -57,6 +57,7 @@ If a change is saved but the sync fails, the API answers `502` with "saved, but 
 | `internal/store` | the panel's data in [ablage](https://github.com/danielgtmn/ablage) repositories on SQLite (`repos.go`), the one-time conversion of databases from before (`legacy.go`), validation of names and domains |
 | `internal/caddy` | Caddy config builder and admin API client |
 | `internal/deploy` | Versions ("releases"): unpacking archives, activation, going back, pruning |
+| `internal/github` | Small GitHub client: creating an App from a manifest, signing in as the App (JWT), installations, short-lived tokens, repositories; `githubtest` is a stand-in for tests and development |
 | `internal/dns` | Provider interface, zone lookup, "does this domain point here?", lookups at authoritative nameservers; `dns/hetzner` is the Hetzner Cloud client |
 | `internal/api` | HTTP API: authentication, then a thin adapter over `internal/panel` |
 | `internal/mcp` | MCP server at `/mcp`: the same operations as tools |

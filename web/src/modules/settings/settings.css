@@ -330,6 +330,16 @@
   font-size: 0.875rem;
 }
 
+.github-installations {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  font-size: 0.875rem;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
 .preview-dns {
   display: flex;
   flex-wrap: wrap;

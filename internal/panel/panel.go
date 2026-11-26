@@ -24,6 +24,7 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/caddy"
 	"github.com/danielgtmn/ownpanel/internal/deploy"
 	"github.com/danielgtmn/ownpanel/internal/dns"
+	"github.com/danielgtmn/ownpanel/internal/github"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/store"
 	"github.com/danielgtmn/panzerschrank"
@@ -88,6 +89,11 @@ type Config struct {
 	// Builds is the build service's socket (-build-worker); nil means
 	// builds are not set up for this panel. *build.Client satisfies it.
 	Builds BuildService
+	// Runs hears about the steps of builds (#130); nil means nobody does.
+	Runs RunReporter
+	// Sources fetches the source of a site's commit (#122/#125); nil means
+	// sites can only be built from an uploaded source tree.
+	Sources SourceFetcher
 	// BuildsStateFile is install.sh's record of the build environment
 	// (build.StateFile); "" means there is none.
 	BuildsStateFile string
@@ -95,6 +101,10 @@ type Config struct {
 	// Resolver if it can, else (only when Resolver is nil too) asking the
 	// authoritative nameservers.
 	MXResolver dns.MXResolver
+
+	// GitHub is where GitHub connections are made (github.go); nil means
+	// github.com. Tests pass a client for a fake.
+	GitHub *github.Client
 }
 
 // Service owns every use case of the panel.
@@ -174,6 +184,16 @@ type Service struct {
 
 	builds          BuildService
 	buildsStateFile string
+	// build runs builds of sites (sitebuild.go).
+	build buildConfig
+	// github talks to GitHub; githubFlows are connections waiting for the
+	// person to come back from GitHub; githubRepos caches repository
+	// lists (github.go).
+	github      *github.Client
+	githubFlows githubFlows
+	githubRepos githubRepoCache
+	// githubHooks limits GitHub's deliveries (github_webhook.go).
+	githubHooks githubHooks
 }
 
 // New returns a Service. It rejects invalid web server options up front, and
@@ -205,8 +225,13 @@ func New(cfg Config) (*Service, error) {
 		mail:            cfg.Mail,
 		builds:          cfg.Builds,
 		buildsStateFile: cfg.BuildsStateFile,
+		build:           newBuildConfig(cfg.Runs, cfg.Sources, time.Now()),
 		mx:              cfg.MXResolver,
 		certs:           newMailCerts(cfg.MailTLSDir, cfg.Caddy.TLSMode),
+		github:          cfg.GitHub,
+	}
+	if s.github == nil {
+		s.github = DefaultGitHub()
 	}
 	if cfg.MailHost != "" {
 		d, err := store.NormalizeDomain(cfg.MailHost)
@@ -496,6 +521,12 @@ type Publication struct {
 // opened as a preview and made live later with MakeLive. If only the web
 // server update fails, the publication is returned with a NotSynced error.
 func (s *Service) PublishVersion(ctx context.Context, a Actor, name string, archive io.Reader, live bool) (Publication, error) {
+	return s.publishVersion(ctx, a, name, archive, live, "site.publish", "site.publish-not-live")
+}
+
+// publishVersion is PublishVersion with the activity entries to write;
+// builds publish their output through it too (sitebuild.go).
+func (s *Service) publishVersion(ctx context.Context, a Actor, name string, archive io.Reader, live bool, actionLive, actionNotLive string) (Publication, error) {
 	site, err := s.visibleSite(ctx, a, name)
 	if err != nil {
 		return Publication{}, err
@@ -504,9 +535,9 @@ func (s *Service) PublishVersion(ctx context.Context, a Actor, name string, arch
 		return Publication{}, err
 	}
 	first := s.deploys.Current(site.Name) == ""
-	add, action := s.deploys.Deploy, "site.publish"
+	add, action := s.deploys.Deploy, actionLive
 	if !live {
-		add, action = s.deploys.Add, "site.publish-not-live"
+		add, action = s.deploys.Add, actionNotLive
 	}
 	id, err := add(ctx, site.Name, archive)
 	if err != nil {
