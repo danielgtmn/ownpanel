@@ -33,7 +33,8 @@ import (
 // unlinked. Nothing is published from it meanwhile.
 
 // PublishingAvailable reports whether a push to a linked branch publishes
-// the site yet. False until building on the server exists (#109, #113).
+// the site yet. False until building on the server exists (#113): a push
+// records a run (runs.go) that waits.
 const PublishingAvailable = false
 
 // Source states.
@@ -78,6 +79,9 @@ type SiteSourceState struct {
 	Site                string      `json:"site"`
 	Source              *SiteSource `json:"source"`
 	PublishingAvailable bool        `json:"publishing_available"`
+	// LastRun is the site's newest run, nil if it has none (it may
+	// outlive the source).
+	LastRun *Run `json:"last_run"`
 }
 
 // SiteSourceInput links a site to a repository of a GitHub installation.
@@ -146,6 +150,9 @@ func (s *Service) GetSiteSource(ctx context.Context, a Actor, site string) (Site
 		return SiteSourceState{}, err
 	}
 	out := SiteSourceState{Site: st.Name, PublishingAvailable: PublishingAvailable}
+	if out.LastRun, err = s.lastRun(ctx, st.Name); err != nil {
+		return SiteSourceState{}, storeError(err)
+	}
 	src, err := s.store.SiteSource(ctx, st.Name)
 	if errors.Is(err, store.ErrNotFound) {
 		return out, nil
@@ -196,20 +203,37 @@ func (s *Service) checkSource(ctx context.Context, src store.SiteSource, detail 
 		v.Status = SourceSuspended
 		return v
 	}
+	// What GitHub reported in a delivery holds while GitHub cannot be
+	// asked.
+	gone, err := s.store.RepositoryGone(ctx, src.InstallationID, src.RepositoryID)
+	if err != nil {
+		slog.Error("could not look up a repository reported gone", "repository", src.RepositoryID, "err", err)
+	}
+	unchecked := func(err error) SiteSource {
+		v.Status, v.Problem = SourceUnchecked, problem(err)
+		if gone {
+			v.Status, v.Problem = SourceRepositoryMissing, ""
+		}
+		return v
+	}
 	auth, err := s.appAuth(app)
 	if err != nil {
-		v.Status, v.Problem = SourceUnchecked, problem(err)
-		return v
+		return unchecked(err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, sourceCheckTimeout)
 	defer cancel()
 	e, err := s.listRepositories(ctx, app, auth, inst.ID)
 	if err != nil {
-		v.Status, v.Problem = SourceUnchecked, problem(err)
-		return v
+		return unchecked(err)
 	}
 	for _, r := range e.repos {
 		if r.ID == src.RepositoryID {
+			if gone {
+				// GitHub shows it again (given back to the installation).
+				if err := s.store.SetRepositoryGone(context.WithoutCancel(ctx), src.InstallationID, r.ID, false); err != nil {
+					slog.Error("could not store that a repository is back", "repository", r.ID, "err", err)
+				}
+			}
 			v.URL = r.HTMLURL
 			if r.FullName != src.Repository {
 				v.Repository = r.FullName
@@ -254,6 +278,11 @@ func (s *Service) SetSiteSource(ctx context.Context, a Actor, site string, in Si
 	if _, err := s.githubBranch(ctx, repo, in.Branch); err != nil {
 		return SiteSourceState{}, err
 	}
+	// GitHub shows the repository: whatever a delivery reported before no
+	// longer holds.
+	if err := s.store.SetRepositoryGone(ctx, repo.InstallationID, repo.ID, false); err != nil {
+		return SiteSourceState{}, storeError(err)
+	}
 	src, err := s.store.PutSiteSource(ctx, store.SiteSource{
 		Site: st.Name, Kind: store.SourceGitHub, InstallationID: repo.InstallationID, RepositoryID: repo.ID,
 		Repository: repo.FullName, Branch: in.Branch, PublishOnPush: in.PublishOnPush,
@@ -272,7 +301,11 @@ func (s *Service) SetSiteSource(ctx context.Context, a Actor, site string, in Si
 	if inst, err := s.store.GitHubInstallation(ctx, repo.InstallationID); err == nil {
 		v.Account = inst.AccountLogin
 	}
-	return SiteSourceState{Site: st.Name, Source: &v, PublishingAvailable: PublishingAvailable}, nil
+	out := SiteSourceState{Site: st.Name, Source: &v, PublishingAvailable: PublishingAvailable}
+	if out.LastRun, err = s.lastRun(ctx, st.Name); err != nil {
+		return SiteSourceState{}, storeError(err)
+	}
+	return out, nil
 }
 
 // RemoveSiteSource unlinks a site. Its published files stay.

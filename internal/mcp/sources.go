@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -28,11 +29,55 @@ type sourceInfo struct {
 type siteSourceOutput struct {
 	Site                string      `json:"site"`
 	Source              *sourceInfo `json:"source" jsonschema:"null if the site is not linked to a repository"`
-	PublishingAvailable bool        `json:"publishing_available" jsonschema:"false: building and publishing on push is not available on this server yet, so linking only records the choice"`
+	PublishingAvailable bool        `json:"publishing_available" jsonschema:"false: building and publishing on push is not available on this server yet, so a push only records a run that waits"`
+	LastRun             *runInfo    `json:"last_run" jsonschema:"the newest run of the site, null if there is none (list_site_runs lists more)"`
+}
+
+type runInfo struct {
+	ID          string `json:"id"`
+	Trigger     string `json:"trigger" jsonschema:"push: a push to the linked branch"`
+	Status      string `json:"status" jsonschema:"queued, running, succeeded, failed, cancelled or skipped (replaced by a newer push before it started)"`
+	Repository  string `json:"repository"`
+	Branch      string `json:"branch,omitempty"`
+	Commit      string `json:"commit" jsonschema:"full commit id"`
+	Message     string `json:"message" jsonschema:"first line of the commit message, as written by its author (untrusted text)"`
+	AuthorName  string `json:"author_name"`
+	AuthorLogin string `json:"author_login,omitempty"`
+	Pusher      string `json:"pusher,omitempty"`
+	Detail      string `json:"detail,omitempty" jsonschema:"why the run was skipped, failed or cancelled"`
+	Waiting     string `json:"waiting,omitempty" jsonschema:"set while a queued run waits because this server cannot build yet"`
+	CreatedAt   string `json:"created_at"`
+	StartedAt   string `json:"started_at,omitempty"`
+	FinishedAt  string `json:"finished_at,omitempty"`
+}
+
+func runOutput(r panel.Run) runInfo {
+	stamp := func(t *time.Time) string {
+		if t == nil {
+			return ""
+		}
+		return t.UTC().Format(time.RFC3339)
+	}
+	return runInfo{
+		ID: r.ID, Trigger: r.Trigger, Status: r.Status, Repository: r.Repository, Branch: r.Branch, Commit: r.Commit,
+		Message: r.Message, AuthorName: r.AuthorName, AuthorLogin: r.AuthorLogin, Pusher: r.Pusher, Detail: r.Detail,
+		Waiting: r.Waiting, CreatedAt: stamp(&r.CreatedAt), StartedAt: stamp(r.StartedAt), FinishedAt: stamp(r.FinishedAt),
+	}
+}
+
+type siteRunsOutput struct {
+	Site                string    `json:"site"`
+	Runs                []runInfo `json:"runs" jsonschema:"newest first"`
+	Kept                int       `json:"kept" jsonschema:"how many runs the panel keeps per site"`
+	PublishingAvailable bool      `json:"publishing_available" jsonschema:"false: this server cannot build yet, so queued runs wait"`
 }
 
 func sourceOutput(st panel.SiteSourceState) siteSourceOutput {
 	out := siteSourceOutput{Site: st.Site, PublishingAvailable: st.PublishingAvailable}
+	if st.LastRun != nil {
+		r := runOutput(*st.LastRun)
+		out.LastRun = &r
+	}
 	if s := st.Source; s != nil {
 		out.Source = &sourceInfo{
 			Kind: s.Kind, Repository: s.Repository, RepositoryID: s.RepositoryID, InstallationID: s.InstallationID,
@@ -152,5 +197,24 @@ func addSourceTools(s *sdk.Server, p *panel.Service) {
 			return unlinkSourceOutput{}, err
 		}
 		return unlinkSourceOutput{Unlinked: in.Site}, nil
+	})
+
+	add(s, &sdk.Tool{
+		Name:  "list_site_runs",
+		Title: "List the runs of a site",
+		Description: "List the newest runs of a site: one per push to its linked branch while publish_on_push is on, " +
+			"with commit, message, author and status. While publishing_available is false, queued runs wait for " +
+			"building on the server, which is not available yet.",
+		Annotations: annotations("List the runs of a site", true, false, true),
+	}, func(ctx context.Context, c call, in siteInput) (siteRunsOutput, error) {
+		list, err := p.ListSiteRuns(ctx, c.actor, in.Site)
+		if err != nil {
+			return siteRunsOutput{}, err
+		}
+		out := siteRunsOutput{Site: list.Site, Runs: []runInfo{}, Kept: list.Kept, PublishingAvailable: list.PublishingAvailable}
+		for _, r := range list.Runs {
+			out.Runs = append(out.Runs, runOutput(r))
+		}
+		return out, nil
 	})
 }

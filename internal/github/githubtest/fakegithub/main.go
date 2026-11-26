@@ -9,6 +9,12 @@
 // at once with all of the account's repositories chosen. Apps created
 // for the person's own account belong to "octo-admin". It is not part of
 // the panel's binary.
+//
+// GET /_dev/push?repo=acme/website&branch=main&message=Hello answers with
+// a signed push delivery of the App installed on the repository's account
+// (the body, and the headers GitHub would send as X-Dev-<header>): send
+// the body to the panel's /api/github/webhook with those headers, without
+// the prefix (scripts/github-push.sh does it).
 package main
 
 import (
@@ -30,6 +36,7 @@ func main() {
 	}
 	defer srv.Close()
 	srv.AskToConfirm = true
+	srv.Dev = true
 	for _, r := range []struct {
 		owner, name string
 		private     bool

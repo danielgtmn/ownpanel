@@ -291,8 +291,8 @@ func TestGitHubManifestPageRefuses(t *testing.T) {
 			t.Errorf("member %s %s: %d %s", r.method, r.path, rec.Code, rec.Body)
 		}
 	}
-	// The address for deliveries is reserved but not open yet.
-	if rec := e.do(req{method: "POST", path: "/api/github/webhook", body: `{}`}); rec.Code != 404 {
+	// The address for deliveries refuses anything unsigned.
+	if rec := e.do(req{method: "POST", path: "/api/github/webhook", body: `{}`}); rec.Code != 400 {
 		t.Fatalf("webhook: %d", rec.Code)
 	}
 }

@@ -17,11 +17,42 @@ export type SiteSource = {
   linked_at: string
 }
 
+export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'skipped'
+
+/**
+ * One push (later also "Build now") that should build and publish the site.
+ * message, author_name and pusher come from the repository: show them as
+ * text only.
+ */
+export type Run = {
+  id: string
+  site: string
+  trigger: string
+  status: RunStatus
+  repository: string
+  ref: string
+  branch?: string
+  commit: string
+  short_commit: string
+  message: string
+  author_name: string
+  author_login?: string
+  pusher?: string
+  detail?: string
+  /** Set while a queued run waits because the server cannot build yet. */
+  waiting?: string
+  created_at: string
+  started_at?: string
+  finished_at?: string
+}
+
 export type SiteSourceState = {
   site: string
   source: SiteSource | null
   /** False while pushes are not built and published on the server yet. */
   publishing_available: boolean
+  /** The newest run, null if there is none. */
+  last_run: Run | null
 }
 
 export type LinkableRepository = {
@@ -91,6 +122,33 @@ export function sourceProblem(source: SiteSource): string | null {
     case 'unchecked':
       return source.problem ? `Couldn't check the repository: ${source.problem}` : "Couldn't check the repository right now."
   }
+}
+
+/** How a run's status reads for people, and the tone of its badge. */
+export function runStatus(run: Run): { label: string; tone: 'positive' | 'neutral' | 'warning' } {
+  switch (run.status) {
+    case 'queued':
+      return { label: 'Waiting', tone: 'neutral' }
+    case 'running':
+      return { label: 'Building', tone: 'neutral' }
+    case 'succeeded':
+      return { label: 'Published', tone: 'positive' }
+    case 'failed':
+      return { label: 'Failed', tone: 'warning' }
+    case 'cancelled':
+      return { label: 'Cancelled', tone: 'neutral' }
+    case 'skipped':
+      return { label: 'Replaced by a newer push', tone: 'neutral' }
+  }
+}
+
+/** Who made the change: the author's name, with their account if it differs. */
+export function runAuthor(run: Run): string {
+  const name = run.author_name || run.author_login || run.pusher || ''
+  if (run.author_login && run.author_name && run.author_login !== run.author_name) {
+    return `${run.author_name} (${run.author_login})`
+  }
+  return name
 }
 
 /** Branches to offer: the list, with the current and default branch first. */
