@@ -3,17 +3,14 @@ import { Button } from '@ui-sdk/react/button'
 import { toast } from '@ui-sdk/react/toast'
 import { useState } from 'react'
 import { errorMessage } from '../../shared/api/index.ts'
-import { formatDate, formatDateTime, isoTimestamp } from '../../shared/format/index.ts'
+import { formatDate, isoTimestamp } from '../../shared/format/index.ts'
 import { useResource } from '../../shared/hooks/index.ts'
 import { useSession } from '../../shared/session/index.ts'
-import { ErrorState, ExternalIcon, LoadingState, Section, StatusBadge } from '../../shared/ui/index.ts'
+import { ErrorState, ExternalIcon, LoadingState, Section } from '../../shared/ui/index.ts'
 import {
   getSiteSource,
   removeSiteSource,
-  runAuthor,
-  runStatus,
   sourceProblem,
-  type Run,
   type SiteSource,
   type SiteSourceState,
 } from './source.ts'
@@ -63,35 +60,6 @@ function SourceRow({ source, publishingAvailable }: { source: SiteSource; publis
   )
 }
 
-/** The newest push. Message and author come from the repository and are shown as text. */
-function LastRun({ run }: { run: Run }) {
-  const status = runStatus(run)
-  const author = runAuthor(run)
-  return (
-    <div className="source-run" aria-label="Latest push" role="group">
-      <div className="source-run-head">
-        <h4 className="source-run-title">Latest push</h4>
-        <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-      </div>
-      <p className="source-run-message">
-        <code className="source-run-commit" title={run.commit}>
-          {run.short_commit}
-        </code>{' '}
-        {run.message || <span className="muted">No message</span>}
-      </p>
-      <p className="source-run-meta">
-        {author ? `${author} · ` : ''}
-        <time dateTime={isoTimestamp(run.created_at)}>{formatDateTime(run.created_at)}</time>
-        {run.branch ? ` · ${run.branch}` : ''}
-      </p>
-      {run.status === 'queued' && run.waiting ? (
-        <p className="source-run-note">Waits until building on the server is available.</p>
-      ) : null}
-      {run.detail && run.status !== 'skipped' ? <p className="source-run-note">{run.detail}</p> : null}
-    </div>
-  )
-}
-
 export function SourceSection({ site }: { site: string }) {
   const { isAdmin } = useSession()
   const state = useResource(() => getSiteSource(site), `source:${site}`)
@@ -134,7 +102,7 @@ export function SourceSection({ site }: { site: string }) {
       </Section>
     )
   }
-  const { source, publishing_available: publishingAvailable, last_run: lastRun } = state.data
+  const { source, publishing_available: publishingAvailable } = state.data
   const actions = (
     <>
       {isAdmin ? (
@@ -167,7 +135,6 @@ export function SourceSection({ site }: { site: string }) {
             : 'Not linked to a repository. An administrator can link it to one of the connected repositories.'}
         </p>
       )}
-      {lastRun ? <LastRun run={lastRun} /> : null}
       {isAdmin ? (
         <SourceDialog
           open={editing}

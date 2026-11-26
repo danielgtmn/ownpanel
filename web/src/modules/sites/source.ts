@@ -34,6 +34,8 @@ export type Run = {
   branch?: string
   commit: string
   short_commit: string
+  /** The commit's page on GitHub, if known. */
+  commit_url?: string
   message: string
   author_name: string
   author_login?: string
