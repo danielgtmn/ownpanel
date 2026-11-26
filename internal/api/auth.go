@@ -124,12 +124,13 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) setOwnEmail(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Email string `json:"email"`
+		Email   string `json:"email"`
+		Current string `json:"current"`
 	}
-	if !decodeJSON(w, r, &body, `{"email": "…"} ("" removes it)`) {
+	if !decodeJSON(w, r, &body, `{"email": "…", "current": "current password"} ("" removes the address)`) {
 		return
 	}
-	u, err := s.Panel.SetOwnEmail(r.Context(), actorOf(r), body.Email)
+	u, err := s.Panel.SetOwnEmail(r.Context(), actorOf(r), body.Current, body.Email)
 	if err != nil {
 		writeFailure(w, err)
 		return
