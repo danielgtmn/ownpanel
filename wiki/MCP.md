@@ -62,8 +62,11 @@ Version ids come from `get_site`; a version id starts with a UTC timestamp. Erro
 | `list_dns_domains` | `available` (optional) | Lists the domains (zones) in the panel through your own DNS connections: chosen ones and those your own sites, redirects or e-mail use (for administrators also the panel domain). Each with `connection_id`, `connection_name`, `domain`, `read_only`, `nameservers`, `adopted`, `used_by`; connections that fail are in `problems`. With `available: true`, the zones not in the panel yet. Read-only. |
 | `manage_dns_domain` | `connection_id`, `domain` | Manages a zone of your own connection in the panel. Nothing changes at the provider. Safe to repeat. |
 | `stop_managing_dns_domain` | `connection_id`, `domain` | Takes a chosen zone out of the panel; it stays at the provider. Refused while something of yours uses it. |
+| `list_domains` | | Lists the domains you added whose DNS is managed elsewhere, each with `domain`, `created_at` and `used_by`. Read-only. |
+| `add_domain` | `domain` | Adds a domain whose DNS is managed elsewhere (a registrable domain like `example.com`), so it shows up in the panel on its own. Nothing changes at any provider. Safe to repeat. |
+| `remove_domain` | `domain` | Removes such a domain from your list; nothing changes at any provider. `still_used_by` says what of yours still keeps it in the panel. |
 
-Tools that change something need a `write` token. Read-only tools are `list_sites`, `get_site`, `check_site_domains`, `list_redirects`, `get_mail_status`, `get_mail_records`, `get_mail_health`, `list_mail_domains`, `list_mailboxes`, `list_mail_aliases`, `list_mail_imports` and `list_dns_domains`. Tokens limited to sites cannot use the e-mail tools.
+Tools that change something need a `write` token. Read-only tools are `list_sites`, `get_site`, `check_site_domains`, `list_redirects`, `get_mail_status`, `get_mail_records`, `get_mail_health`, `list_mail_domains`, `list_mailboxes`, `list_mail_aliases`, `list_mail_imports`, `list_dns_domains` and `list_domains`. Tokens limited to sites cannot use the e-mail, DNS and domain tools.
 
 ### `publish_files`
 
@@ -93,6 +96,6 @@ curl --fail-with-body -X POST --data-binary @site.zip '<url>'
 
 ## Not available
 
-Connecting DNS accounts and changing records is not possible through MCP; use the web interface or the [[API|API]]. Choosing which domains are managed in the panel is (`manage_dns_domain`).
+Connecting DNS accounts and changing records is not possible through MCP; use the web interface or the [[API|API]]. Choosing which domains are managed in the panel is (`manage_dns_domain`), and so is adding a domain whose DNS is managed elsewhere (`add_domain`).
 
 Mailboxes cannot be created and their passwords cannot be set through MCP, on purpose: mailbox passwords should never pass through an AI agent. For the same reason imports of mail cannot be started (they take another account's password) and mailboxes cannot be downloaded (it reads all their mail); use the web interface or the [[API|API]]. Use the web interface or the [[API|API]] (`POST /api/mail/domains/{domain}/mailboxes`, `POST /api/mail/mailboxes/{id}/password`).

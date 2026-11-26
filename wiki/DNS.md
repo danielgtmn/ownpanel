@@ -52,23 +52,25 @@ Adding, checking and removing connections needs a password sign-in or an access 
 
 The DNS page and the sidebar list the domains that are **in the panel**:
 
-- domains you chose to manage here (**DNS → Add domain**, or **Manage DNS here** on a domain's page), and
+- domains you chose to manage here (**DNS → Add domain**, or **Manage DNS here** on a domain's page),
+- domains you added whose DNS is managed elsewhere (below), and
 - every zone of your own connections that something of yours uses: a domain of your sites, of your whole-domain redirects or your mail domains, and for administrators the panel's own domain (a name below the zone counts too, like `shop.example.com` for `example.com`). Those are in the panel automatically and stay while they are used. Another person's site on a name in your zone does not bring it into your panel, but it still keeps the zone from being deleted at Hetzner (below).
 
-**Add domain** offers two ways:
+**Add domain** offers three ways:
 
 - **Choose one from your accounts**: a list of the zones of your connected accounts that are not in the panel yet, grouped by account when you have several. Choosing one changes nothing at Hetzner.
 - **Create a new one** at Hetzner (below). A created domain is in the panel right away.
+- **Use a domain whose DNS is managed elsewhere**: for a domain whose records you keep at another provider or the registrar. The panel only remembers the domain (a registrable domain like `example.com`, no subdomains or IP addresses; non-ASCII names in their `xn--` form), so it shows up in the sidebar as a domain of its own, ready for a site, a redirect or e-mail. Nothing is created or changed at any provider. This is also the only way while you have no connected account.
 
-The page of a domain (**`#/d/<domain>`**) offers **Manage DNS here** when one of your accounts has its zone, or a link to create it when none has.
+The page of a domain (**`#/d/<domain>`**) offers **Manage DNS here** when one of your accounts has its zone, or a link to create it when none has (or to connect an account when you have none). For a domain with nothing on it yet, it links to creating a site, a redirect or e-mail for it.
+
+A domain you added whose DNS is managed elsewhere has **Remove from the panel** on its page. That removes only the entry; nothing changes at any provider, and sites, redirects and e-mail stay. While something of yours still uses a name in the domain, it stays in the sidebar through that use, and the panel says so. These entries are per person: nobody else sees yours, administrators included.
 
 **Stop managing here** on a zone's page takes a chosen domain out of the panel. The zone and its records stay at Hetzner unchanged, and you can add it again any time. A domain that something of yours uses cannot be taken out; the page says what uses it.
 
-Entering a domain without managing its DNS here is not possible: a domain appears in the panel through a site, redirect, mail domain or a managed zone.
-
 Upgrading from a version before this existed adopts nothing: zones that something of yours uses stay visible, all others disappear from the sidebar but stay available under **Add domain**. Nothing is deleted at Hetzner.
 
-API: `GET /api/dns/zones` lists the zones in the panel, `GET /api/dns/zones/available` the others; `PUT /api/dns/connections/{id}/zones/{zone}/managed` starts managing a zone, `DELETE` on the same path stops (`409` while it is used). Both need what adding connections needs.
+API: `GET /api/dns/zones` lists the zones in the panel, `GET /api/dns/zones/available` the others; `PUT /api/dns/connections/{id}/zones/{zone}/managed` starts managing a zone, `DELETE` on the same path stops (`409` while it is used). Both need what adding connections needs. Domains with DNS elsewhere: `GET /api/domains` lists yours, `POST /api/domains` with `{"name": "example.com"}` adds one, `DELETE /api/domains/{domain}` removes it ([[API|API]]).
 
 ## Adding and deleting domains at Hetzner
 
@@ -150,4 +152,4 @@ It needs `write` access to the site (or to be allowed to change the domain redir
 
 ## Through MCP
 
-`check_site_domains` checks a site's domains. `list_dns_domains` lists the domains in the panel (with `available`, the others of your connected accounts), `manage_dns_domain` and `stop_managing_dns_domain` choose them ([[MCP|MCP]]). Connecting accounts and changing records is done in the web interface or the API ([[API|API]]).
+`check_site_domains` checks a site's domains. `list_dns_domains` lists the domains in the panel (with `available`, the others of your connected accounts), `manage_dns_domain` and `stop_managing_dns_domain` choose them; `list_domains`, `add_domain` and `remove_domain` handle domains whose DNS is managed elsewhere ([[MCP|MCP]]). Connecting accounts and changing records is done in the web interface or the API ([[API|API]]).
