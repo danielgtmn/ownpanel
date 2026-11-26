@@ -115,6 +115,36 @@ Every kept version, live or not, can be opened on an address of its own once an 
 - **Certificates** are obtained only when a preview is opened for the first time, one per opened version, and only after the web server asked the panel that this exact name is a kept version. Names below the preview domain that are not previews get no certificate. See [[Security|Security]].
 - The preview domain and everything below it are reserved: no site, redirect, panel domain or mail server name may be below it.
 
+## Recognised kinds of sites
+
+Building sites on the server is being added ([#58](https://github.com/danielgtmn/ownpanel/issues/58)); nothing below runs yet. When a site's source is looked at, the panel recognises how the site is made and proposes a build command, the folder with the finished site and the build environment. The proposal is a starting point you confirm or change.
+
+| Kind | Recognised by | Proposed folder | Built on this server |
+|---|---|---|---|
+| Next.js | `next` in `package.json`, `next.config.*` | `out` (or `distDir`) | only with `output: 'export'` in the Next.js configuration; without it the proposal says so |
+| Astro | `astro` in `package.json`, `astro.config.*` | `dist` (or `outDir`) | yes |
+| Eleventy | `@11ty/eleventy` in `package.json`, `.eleventy.js`, `eleventy.config.*` | `_site` (or the `output` folder) | yes |
+| Vite | `vite` in `package.json`, `vite.config.*` | `dist` (or `build.outDir`) | yes |
+| Hugo | `hugo.toml`/`.yaml`/`.json`, or a `config.toml` with Hugo settings | `public` (or `publishDir`) | not yet: build elsewhere and publish the result |
+| Jekyll | `_config.yml` and a `Gemfile` that uses Jekyll | `_site` (or `destination`) | not yet: build elsewhere and publish the result |
+| Plain HTML | `index.html` and no build script | the files as they are | nothing to build |
+
+- **Package manager:** taken from the lock file (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`) or the `packageManager` field of `package.json`. npm, pnpm and Yarn are supported; a site that uses Bun is built with npm, with a note. Without a lock file, packages are installed fresh on every build, and the proposal says so.
+- **Node.js version:** taken from `.nvmrc`, `.node-version` or `engines.node` in `package.json`. If the server does not offer that version, the closest newer one (or else the newest) is proposed, with a note.
+- **When several kinds are found** (an Astro site with an Eleventy configuration, say), the proposal follows the more specific one and names the others so you can check.
+- **What is read:** only a few small files at the top of the source, each up to a size limit. Configuration files are read as text, never run, so a setting that is computed in the configuration is not seen; links are ignored.
+
+### Build settings
+
+| Setting | Rule |
+|---|---|
+| Build command | Up to 16 KB of text; lines run one after another and the build stops at the first failing one. No control characters except tabs and line breaks. Empty means the folder is published as it is. |
+| Folder with the finished site | A folder inside the source (`dist`, `public/site`, `.`): no absolute path, no `..`, at most 255 characters. |
+| Build environment | One of the environments this server offers (Node.js 22 and 24 today). |
+| Environment variables | Up to 100; names of capital letters, digits and `_`, not starting with a digit; values up to 32 KB, 256 KB together. Secret values must be at least 4 characters long and are hidden as `***` in the build log. |
+
+Some variable names are refused because the build environment sets them itself or because they would change what runs before your command does: `PATH`, `HOME`, `PWD`, `OLDPWD`, `TMPDIR`, `IFS`, `ENV`, `BASH_ENV`, `SHELLOPTS`, `PS4`, `CDPATH`, `GCONV_PATH`, everything starting with `LD_` and everything starting with `OWNPANEL_`. To use a different search path for programs, set it in the build command itself.
+
 ## Deleting
 
 `DELETE /api/sites/{name}` (MCP: `delete_site`, which also needs `confirm_name` equal to the name) stops serving the site, then removes all its files and versions. This cannot be undone. If the web server cannot be updated at that moment, the files are removed by the next successful update; a new site of the same name always starts empty. Access tokens limited to certain sites cannot delete sites, and the site name is removed from the lists of tokens that named it.
