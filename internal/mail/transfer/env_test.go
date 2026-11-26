@@ -147,6 +147,23 @@ func (e *env) eventKinds() []string {
 	return out
 }
 
+// waitEvents waits until at least n events arrived and returns their kinds.
+// A job's event is sent after its final state is saved, so a test that saw
+// the state through wait may still be ahead of the event.
+func (e *env) waitEvents(n int) []string {
+	e.t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		if k := e.eventKinds(); len(k) >= n {
+			return k
+		}
+		if time.Now().After(deadline) {
+			e.t.Fatalf("events %v, want at least %d", e.eventKinds(), n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // assertNoPassword checks logs, events and jobs for the password.
 func (e *env) assertNoPassword() {
 	e.t.Helper()
