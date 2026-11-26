@@ -56,7 +56,11 @@ func withClock(svc *Service) *clock {
 var alice = NewUser{Name: "Alice", Password: "alice-password-1", Role: "member"}
 
 func TestLoginSessionsAndPasswordChange(t *testing.T) {
-	svc, _, _ := newService(t)
+	eachStore(t, testLoginSessionsAndPasswordChange)
+}
+
+func testLoginSessionsAndPasswordChange(t *testing.T, open openStore) {
+	svc, _, _ := newServiceOn(t, open)
 	clk := withClock(svc)
 	ctx := context.Background()
 	if _, err := svc.CreateUser(ctx, admin, alice); err != nil {
@@ -154,7 +158,11 @@ func TestLastAdminProtection(t *testing.T) {
 // TestLoginThrottling: failed sign-ins count per user, from wherever they
 // come, in a window that starts with the first failure.
 func TestLoginThrottling(t *testing.T) {
-	svc, _, _ := newService(t)
+	eachStore(t, testLoginThrottling)
+}
+
+func testLoginThrottling(t *testing.T, open openStore) {
+	svc, _, _ := newServiceOn(t, open)
 	clk := withClock(svc)
 	ctx := context.Background()
 	svc.CreateUser(ctx, admin, alice)

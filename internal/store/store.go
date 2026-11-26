@@ -67,18 +67,19 @@ func Open(file string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	// One connection, as before ablage. The database is shared by three
-	// users with their own transactions: the store (ablage's Tx), sign-in
-	// (sesam's sqladapter on DB) and the one-time conversion. With one
-	// connection, every write and every transaction is serialized inside
-	// the process and none of them can ever fail with "database is
-	// locked"; the price is that reads wait for a running transaction,
-	// which is short everywhere in the panel. The rule that comes with it:
-	// inside a transaction only its own handle is used (ablage: the tx
-	// store and repo.With(tx); sesam: its tx), never the outer store or DB,
-	// or the call waits for the one connection forever. The memory store
-	// used in tests holds one lock per transaction and fails the same way,
-	// so tests catch a violation.
+	// One connection, as before ablage. Everything goes through one ablage
+	// store, sesam's sign-in tables included (see Ablage); only the
+	// one-time steps in legacy.go and authref.go run SQL of their own, and
+	// they finish before the store is used. With one connection every
+	// write and every transaction is serialized inside the process and
+	// none of them can fail with "database is locked"; the price is that
+	// reads wait for a running transaction, which is short everywhere
+	// (sesam hashes passwords outside its transactions). The rule that
+	// comes with it: inside a transaction only its own store is used (the
+	// tx store, repo.With(tx)), never the outer one, or the call waits for
+	// the one connection forever. The memory store used in tests holds one
+	// lock per transaction and fails the same way, so tests catch a
+	// violation.
 	db.SetMaxOpenConns(1)
 	ss, err := sqlstore.New(db, sqlstore.SQLite)
 	if err != nil {
@@ -102,6 +103,14 @@ func Open(file string) (*Store, error) {
 	if err := s.init(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate %s: %w", file, err)
+	}
+	linked, err := linkAuthUsers(ctx, db, ss, file)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("link the users to their sign-in in %s: %w", file, err)
+	}
+	if linked != "" {
+		slog.Info("linked the panel users to their sign-in; the former database is kept", "copy", linked)
 	}
 	return s, nil
 }
@@ -140,11 +149,12 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// DB is the SQLite database, for the sign-in tables (auth_*) that sesam
-// keeps next to the panel's own; nil for a store from New. The database
-// has one connection (see Open): never use the store while a transaction
-// on DB is open, or the other way round.
-func (s *Store) DB() *sql.DB { return s.db }
+// Ablage is the ablage store the panel's data lives in, for sesam: its
+// sign-in tables (auth_*) are declared and migrated with the panel's own
+// (signin.go), so sesam is set up on this store. The SQLite database has
+// one connection (see Open): inside a transaction use only the
+// transaction's store.
+func (s *Store) Ablage() ablage.Store { return s.st }
 
 // tx runs fn in one transaction with the repositories bound to it.
 func (s *Store) tx(ctx context.Context, fn func(r repos) error) error {

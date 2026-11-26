@@ -35,7 +35,11 @@ func oldUser(t *testing.T, st *store.Store, name, password string, sessionSecret
 }
 
 func TestMoveUsersToAuth(t *testing.T) {
-	svc, _, _ := newEmptyService(t)
+	eachStore(t, testMoveUsersToAuth)
+}
+
+func testMoveUsersToAuth(t *testing.T, open openStore) {
+	svc, _, _ := newEmptyServiceOn(t, open)
 	clk := withClock(svc)
 	ctx := context.Background()
 	st := svc.store

@@ -3,13 +3,11 @@
 -- JSON, binary secrets, unicode, several rows in the same second, and ids
 -- that sort differently as text ("9" < "10" as numbers only).
 
--- sesam's table: the conversion must leave it alone.
-CREATE TABLE auth_users (id TEXT PRIMARY KEY, username TEXT NOT NULL);
-INSERT INTO auth_users VALUES ('au-root', 'root'), ('au-bob', 'bob');
+-- sesam's tables come from sesam_v1.sql; the conversion leaves them alone.
 
 INSERT INTO users (id, name, password_hash, role, created_at, auth_user_id) VALUES
-    (9,  'root', '', 'admin', 1700000000, 'au-root'),
-    (10, 'bob', '', 'member', 1700000000, 'au-bob'),
+    (9,  'root', '', 'admin', 1700000000, 'v1-signin-root'),
+    (10, 'bob', '', 'member', 1700000000, 'v1-signin-bob'),
     (11, 'jürgen', 'kept-hash-of-juergen', 'member', 1700000005, NULL);
 
 INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES

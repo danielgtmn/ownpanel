@@ -41,6 +41,12 @@ import (
 // within the second; the store shows whole seconds. The activity log keeps
 // its order in seq, the former id.
 // login_attempts (unused since sign-in moved to sesam) is dropped.
+//
+// sesam's tables (auth_*) are not converted: sesam keeps using them as
+// sesam 1.x created them (same names, columns and encodings). Only the
+// missing ones are created (an install that never ran sesam). users now
+// references auth_users; a link to a sign-in user that does not exist is
+// cleared (the panel moves that user to the sign-in again at start).
 
 //go:embed legacy/*.sql
 var legacyFiles embed.FS
@@ -80,7 +86,7 @@ var legacyCopies = []struct {
 	exprs []string
 }{
 	{"users", []string{"id", "name", "password_hash", "role", "auth_user_id", "created_at"},
-		[]string{text("id"), "name", "password_hash", "role", "auth_user_id", usOrdered("created_at")}},
+		[]string{text("id"), "name", "password_hash", "role", existingAuthUser, usOrdered("created_at")}},
 	{"sessions", []string{"id", "user_id", "created_at", "expires_at"},
 		[]string{"id", text("user_id"), us("created_at"), us("expires_at")}},
 	{"tokens", []string{"id", "user_id", "name", "hash", "access", "sites", "created_at", "last_used_at", "expires_at"},
@@ -125,6 +131,10 @@ var legacyCopies = []struct {
 		[]string{text("mailbox_id"), text("mailbox_id")}},
 }
 
+// existingAuthUser is auth_user_id if that sign-in user exists, else NULL,
+// as the reference to auth_users requires.
+const existingAuthUser = `CASE WHEN auth_user_id IN (SELECT id FROM auth_users) THEN auth_user_id END`
+
 // legacyHook lets tests fail the conversion at a step ("copied": after
 // the rows were copied, before the old tables are dropped).
 var legacyHook = func(step string) error { return nil }
@@ -141,13 +151,8 @@ func convertLegacy(ctx context.Context, db *sql.DB, ss *sqlstore.Store, file str
 	if err := migrate(db, sub); err != nil {
 		return "", fmt.Errorf("bring the former tables up to date: %w", err)
 	}
-	// A failed attempt leaves its copy; another one in the same second
-	// gets a name of its own.
-	backup := file + ".pre-ablage-" + time.Now().UTC().Format("20060102T150405Z")
-	for i := 2; fileExists(backup); i++ {
-		backup = fmt.Sprintf("%s.pre-ablage-%s-%d", file, time.Now().UTC().Format("20060102T150405Z"), i)
-	}
-	if err := VacuumInto(file, backup); err != nil {
+	backup, err := keepCopy(file, "pre-ablage")
+	if err != nil {
 		return "", fmt.Errorf("copy the database before converting it: %w", err)
 	}
 	ddl, err := ss.DDL()
@@ -179,7 +184,16 @@ func convertIn(ctx context.Context, tx *sql.Tx, ddl []string) error {
 			return fmt.Errorf("rename %s: %w", t, err)
 		}
 	}
+	// Tables still there are sesam's (auth_*): they stay as they are, and
+	// Migrate takes over their indexes afterwards.
+	have, err := tableNames(ctx, tx)
+	if err != nil {
+		return err
+	}
 	for _, stmt := range ddl {
+		if have[ddlTable(stmt)] {
+			continue
+		}
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("create the new tables: %w", err)
 		}
@@ -212,8 +226,53 @@ func convertIn(ctx context.Context, tx *sql.Tx, ddl []string) error {
 	if _, err := tx.ExecContext(ctx, `DROP TABLE schema_migrations`); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO store_format (id) VALUES (?)`, formatAblage)
+	_, err = tx.ExecContext(ctx, `INSERT INTO store_format (id) VALUES (?)`, formatAblage)
 	return err
+}
+
+// keepCopy copies the database at file to <file>.<tag>-<UTC time> and
+// returns the name. A failed attempt leaves its copy; another one in the
+// same second gets a name of its own.
+func keepCopy(file, tag string) (string, error) {
+	stamp := time.Now().UTC().Format("20060102T150405Z")
+	backup := file + "." + tag + "-" + stamp
+	for i := 2; fileExists(backup); i++ {
+		backup = fmt.Sprintf("%s.%s-%s-%d", file, tag, stamp, i)
+	}
+	return backup, VacuumInto(file, backup)
+}
+
+// ddlTable is the table a statement of sqlstore's DDL creates or indexes.
+func ddlTable(stmt string) string {
+	if rest, ok := strings.CutPrefix(stmt, `CREATE TABLE "`); ok {
+		name, _, _ := strings.Cut(rest, `"`)
+		return name
+	}
+	if _, rest, ok := strings.Cut(stmt, ` ON "`); ok {
+		name, _, _ := strings.Cut(rest, `"`)
+		return name
+	}
+	return ""
+}
+
+// tableNames returns the tables in the database.
+func tableNames(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}) (map[string]bool, error) {
+	rows, err := q.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'table'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		out[n] = true
+	}
+	return out, rows.Err()
 }
 
 func fileExists(name string) bool {

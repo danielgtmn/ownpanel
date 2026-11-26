@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/danielgtmn/ablage"
-	"github.com/danielgtmn/ablage/sqlstore"
 	"github.com/danielgtmn/sesam/v2"
 	"github.com/danielgtmn/sesam/v2/plugins/password"
 
@@ -19,10 +18,11 @@ import (
 )
 
 // Signing in is done by sesam: its users, password hashes, sessions,
-// attempt counters and reset links live in the auth_* tables of the panel's
-// database. A panel user (users table: id, name, role) points at its sesam
-// user with auth_user_id; the panel's own references use the panel user's
-// id. Both share one database connection (see store.Open). The panel calls sesam's Go API from its own handlers and
+// attempt counters and reset links live in the auth_* tables, in the same
+// ablage store as the panel's own data (store.Ablage). A panel user (users
+// table: id, name, role) points at its sesam user with auth_user_id, a
+// reference to auth_users; the panel's own references use the panel user's
+// id. The panel calls sesam's Go API from its own handlers and
 // keeps its own cookie and request checks (internal/api), because it is
 // served on the panel domain and on the server's addresses, and the panel
 // domain changes at runtime.
@@ -30,14 +30,9 @@ import (
 // resetSenderLocalPart is who password reset mails come from.
 const resetSenderLocalPart = "no-reply"
 
-// initAuth sets up sesam on the store's database, adds its tables and moves
-// users from before sesam over.
+// initAuth sets up sesam on the store and moves users from before sesam
+// over.
 func (s *Service) initAuth(ctx context.Context) error {
-	// No table prefix: sesam names its tables auth_* itself.
-	db, err := sqlstore.New(s.store.DB(), sqlstore.SQLite)
-	if err != nil {
-		return err
-	}
 	opts := password.Options{
 		Identifier:           password.EmailOrUsername,
 		DisableSignUp:        true,
@@ -49,7 +44,7 @@ func (s *Service) initAuth(ctx context.Context) error {
 		ResetEmail:           s.resetEmail,
 	}
 	cfg := sesam.Config{
-		Store: db,
+		Store: s.store.Ablage(),
 		// BaseURL, cookie and request header settings only matter for
 		// sesam's own HTTP handler, which the panel does not use.
 		BaseURL: "http://localhost",
@@ -65,9 +60,12 @@ func (s *Service) initAuth(ctx context.Context) error {
 	}
 	s.pw = password.New(opts)
 	cfg.Plugins = []sesam.Plugin{s.pw}
+	var err error
 	if s.auth, err = sesam.New(cfg); err != nil {
 		return err
 	}
+	// The store migrated sesam's tables with its own already; this adds
+	// what the plugins declared, if anything.
 	if err := s.auth.Migrate(ctx); err != nil {
 		return fmt.Errorf("sign-in tables: %w", err)
 	}
@@ -83,8 +81,8 @@ func (s *Service) initAuth(ctx context.Context) error {
 // points at (left over by an interrupted run or a failed create or delete)
 // are removed.
 //
-// The store allows one connection: nothing here runs inside a transaction
-// of the other side.
+// Nothing here runs inside a transaction: the store has one connection
+// (see store.Open).
 func (s *Service) moveUsersToAuth(ctx context.Context) error {
 	users, err := s.store.UnmovedUsers(ctx)
 	if err != nil {

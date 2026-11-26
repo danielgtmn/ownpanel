@@ -13,6 +13,7 @@ import (
 
 	"github.com/danielgtmn/ablage"
 	"github.com/danielgtmn/ablage/memstore"
+	"github.com/danielgtmn/sesam/v2"
 )
 
 var ctx = context.Background()
@@ -364,6 +365,53 @@ func TestActivities(t *testing.T) {
 	})
 }
 
+// signInUser adds a sign-in user (sesam's auth_users) and returns its id.
+func signInUser(t *testing.T, s *Store, name string) string {
+	t.Helper()
+	auth, err := sesam.New(sesam.Config{Store: s.Ablage(), BaseURL: "http://localhost"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := auth.CreateUser(ctx, sesam.NewUser{Username: name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.ID
+}
+
+// TestAuthUserReference: a panel user can only point at a sign-in user that
+// exists, and the sign-in user cannot be deleted while it is linked.
+func TestAuthUserReference(t *testing.T) {
+	eachStore(t, func(t *testing.T, s *Store) {
+		if _, err := s.CreateUser(ctx, "ghost", "no-such-sign-in", RoleAdmin, false); !errors.Is(err, ablage.ErrReference) {
+			t.Fatalf("dangling link: %v", err)
+		}
+		auth, err := sesam.New(sesam.Config{Store: s.Ablage(), BaseURL: "http://localhost"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		au := signInUser(t, s, "anna")
+		u, err := s.CreateUser(ctx, "anna", au, RoleAdmin, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := auth.DeleteUser(ctx, au); !errors.Is(err, ablage.ErrReference) {
+			t.Fatalf("deleting a linked sign-in user: %v", err)
+		}
+		// Panel user first, then the sign-in user (as the panel does). The
+		// last admin cannot be deleted, so there is another one.
+		if _, err := s.CreateUser(ctx, "admin2", "", RoleAdmin, false); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.DeleteUser(ctx, u.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := auth.DeleteUser(ctx, au); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 // TestMoveToAuth: users from before the auth tables are listed with their
 // hash and live sessions until they are linked; linking forgets both.
 func TestMoveToAuth(t *testing.T) {
@@ -382,7 +430,8 @@ func TestMoveToAuth(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if _, err := s.CreateUser(ctx, "new", "auth-new", RoleMember, false); err != nil {
+		authNew, authOld, authOther := signInUser(t, s, "new"), signInUser(t, s, "old"), signInUser(t, s, "other")
+		if _, err := s.CreateUser(ctx, "new", authNew, RoleMember, false); err != nil {
 			t.Fatal(err)
 		}
 		un, err := s.UnmovedUsers(ctx)
@@ -393,10 +442,10 @@ func TestMoveToAuth(t *testing.T) {
 		if err != nil || len(old) != 1 || old[0].ID != "live" || !old[0].ExpiresAt.Equal(now.Add(time.Minute)) {
 			t.Fatalf("old sessions %+v %v", old, err)
 		}
-		if err := s.LinkAuthUser(ctx, id, "auth-old"); err != nil {
+		if err := s.LinkAuthUser(ctx, id, authOld); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.LinkAuthUser(ctx, id, "auth-other"); !errors.Is(err, ErrConflict) {
+		if err := s.LinkAuthUser(ctx, id, authOther); !errors.Is(err, ErrConflict) {
 			t.Fatalf("second link: %v", err)
 		}
 		if un, _ := s.UnmovedUsers(ctx); len(un) != 0 {
@@ -408,15 +457,15 @@ func TestMoveToAuth(t *testing.T) {
 		if n, err := s.r.sessions.Count(ctx, ablage.All); err != nil || n != 0 {
 			t.Fatalf("%d sessions left (%v)", n, err)
 		}
-		u, err := s.UserByAuthID(ctx, "auth-old")
-		if err != nil || u.ID != id || u.AuthUserID != "auth-old" {
+		u, err := s.UserByAuthID(ctx, authOld)
+		if err != nil || u.ID != id || u.AuthUserID != authOld {
 			t.Fatalf("by auth id %+v %v", u, err)
 		}
 		if _, err := s.UserByAuthID(ctx, ""); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("empty auth id: %v", err)
 		}
 		ids, err := s.AuthUserIDs(ctx)
-		if err != nil || len(ids) != 2 || !ids["auth-old"] || !ids["auth-new"] {
+		if err != nil || len(ids) != 2 || !ids[authOld] || !ids[authNew] {
 			t.Fatalf("auth ids %v %v", ids, err)
 		}
 	})
