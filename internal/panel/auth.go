@@ -311,9 +311,19 @@ func (s *Service) ChangePassword(ctx context.Context, a Actor, current, next str
 }
 
 // SetOwnEmail sets or (with "") removes the actor's own e-mail address,
-// where password reset links are sent.
-func (s *Service) SetOwnEmail(ctx context.Context, a Actor, email string) (User, error) {
+// where password reset links are sent. It needs the current password, so a
+// session left open somewhere cannot redirect the reset links.
+func (s *Service) SetOwnEmail(ctx context.Context, a Actor, current, email string) (User, error) {
 	if err := needSession(a, "changing the e-mail address"); err != nil {
+		return User{}, err
+	}
+	if _, err := normalizeEmail(email); err != nil {
+		return User{}, err
+	}
+	if current == "" {
+		return User{}, errorf(Invalid, "enter your current password")
+	}
+	if err := s.verifyPassword(ctx, a, current); err != nil {
 		return User{}, err
 	}
 	u, err := s.store.User(ctx, a.UserID)
@@ -328,6 +338,17 @@ func (s *Service) SetOwnEmail(ctx context.Context, a Actor, email string) (User,
 		s.record(ctx, a, "account.email", u.Name, changed)
 	}
 	return userView(u, au), nil
+}
+
+// verifyPassword checks the actor's current password. Wrong guesses count
+// against the same per-person limit as changing the password.
+func (s *Service) verifyPassword(ctx context.Context, a Actor, password string) error {
+	release, err := s.passwordCheck()
+	if err != nil {
+		return err
+	}
+	defer release()
+	return authError(s.pw.VerifyPassword(ctx, a.authUserID, password))
 }
 
 // setEmail sets a user's e-mail address. changed describes the change for
