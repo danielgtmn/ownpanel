@@ -18,6 +18,19 @@ import (
 	"github.com/danielgtmn/panzerschrank"
 )
 
+// The tools of dns.go and their annotations (see TestToolsAndAnnotations).
+var _ = expectTools(map[string]toolWant{
+	"list_dns_domains":         {readOnly: true, idempotent: true},
+	"manage_dns_domain":        {idempotent: true},
+	"stop_managing_dns_domain": {},
+	"list_dns_connections":     {readOnly: true, idempotent: true},
+	"list_dns_records":         {readOnly: true, idempotent: true},
+	"set_dns_record":           {destructive: true, idempotent: true},
+	"delete_dns_record":        {destructive: true, idempotent: true},
+	"check_domain":             {readOnly: true, idempotent: true},
+	"point_domain_at_server":   {destructive: true, idempotent: true},
+})
+
 const (
 	hzRootToken = "hz-root-token-0123456789abcdef"
 	hzBobToken  = "hz-bob-token-0123456789abcdef"

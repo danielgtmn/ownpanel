@@ -9,6 +9,6 @@ Closes #
 - [ ] `go vet ./...` and `go test ./...` (if Go changed)
 - [ ] `npm run lint`, `npm test -- --run`, `npm run build` in `web/` (if the web app changed)
 - [ ] Tried in the running app / in a systemd container (UI, installer or updater changes)
-- [ ] Wiki and README updated where they describe this
+- [ ] Wiki and README updated where they describe this (not `wiki/Roadmap.md`, that is updated for a release)
 
 ## Not tested / open questions
