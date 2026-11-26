@@ -2,9 +2,10 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"time"
+
+	"github.com/danielgtmn/ablage"
 )
 
 // Filter scripts (Sieve) of a mailbox and what their runs remember (G2):
@@ -27,42 +28,68 @@ type SieveScript struct {
 	Updated time.Time
 }
 
+// scriptWhere selects a mailbox's script by name.
+func scriptWhere(id, name string) ablage.Cond {
+	return ablage.And(ablage.Eq("storage_id", id), ablage.Eq("name", name))
+}
+
 // SieveScripts lists a mailbox's scripts by name.
 func (s *Store) SieveScripts(ctx context.Context, id string) ([]SieveScript, error) {
-	rows, err := s.rdb.QueryContext(ctx, `SELECT name, active, length(CAST(content AS BLOB)), updated FROM sieve_scripts WHERE storage_id = ? ORDER BY name`, id)
+	list, err := s.r.sieveScripts.Find(ctx, ablage.Query{Where: ablage.Eq("storage_id", id), OrderBy: []ablage.Order{ablage.Asc("name")}})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []SieveScript
-	for rows.Next() {
-		var sc SieveScript
-		var at int64
-		if err := rows.Scan(&sc.Name, &sc.Active, &sc.Size, &at); err != nil {
-			return nil, err
-		}
-		sc.Updated = time.Unix(at, 0)
-		out = append(out, sc)
+	for _, r := range list {
+		out = append(out, SieveScript{Name: r.Name, Active: r.ActiveFor != nil, Size: int(r.Size), Updated: local(r.Updated)})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // SieveScript returns one script; ErrNoScript when there is none.
 func (s *Store) SieveScript(ctx context.Context, id, name string) (content string, active bool, err error) {
-	err = s.rdb.QueryRowContext(ctx, `SELECT content, active FROM sieve_scripts WHERE storage_id = ? AND name = ?`, id, name).Scan(&content, &active)
-	if errors.Is(err, sql.ErrNoRows) {
+	r, err := s.r.sieveScripts.First(ctx, ablage.Query{Where: scriptWhere(id, name)})
+	if errors.Is(err, ablage.ErrNotFound) {
 		return "", false, ErrNoScript
 	}
-	return content, active, err
+	return r.Content, r.ActiveFor != nil, err
 }
 
 // ActiveSieveScript returns the active script; ok is false when none is.
 func (s *Store) ActiveSieveScript(ctx context.Context, id string) (name, content string, ok bool, err error) {
-	err = s.rdb.QueryRowContext(ctx, `SELECT name, content FROM sieve_scripts WHERE storage_id = ? AND active = 1`, id).Scan(&name, &content)
-	if errors.Is(err, sql.ErrNoRows) {
+	r, err := s.r.sieveScripts.First(ctx, ablage.Query{Where: ablage.Eq("active_for", id)})
+	if errors.Is(err, ablage.ErrNotFound) {
 		return "", "", false, nil
 	}
-	return name, content, err == nil, err
+	return r.Name, r.Content, err == nil, err
+}
+
+// deactivate makes no script of the mailbox active (except the one named
+// keep, "" for none).
+func deactivate(ctx context.Context, tx *repos, id, keep string) error {
+	_, err := tx.sieveScripts.UpdateWhere(ctx, ablage.And(ablage.Eq("active_for", id), ablage.Ne("name", keep)), ablage.Row{"active_for": nil})
+	return err
+}
+
+// putScript writes a script, creating it or replacing its content; with
+// activate it becomes the active one (the others must be inactive by then).
+func (s *Store) putScript(ctx context.Context, tx *repos, id, name, content string, activate bool) error {
+	r, err := tx.sieveScripts.First(ctx, ablage.Query{Where: scriptWhere(id, name)})
+	if err != nil && !errors.Is(err, ablage.ErrNotFound) {
+		return err
+	}
+	set := ablage.Row{"content": content, "size": int64(len(content)), "updated": sec(s.now())}
+	if activate {
+		set["active_for"] = id
+	}
+	if err == nil {
+		return tx.sieveScripts.Patch(ctx, r.ID, set)
+	}
+	n := sieveScriptRec{StorageID: id, Name: name, Content: content, Size: int64(len(content)), Updated: sec(s.now())}
+	if activate {
+		n.ActiveFor = &id
+	}
+	return tx.sieveScripts.Create(ctx, &n)
 }
 
 // PutSieveScript stores a script (replacing one of the same name). A new
@@ -72,87 +99,86 @@ func (s *Store) PutSieveScript(ctx context.Context, id, name, content string, ma
 	if err := checkID(id); err != nil {
 		return err
 	}
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		var n, exists int
-		if err := tx.QueryRow(`SELECT count(*), coalesce(sum(name = ?), 0) FROM sieve_scripts WHERE storage_id = ?`, name, id).Scan(&n, &exists); err != nil {
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		n, err := tx.sieveScripts.Count(ctx, ablage.Eq("storage_id", id))
+		if err != nil {
 			return err
 		}
-		if exists == 0 && n >= max {
+		exists, err := tx.sieveScripts.Count(ctx, scriptWhere(id, name))
+		if err != nil {
+			return err
+		}
+		if exists == 0 && n >= int64(max) {
 			return ErrTooManyScript
 		}
 		if activate {
-			if _, err := tx.Exec(`UPDATE sieve_scripts SET active = 0 WHERE storage_id = ? AND active = 1 AND name != ?`, id, name); err != nil {
+			if err := deactivate(ctx, tx, id, name); err != nil {
 				return err
 			}
 		}
-		_, err := tx.Exec(`INSERT INTO sieve_scripts (storage_id, name, content, active, updated) VALUES (?, ?, ?, ?, ?)
-			ON CONFLICT (storage_id, name) DO UPDATE SET content = excluded.content, updated = excluded.updated,
-			active = CASE WHEN excluded.active = 1 THEN 1 ELSE sieve_scripts.active END`,
-			id, name, content, activate, s.now().Unix())
-		return err
+		return s.putScript(ctx, tx, id, name, content, activate)
 	})
 }
 
 // SetActiveSieveScript makes name the active script; "" makes none active.
 func (s *Store) SetActiveSieveScript(ctx context.Context, id, name string) error {
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		var r sieveScriptRec
 		if name != "" {
-			var n int
-			if err := tx.QueryRow(`SELECT count(*) FROM sieve_scripts WHERE storage_id = ? AND name = ?`, id, name).Scan(&n); err != nil {
-				return err
-			}
-			if n == 0 {
+			var err error
+			r, err = tx.sieveScripts.First(ctx, ablage.Query{Where: scriptWhere(id, name)})
+			if errors.Is(err, ablage.ErrNotFound) {
 				return ErrNoScript
 			}
+			if err != nil {
+				return err
+			}
 		}
-		if _, err := tx.Exec(`UPDATE sieve_scripts SET active = 0 WHERE storage_id = ? AND active = 1`, id); err != nil {
+		if err := deactivate(ctx, tx, id, ""); err != nil {
 			return err
 		}
 		if name == "" {
 			return nil
 		}
-		_, err := tx.Exec(`UPDATE sieve_scripts SET active = 1 WHERE storage_id = ? AND name = ?`, id, name)
-		return err
+		return tx.sieveScripts.Patch(ctx, r.ID, ablage.Row{"active_for": id})
 	})
 }
 
 // DeleteSieveScript removes a script that is not active.
 func (s *Store) DeleteSieveScript(ctx context.Context, id, name string) error {
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		var active bool
-		err := tx.QueryRow(`SELECT active FROM sieve_scripts WHERE storage_id = ? AND name = ?`, id, name).Scan(&active)
-		if errors.Is(err, sql.ErrNoRows) {
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		r, err := tx.sieveScripts.First(ctx, ablage.Query{Where: scriptWhere(id, name)})
+		if errors.Is(err, ablage.ErrNotFound) {
 			return ErrNoScript
 		}
 		if err != nil {
 			return err
 		}
-		if active {
+		if r.ActiveFor != nil {
 			return ErrScriptActive
 		}
-		_, err = tx.Exec(`DELETE FROM sieve_scripts WHERE storage_id = ? AND name = ?`, id, name)
-		return err
+		return tx.sieveScripts.Delete(ctx, r.ID)
 	})
 }
 
 // RenameSieveScript renames a script; it stays active if it was.
 func (s *Store) RenameSieveScript(ctx context.Context, id, from, to string) error {
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		var n int
-		if err := tx.QueryRow(`SELECT count(*) FROM sieve_scripts WHERE storage_id = ? AND name = ?`, id, to).Scan(&n); err != nil {
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		n, err := tx.sieveScripts.Count(ctx, scriptWhere(id, to))
+		if err != nil {
 			return err
 		}
 		if n > 0 && from != to {
 			return ErrScriptExists
 		}
-		res, err := tx.Exec(`UPDATE sieve_scripts SET name = ?, updated = ? WHERE storage_id = ? AND name = ?`, to, s.now().Unix(), id, from)
+		r, err := tx.sieveScripts.First(ctx, ablage.Query{Where: scriptWhere(id, from)})
+		if errors.Is(err, ablage.ErrNotFound) {
+			return ErrNoScript
+		}
 		if err != nil {
 			return err
 		}
-		if k, _ := res.RowsAffected(); k == 0 {
-			return ErrNoScript
-		}
-		return nil
+		return tx.sieveScripts.Patch(ctx, r.ID, ablage.Row{"name": to, "updated": sec(s.now())})
 	})
 }
 
@@ -161,20 +187,18 @@ func (s *Store) RenameSieveScript(ctx context.Context, id, from, to string) erro
 // may be sent (and is recorded), false when one was sent already.
 func (s *Store) SieveReplied(ctx context.Context, id, handle, sender string, period time.Duration, now time.Time) (bool, error) {
 	ok := false
-	err := s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		var until int64
-		err := tx.QueryRow(`SELECT until FROM sieve_replies WHERE storage_id = ? AND handle = ? AND sender = ?`, id, handle, sender).Scan(&until)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	err := s.write(ctx, func(tx *repos, _ *changes) error {
+		ok = false
+		r, err := tx.sieveReplies.First(ctx, ablage.Query{Where: ablage.And(ablage.Eq("storage_id", id), ablage.Eq("handle", handle), ablage.Eq("sender", sender))})
+		if err != nil && !errors.Is(err, ablage.ErrNotFound) {
 			return err
 		}
-		if err == nil && until > now.Unix() {
+		if err == nil && r.Until.Unix() > now.Unix() {
 			return nil
 		}
 		ok = true
-		_, err = tx.Exec(`INSERT INTO sieve_replies (storage_id, handle, sender, until) VALUES (?, ?, ?, ?)
-			ON CONFLICT (storage_id, handle, sender) DO UPDATE SET until = excluded.until`,
-			id, handle, sender, now.Add(period).Unix())
-		return err
+		return tx.sieveReplies.UpsertOn(ctx, &sieveReplyRec{StorageID: id, Handle: handle, Sender: sender, Until: sec(now.Add(period))},
+			"storage_id", "handle", "sender")
 	})
 	return ok, err
 }
@@ -182,8 +206,8 @@ func (s *Store) SieveReplied(ctx context.Context, id, handle, sender string, per
 // ForgetSieveReply takes back what SieveReplied recorded (the reply could
 // not be sent after all).
 func (s *Store) ForgetSieveReply(ctx context.Context, id, handle, sender string) error {
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		_, err := tx.Exec(`DELETE FROM sieve_replies WHERE storage_id = ? AND handle = ? AND sender = ?`, id, handle, sender)
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		_, err := tx.sieveReplies.DeleteWhere(ctx, ablage.And(ablage.Eq("storage_id", id), ablage.Eq("handle", handle), ablage.Eq("sender", sender)))
 		return err
 	})
 }
@@ -193,19 +217,16 @@ func (s *Store) ForgetSieveReply(ctx context.Context, id, handle, sender string)
 // forward only with last (RFC 7352 :last).
 func (s *Store) SieveDuplicate(ctx context.Context, id, key string, period time.Duration, last bool, now time.Time) (bool, error) {
 	seen := false
-	err := s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		var until int64
-		err := tx.QueryRow(`SELECT until FROM sieve_duplicates WHERE storage_id = ? AND id = ?`, id, key).Scan(&until)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	err := s.write(ctx, func(tx *repos, _ *changes) error {
+		r, err := tx.sieveDuplicates.First(ctx, ablage.Query{Where: ablage.And(ablage.Eq("storage_id", id), ablage.Eq("key", key))})
+		if err != nil && !errors.Is(err, ablage.ErrNotFound) {
 			return err
 		}
-		seen = err == nil && until > now.Unix()
+		seen = err == nil && r.Until.Unix() > now.Unix()
 		if seen && !last {
 			return nil
 		}
-		_, err = tx.Exec(`INSERT INTO sieve_duplicates (storage_id, id, until) VALUES (?, ?, ?)
-			ON CONFLICT (storage_id, id) DO UPDATE SET until = excluded.until`, id, key, now.Add(period).Unix())
-		return err
+		return tx.sieveDuplicates.UpsertOn(ctx, &sieveDuplicateRec{StorageID: id, Key: key, Until: sec(now.Add(period))}, "storage_id", "key")
 	})
 	return seen, err
 }
@@ -213,21 +234,20 @@ func (s *Store) SieveDuplicate(ctx context.Context, id, key string, period time.
 // SieveDuplicateSeen tells whether the duplicate test saw key and still
 // remembers it, without recording anything.
 func (s *Store) SieveDuplicateSeen(ctx context.Context, id, key string, now time.Time) (bool, error) {
-	var until int64
-	err := s.rdb.QueryRowContext(ctx, `SELECT until FROM sieve_duplicates WHERE storage_id = ? AND id = ?`, id, key).Scan(&until)
-	if errors.Is(err, sql.ErrNoRows) {
+	r, err := s.r.sieveDuplicates.First(ctx, ablage.Query{Where: ablage.And(ablage.Eq("storage_id", id), ablage.Eq("key", key))})
+	if errors.Is(err, ablage.ErrNotFound) {
 		return false, nil
 	}
-	return err == nil && until > now.Unix(), err
+	return err == nil && r.Until.Unix() > now.Unix(), err
 }
 
 // PruneSieve forgets replies and duplicate ids whose time has passed.
 func (s *Store) PruneSieve(ctx context.Context, now time.Time) error {
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		if _, err := tx.Exec(`DELETE FROM sieve_replies WHERE until <= ?`, now.Unix()); err != nil {
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		if _, err := tx.sieveReplies.DeleteWhere(ctx, ablage.Lte("until", sec(now))); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`DELETE FROM sieve_duplicates WHERE until <= ?`, now.Unix())
+		_, err := tx.sieveDuplicates.DeleteWhere(ctx, ablage.Lte("until", sec(now)))
 		return err
 	})
 }
@@ -255,43 +275,41 @@ func (s *Store) ReplaceGeneratedSieve(ctx context.Context, id, name, content str
 	if err := checkID(id); err != nil {
 		return err
 	}
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		var active string
-		err := tx.QueryRow(`SELECT name FROM sieve_scripts WHERE storage_id = ? AND active = 1`, id).Scan(&active)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		active := ""
+		r, err := tx.sieveScripts.First(ctx, ablage.Query{Where: ablage.Eq("active_for", id)})
+		if err == nil {
+			active = r.Name
+		} else if !errors.Is(err, ablage.ErrNotFound) {
 			return err
 		}
-		var gen string
-		err = tx.QueryRow(`SELECT content FROM sieve_scripts WHERE storage_id = ? AND name = ?`, id, name).Scan(&gen)
+		g, err := tx.sieveScripts.First(ctx, ablage.Query{Where: scriptWhere(id, name)})
 		hasGen := err == nil
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		if err != nil && !errors.Is(err, ablage.ErrNotFound) {
 			return err
 		}
-		if active != guard.Active || hasGen != guard.HasGenerated || hasGen && gen != guard.Generated {
+		if active != guard.Active || hasGen != guard.HasGenerated || hasGen && g.Content != guard.Generated {
 			return ErrSieveChanged
 		}
 		if content == "" {
-			if _, err := tx.Exec(`UPDATE sieve_scripts SET active = 0 WHERE storage_id = ? AND active = 1`, id); err != nil {
+			if err := deactivate(ctx, tx, id, ""); err != nil {
 				return err
 			}
-			_, err := tx.Exec(`DELETE FROM sieve_scripts WHERE storage_id = ? AND name = ?`, id, name)
+			_, err := tx.sieveScripts.DeleteWhere(ctx, scriptWhere(id, name))
 			return err
 		}
 		if !hasGen {
-			var n int
-			if err := tx.QueryRow(`SELECT count(*) FROM sieve_scripts WHERE storage_id = ?`, id).Scan(&n); err != nil {
+			n, err := tx.sieveScripts.Count(ctx, ablage.Eq("storage_id", id))
+			if err != nil {
 				return err
 			}
-			if n >= max {
+			if n >= int64(max) {
 				return ErrTooManyScript
 			}
 		}
-		if _, err := tx.Exec(`UPDATE sieve_scripts SET active = 0 WHERE storage_id = ? AND active = 1`, id); err != nil {
+		if err := deactivate(ctx, tx, id, ""); err != nil {
 			return err
 		}
-		_, err = tx.Exec(`INSERT INTO sieve_scripts (storage_id, name, content, active, updated) VALUES (?, ?, ?, 1, ?)
-			ON CONFLICT (storage_id, name) DO UPDATE SET content = excluded.content, active = 1, updated = excluded.updated`,
-			id, name, content, s.now().Unix())
-		return err
+		return s.putScript(ctx, tx, id, name, content, true)
 	})
 }

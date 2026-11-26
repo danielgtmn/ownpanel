@@ -191,16 +191,16 @@ export const startImport = (domain: string, localPart: string, source: ImportSou
   request<MailImport>(`${mailboxPath(domain, localPart)}/imports`, { method: 'POST', body: { ...source, choices } })
 export const createUpload = (domain: string, localPart: string, name: string, size: number) =>
   request<MailImport>(`${mailboxPath(domain, localPart)}/uploads`, { method: 'POST', body: { name, size } })
-export const startFileImport = (domain: string, localPart: string, id: number, choices: ImportChoices) =>
-  request<MailImport>(`${mailboxPath(domain, localPart)}/imports/${id}/start`, { method: 'POST', body: { choices } })
-export const continueImport = (domain: string, localPart: string, id: number, password: string) =>
-  request<MailImport>(`${mailboxPath(domain, localPart)}/imports/${id}/start`, { method: 'POST', body: { password } })
+export const startFileImport = (domain: string, localPart: string, id: string, choices: ImportChoices) =>
+  request<MailImport>(`${mailboxPath(domain, localPart)}/imports/${encodeSegment(id)}/start`, { method: 'POST', body: { choices } })
+export const continueImport = (domain: string, localPart: string, id: string, password: string) =>
+  request<MailImport>(`${mailboxPath(domain, localPart)}/imports/${encodeSegment(id)}/start`, { method: 'POST', body: { password } })
 export const listImports = async (domain: string, localPart: string) =>
   (await request<MailImport[] | null>(`${mailboxPath(domain, localPart)}/imports`)) ?? []
-export const getImport = (domain: string, localPart: string, id: number) =>
-  request<MailImport>(`${mailboxPath(domain, localPart)}/imports/${id}`)
-export const cancelImport = (domain: string, localPart: string, id: number) =>
-  request<void>(`${mailboxPath(domain, localPart)}/imports/${id}`, { method: 'DELETE' })
+export const getImport = (domain: string, localPart: string, id: string) =>
+  request<MailImport>(`${mailboxPath(domain, localPart)}/imports/${encodeSegment(id)}`)
+export const cancelImport = (domain: string, localPart: string, id: string) =>
+  request<void>(`${mailboxPath(domain, localPart)}/imports/${encodeSegment(id)}`, { method: 'DELETE' })
 // A file download, opened as a link (the session cookie goes along).
 export const exportHref = (domain: string, localPart: string) => `/api${mailboxPath(domain, localPart)}/export`
 
@@ -209,7 +209,7 @@ export const exportHref = (domain: string, localPart: string) => `/api${mailboxP
 export function uploadPart(
   domain: string,
   localPart: string,
-  id: number,
+  id: string,
   offset: number,
   part: Blob,
   onBytes: (sent: number) => void,
@@ -217,7 +217,7 @@ export function uploadPart(
 ): Promise<number> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
-    xhr.open('PUT', `/api${mailboxPath(domain, localPart)}/uploads/${id}?offset=${offset}`)
+    xhr.open('PUT', `/api${mailboxPath(domain, localPart)}/uploads/${encodeSegment(id)}?offset=${offset}`)
     xhr.setRequestHeader('X-Ownpanel-Request', '1')
     xhr.setRequestHeader('Content-Type', 'application/octet-stream')
     xhr.withCredentials = true

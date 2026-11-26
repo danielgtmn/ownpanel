@@ -2,12 +2,12 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"path/filepath"
-	"strings"
 	"time"
+
+	"github.com/danielgtmn/ablage"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 )
@@ -38,32 +38,11 @@ type importData struct {
 	Scans    int                           `json:"scans,omitempty"`
 }
 
-const importCols = `id, storage_id, kind, state, error, host, port, username, file_name, file_size, received, data, created, started, finished`
-
-func unixOrZero(t time.Time) int64 {
-	if t.IsZero() {
-		return 0
-	}
-	return t.Unix()
-}
-
-func timeOrZero(v int64) time.Time {
-	if v == 0 {
-		return time.Time{}
-	}
-	return time.Unix(v, 0).UTC()
-}
-
-func scanImport(sc interface{ Scan(...any) error }) (config.ImportJob, error) {
-	var j config.ImportJob
-	var data string
-	var created, started, finished int64
-	if err := sc.Scan(&j.ID, &j.StorageID, &j.Kind, &j.State, &j.Error, &j.Host, &j.Port, &j.Username,
-		&j.FileName, &j.FileSize, &j.Received, &data, &created, &started, &finished); err != nil {
-		return j, err
-	}
+func importJob(r importRec) (config.ImportJob, error) {
+	j := config.ImportJob{ID: r.ID, StorageID: r.StorageID, Kind: r.Kind, State: r.State, Error: r.Error, Host: r.Host, Port: int(r.Port),
+		Username: r.Username, FileName: r.FileName, FileSize: r.FileSize, Received: r.Received}
 	var d importData
-	if err := json.Unmarshal([]byte(data), &d); err != nil {
+	if err := json.Unmarshal([]byte(r.Data), &d); err != nil {
 		return j, err
 	}
 	j.Choices, j.Check, j.Folders = d.Choices, d.Check, d.Folders
@@ -71,8 +50,20 @@ func scanImport(sc interface{ Scan(...any) error }) (config.ImportJob, error) {
 		j.Folders = []config.ImportFolderProgress{}
 	}
 	j.Messages, j.Copied, j.Skipped, j.Failed, j.Bytes, j.Position, j.Scans = d.Messages, d.Copied, d.Skipped, d.Failed, d.Bytes, d.Position, d.Scans
-	j.Created, j.Started, j.Finished = timeOrZero(created), timeOrZero(started), timeOrZero(finished)
+	j.Created, j.Started, j.Finished = utcOrZero(r.Created), utcOrZero(r.Started), utcOrZero(r.Finished)
 	return j, nil
+}
+
+func importJobs(list []importRec) ([]config.ImportJob, error) {
+	out := []config.ImportJob{}
+	for _, r := range list {
+		j, err := importJob(r)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	return out, nil
 }
 
 func encodeImportData(j *config.ImportJob) (string, error) {
@@ -94,16 +85,15 @@ func (s *Store) CreateImport(ctx context.Context, j *config.ImportJob) error {
 	if err != nil {
 		return err
 	}
-	j.Created = s.now().UTC().Truncate(time.Second)
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		res, err := tx.Exec(`INSERT INTO imports (storage_id, kind, state, error, host, port, username, file_name, file_size, received, data, created)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			j.StorageID, j.Kind, j.State, j.Error, j.Host, j.Port, j.Username, j.FileName, j.FileSize, j.Received, data, j.Created.Unix())
-		if err != nil {
+	j.Created = sec(s.now())
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		r := importRec{StorageID: j.StorageID, Kind: j.Kind, State: j.State, Error: j.Error, Host: j.Host, Port: int64(j.Port), Username: j.Username,
+			FileName: j.FileName, FileSize: j.FileSize, Received: j.Received, Data: data, Created: j.Created}
+		if err := tx.imports.Create(ctx, &r); err != nil {
 			return err
 		}
-		j.ID, err = res.LastInsertId()
-		return err
+		j.ID = r.ID
+		return nil
 	})
 }
 
@@ -114,14 +104,14 @@ func (s *Store) SaveImport(ctx context.Context, j *config.ImportJob) error {
 	if err != nil {
 		return err
 	}
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		res, err := tx.Exec(`UPDATE imports SET state = ?, error = ?, received = ?, data = ?, started = ?, finished = ?
-			WHERE id = ? AND storage_id = ?`,
-			j.State, j.Error, j.Received, data, unixOrZero(j.Started), unixOrZero(j.Finished), j.ID, j.StorageID)
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		n, err := tx.imports.UpdateWhere(ctx, ablage.And(ablage.Eq("id", j.ID), ablage.Eq("storage_id", j.StorageID)), ablage.Row{
+			"state": j.State, "error": j.Error, "received": j.Received, "data": data, "started": secOrZero(j.Started), "finished": secOrZero(j.Finished),
+		})
 		if err != nil {
 			return err
 		}
-		if n, _ := res.RowsAffected(); n == 0 {
+		if n == 0 {
 			return ErrNoImport
 		}
 		return nil
@@ -129,17 +119,24 @@ func (s *Store) SaveImport(ctx context.Context, j *config.ImportJob) error {
 }
 
 // Import returns a job of a mailbox.
-func (s *Store) Import(ctx context.Context, storageID string, id int64) (config.ImportJob, error) {
-	j, err := scanImport(s.rdb.QueryRowContext(ctx, `SELECT `+importCols+` FROM imports WHERE id = ? AND storage_id = ?`, id, storageID))
-	if errors.Is(err, sql.ErrNoRows) {
-		return j, ErrNoImport
+func (s *Store) Import(ctx context.Context, storageID, id string) (config.ImportJob, error) {
+	r, err := s.r.imports.First(ctx, ablage.Query{Where: ablage.And(ablage.Eq("id", id), ablage.Eq("storage_id", storageID))})
+	if errors.Is(err, ablage.ErrNotFound) {
+		return config.ImportJob{}, ErrNoImport
 	}
-	return j, err
+	if err != nil {
+		return config.ImportJob{}, err
+	}
+	return importJob(r)
 }
 
 // Imports returns the jobs of a mailbox, newest first.
 func (s *Store) Imports(ctx context.Context, storageID string) ([]config.ImportJob, error) {
-	return s.queryImports(ctx, `SELECT `+importCols+` FROM imports WHERE storage_id = ? ORDER BY id DESC`, storageID)
+	list, err := s.r.imports.Find(ctx, ablage.Query{Where: ablage.Eq("storage_id", storageID), OrderBy: []ablage.Order{ablage.Desc("created"), ablage.Desc("id")}})
+	if err != nil {
+		return nil, err
+	}
+	return importJobs(list)
 }
 
 // ImportsIn returns the jobs of all mailboxes in the given states, oldest
@@ -148,128 +145,100 @@ func (s *Store) ImportsIn(ctx context.Context, states ...string) ([]config.Impor
 	if len(states) == 0 {
 		return nil, nil
 	}
-	args := make([]any, len(states))
-	for i, st := range states {
-		args[i] = st
-	}
-	q := `SELECT ` + importCols + ` FROM imports WHERE state IN (?` + strings.Repeat(", ?", len(states)-1) + `) ORDER BY id`
-	return s.queryImports(ctx, q, args...)
-}
-
-func (s *Store) queryImports(ctx context.Context, q string, args ...any) ([]config.ImportJob, error) {
-	rows, err := s.rdb.QueryContext(ctx, q, args...)
+	list, err := s.r.imports.Find(ctx, ablage.Query{Where: ablage.In("state", states...), OrderBy: []ablage.Order{ablage.Asc("created")}})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []config.ImportJob{}
-	for rows.Next() {
-		j, err := scanImport(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, j)
-	}
-	return out, rows.Err()
+	return importJobs(list)
 }
 
-// ImportIDs returns the ids of every job (to find spool files without one).
-func (s *Store) ImportIDs(ctx context.Context) (map[int64]string, error) {
-	rows, err := s.rdb.QueryContext(ctx, `SELECT id, state FROM imports`)
+// ImportIDs returns the ids of every job with its state (to find spool
+// files without one).
+func (s *Store) ImportIDs(ctx context.Context) (map[string]string, error) {
+	list, err := s.r.imports.Find(ctx, ablage.Query{})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := map[int64]string{}
-	for rows.Next() {
-		var id int64
-		var st string
-		if err := rows.Scan(&id, &st); err != nil {
-			return nil, err
-		}
-		out[id] = st
+	out := map[string]string{}
+	for _, r := range list {
+		out[r.ID] = r.State
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // DeleteImport removes a job with its failures.
-func (s *Store) DeleteImport(ctx context.Context, storageID string, id int64) error {
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		_, err := tx.Exec(`DELETE FROM imports WHERE id = ? AND storage_id = ?`, id, storageID)
+func (s *Store) DeleteImport(ctx context.Context, storageID, id string) error {
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		_, err := tx.imports.DeleteWhere(ctx, ablage.And(ablage.Eq("id", id), ablage.Eq("storage_id", storageID)))
 		return err
 	})
 }
 
 // PruneImports removes finished jobs that ended before cutoff and returns
 // their ids.
-func (s *Store) PruneImports(ctx context.Context, cutoff time.Time) ([]int64, error) {
-	var ids []int64
-	err := s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		rows, err := tx.Query(`DELETE FROM imports WHERE state IN (?, ?, ?) AND finished > 0 AND finished < ? RETURNING id`,
-			config.ImportDone, config.ImportFailed, config.ImportCancelled, cutoff.Unix())
-		if err != nil {
+func (s *Store) PruneImports(ctx context.Context, cutoff time.Time) ([]string, error) {
+	var ids []string
+	err := s.write(ctx, func(tx *repos, _ *changes) error {
+		ids = nil
+		list, err := tx.imports.Find(ctx, ablage.Query{Where: ablage.And(
+			ablage.In("state", config.ImportDone, config.ImportFailed, config.ImportCancelled),
+			ablage.Gt("finished", time.Time{}), ablage.Lt("finished", sec(cutoff)))})
+		if err != nil || len(list) == 0 {
 			return err
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var id int64
-			if err := rows.Scan(&id); err != nil {
-				return err
-			}
-			ids = append(ids, id)
+		for _, r := range list {
+			ids = append(ids, r.ID)
 		}
-		return rows.Err()
+		_, err = tx.imports.DeleteWhere(ctx, ablage.In("id", ids...))
+		return err
 	})
 	return ids, err
 }
 
 // AddImportFailure records a message a job did not copy; beyond
 // config.MaxImportFailures entries nothing more is recorded.
-func (s *Store) AddImportFailure(ctx context.Context, id int64, f config.ImportFailure) error {
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		var n int
-		if err := tx.QueryRow(`SELECT count(*) FROM import_failures WHERE import_id = ?`, id).Scan(&n); err != nil {
+func (s *Store) AddImportFailure(ctx context.Context, id string, f config.ImportFailure) error {
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		n, err := tx.importFailures.Count(ctx, ablage.Eq("import_id", id))
+		if err != nil {
 			return err
 		}
 		if n >= config.MaxImportFailures {
 			return nil
 		}
-		_, err := tx.Exec(`INSERT INTO import_failures (import_id, folder, date, subject, reason) VALUES (?, ?, ?, ?, ?)`,
-			id, f.Folder, unixOrZero(f.Date), f.Subject, f.Reason)
-		return err
+		last, err := tx.importFailures.Aggregate(ctx, ablage.Aggregation{Where: ablage.Eq("import_id", id), Values: []ablage.Agg{ablage.Max("n", "n")}})
+		if err != nil {
+			return err
+		}
+		next := int64(0)
+		if v, ok := last[0]["n"].(int64); ok {
+			next = v + 1
+		}
+		return tx.importFailures.Create(ctx, &importFailureRec{ImportID: id, N: next, Folder: f.Folder, Date: secOrZero(f.Date), Subject: f.Subject, Reason: f.Reason})
 	})
 }
 
 // ImportFailures returns the recorded failures of a job, in order.
-func (s *Store) ImportFailures(ctx context.Context, id int64) ([]config.ImportFailure, error) {
-	rows, err := s.rdb.QueryContext(ctx, `SELECT folder, date, subject, reason FROM import_failures WHERE import_id = ? ORDER BY id`, id)
+func (s *Store) ImportFailures(ctx context.Context, id string) ([]config.ImportFailure, error) {
+	list, err := s.r.importFailures.Find(ctx, ablage.Query{Where: ablage.Eq("import_id", id), OrderBy: []ablage.Order{ablage.Asc("n")}})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := []config.ImportFailure{}
-	for rows.Next() {
-		var f config.ImportFailure
-		var date int64
-		if err := rows.Scan(&f.Folder, &date, &f.Subject, &f.Reason); err != nil {
-			return nil, err
-		}
-		f.Date = timeOrZero(date)
-		out = append(out, f)
+	for _, r := range list {
+		out = append(out, config.ImportFailure{Folder: r.Folder, Date: utcOrZero(r.Date), Subject: r.Subject, Reason: r.Reason})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // ImportSeen tells whether a message with this key was imported into
 // folder of the mailbox before, or into any folder when folder is "".
 func (s *Store) ImportSeen(ctx context.Context, storageID, folder string, key []byte) (bool, error) {
-	var n int
-	var err error
-	if folder == "" {
-		err = s.rdb.QueryRowContext(ctx, `SELECT count(*) FROM import_seen WHERE storage_id = ? AND key = ?`, storageID, key).Scan(&n)
-	} else {
-		err = s.rdb.QueryRowContext(ctx, `SELECT count(*) FROM import_seen WHERE storage_id = ? AND folder = ? AND key = ?`, storageID, folder, key).Scan(&n)
+	where := ablage.And(ablage.Eq("storage_id", storageID), ablage.Eq("key", key))
+	if folder != "" {
+		where = ablage.And(where, ablage.Eq("folder", folder))
 	}
+	n, err := s.r.importSeen.Count(ctx, where)
 	return n > 0, err
 }
 
@@ -284,18 +253,16 @@ type Watermark struct {
 // key is set) and moves the watermark (when wm is set), in one
 // transaction.
 func (s *Store) RecordImported(ctx context.Context, storageID, folder string, key []byte, wm *Watermark) error {
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
+	return s.write(ctx, func(tx *repos, _ *changes) error {
 		if key != nil {
-			if _, err := tx.Exec(`INSERT INTO import_seen (storage_id, folder, key) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`,
-				storageID, folder, key); err != nil {
+			err := tx.importSeen.Create(ctx, &importSeenRec{StorageID: storageID, Folder: folder, Key: key})
+			if err != nil && !errors.Is(err, ablage.ErrDuplicate) {
 				return err
 			}
 		}
 		if wm != nil {
-			if _, err := tx.Exec(`INSERT INTO import_watermarks (storage_id, host, username, folder, uid_validity, last_uid)
-				VALUES (?, ?, ?, ?, ?, ?)
-				ON CONFLICT (storage_id, host, username, folder) DO UPDATE SET uid_validity = excluded.uid_validity, last_uid = excluded.last_uid`,
-				storageID, wm.Host, wm.Username, wm.Folder, wm.UIDValidity, wm.LastUID); err != nil {
+			if err := tx.importMarks.UpsertOn(ctx, &importWatermarkRec{StorageID: storageID, Host: wm.Host, Username: wm.Username, Folder: wm.Folder,
+				UIDValidity: int64(wm.UIDValidity), LastUID: int64(wm.LastUID)}, "storage_id", "host", "username", "folder"); err != nil {
 				return err
 			}
 		}
@@ -307,12 +274,12 @@ func (s *Store) RecordImported(ctx context.Context, storageID, folder string, ke
 // if there is none).
 func (s *Store) ImportWatermark(ctx context.Context, storageID, host, username, folder string) (Watermark, error) {
 	wm := Watermark{Host: host, Username: username, Folder: folder}
-	err := s.rdb.QueryRowContext(ctx, `SELECT uid_validity, last_uid FROM import_watermarks
-		WHERE storage_id = ? AND host = ? AND username = ? AND folder = ?`, storageID, host, username, folder).
-		Scan(&wm.UIDValidity, &wm.LastUID)
-	if errors.Is(err, sql.ErrNoRows) {
+	r, err := s.r.importMarks.First(ctx, ablage.Query{Where: ablage.And(ablage.Eq("storage_id", storageID), ablage.Eq("host", host),
+		ablage.Eq("username", username), ablage.Eq("folder", folder))})
+	if errors.Is(err, ablage.ErrNotFound) {
 		return wm, nil
 	}
+	wm.UIDValidity, wm.LastUID = uint32(r.UIDValidity), uint32(r.LastUID)
 	return wm, err
 }
 
@@ -323,15 +290,12 @@ func (s *Store) SetSpecialUse(ctx context.Context, storageID, name, use string) 
 	if err != nil {
 		return err
 	}
-	return s.write(ctx, func(tx *sql.Tx, ch *changes) error {
-		var n int
-		if err := tx.QueryRow(`SELECT count(*) FROM folders WHERE storage_id = ? AND special_use = ?`, storageID, use).Scan(&n); err != nil {
+	return s.write(ctx, func(tx *repos, ch *changes) error {
+		n, err := tx.folders.Count(ctx, ablage.And(ablage.Eq("storage_id", storageID), ablage.Eq("special_use", use)))
+		if err != nil || n > 0 {
 			return err
 		}
-		if n > 0 {
-			return nil
-		}
-		if _, err := tx.Exec(`UPDATE folders SET special_use = ? WHERE storage_id = ? AND name = ?`, use, storageID, name); err != nil {
+		if _, err := tx.folders.UpdateWhere(ctx, ablage.And(ablage.Eq("storage_id", storageID), ablage.Eq("name", name)), ablage.Row{"special_use": use}); err != nil {
 			return err
 		}
 		ch.add(storageID, Change{Kind: FoldersChanged, Folder: name})

@@ -45,7 +45,7 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 
 ## Ids
 
-Every id the API returns or takes is a **string**: `"id": "42"`, `"connection_id": "7"`, `"mailbox_id": "12"`, and the same text in paths (`/api/redirects/42`). Treat ids as opaque: do not parse them as numbers, compare them or rely on their order; ids created later may not be digits. Records that existed before keep their number as text. A path id that does not name anything you may see answers `404`. The one exception is the id of a mail import, which stays a number (see "Moving mail in and out" under [E-mail](#e-mail)).
+Every id the API returns or takes is a **string**: `"id": "42"`, `"connection_id": "7"`, `"mailbox_id": "12"`, and the same text in paths (`/api/redirects/42`). Treat ids as opaque: do not parse them as numbers, compare them or rely on their order; ids created later may not be digits. Records that existed before keep their number as text. A path id that does not name anything you may see answers `404`. This includes the id of a mail import (`"id": "42"`, newer ones like `"01jx3k5m7n9p1q3r5s7t9v1w3x"`).
 
 ## Objects
 

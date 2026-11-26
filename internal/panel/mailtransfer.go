@@ -35,11 +35,11 @@ type MailTransfer interface {
 	CheckImport(ctx context.Context, storageID string, src config.ImportSource) (config.ImportCheck, error)
 	StartImport(ctx context.Context, storageID string, start config.ImportStart) (config.ImportJob, error)
 	CreateUpload(ctx context.Context, storageID string, req config.UploadRequest) (config.ImportJob, error)
-	UploadPart(ctx context.Context, storageID string, id, offset int64, part io.Reader, size int64) (int64, error)
-	ResumeImport(ctx context.Context, storageID string, id int64, r config.ImportResume) (config.ImportJob, error)
+	UploadPart(ctx context.Context, storageID, id string, offset int64, part io.Reader, size int64) (int64, error)
+	ResumeImport(ctx context.Context, storageID, id string, r config.ImportResume) (config.ImportJob, error)
 	ImportJobs(ctx context.Context, storageID string) ([]config.ImportJob, error)
-	ImportJob(ctx context.Context, storageID string, id int64) (config.ImportJob, error)
-	CancelImport(ctx context.Context, storageID string, id int64) error
+	ImportJob(ctx context.Context, storageID, id string) (config.ImportJob, error)
+	CancelImport(ctx context.Context, storageID, id string) error
 	Export(ctx context.Context, storageID string) (io.ReadCloser, error)
 }
 
@@ -260,7 +260,7 @@ func importDetail(j config.ImportJob, note string) string {
 	if j.Kind == config.ImportIMAP {
 		src = fmt.Sprintf("%s at %s", j.Username, j.Host)
 	}
-	d := fmt.Sprintf("import %d from %s", j.ID, src)
+	d := fmt.Sprintf("import %s from %s", j.ID, src)
 	if note != "" {
 		d += " (" + note + ")"
 	}
@@ -298,13 +298,13 @@ func (s *Service) CreateMailUpload(ctx context.Context, a Actor, id string, req 
 // UploadMailPart passes size bytes of an upload, starting at offset,
 // through to the mail service without buffering. It returns how many
 // bytes the service has now.
-func (s *Service) UploadMailPart(ctx context.Context, a Actor, id string, job, offset int64, part io.Reader, size int64) (int64, error) {
+func (s *Service) UploadMailPart(ctx context.Context, a Actor, id, job string, offset int64, part io.Reader, size int64) (int64, error) {
 	m, t, err := s.transferMailbox(ctx, a, id, true)
 	if err != nil {
 		return 0, err
 	}
 	switch {
-	case job <= 0:
+	case !config.ValidImportID(job):
 		return 0, errorf(NotFound, "import not found")
 	case offset < 0:
 		return 0, errorf(Invalid, "the offset must not be negative")
@@ -323,12 +323,12 @@ func (s *Service) UploadMailPart(ctx context.Context, a Actor, id string, job, o
 // ResumeMailImport starts an uploaded file's import once it was checked,
 // or continues a paused or interrupted import from another account with
 // its password.
-func (s *Service) ResumeMailImport(ctx context.Context, a Actor, id string, job int64, r config.ImportResume) (MailImport, error) {
+func (s *Service) ResumeMailImport(ctx context.Context, a Actor, id, job string, r config.ImportResume) (MailImport, error) {
 	m, t, err := s.transferMailbox(ctx, a, id, true)
 	if err != nil {
 		return MailImport{}, err
 	}
-	if job <= 0 {
+	if !config.ValidImportID(job) {
 		return MailImport{}, errorf(NotFound, "import not found")
 	}
 	if err := s.beginImport(a); err != nil {
@@ -375,12 +375,12 @@ func (s *Service) MailImports(ctx context.Context, a Actor, id string) ([]MailIm
 }
 
 // MailImportOf returns one import job with the messages it could not copy.
-func (s *Service) MailImportOf(ctx context.Context, a Actor, id string, job int64) (MailImport, error) {
+func (s *Service) MailImportOf(ctx context.Context, a Actor, id, job string) (MailImport, error) {
 	m, t, err := s.transferMailbox(ctx, a, id, false)
 	if err != nil {
 		return MailImport{}, err
 	}
-	if job <= 0 {
+	if !config.ValidImportID(job) {
 		return MailImport{}, errorf(NotFound, "import not found")
 	}
 	ctx, cancel := context.WithTimeout(ctx, mailTimeout)
@@ -394,12 +394,12 @@ func (s *Service) MailImportOf(ctx context.Context, a Actor, id string, job int6
 
 // CancelMailImport stops an import that has not finished (what was copied
 // stays), or removes a finished one from the list.
-func (s *Service) CancelMailImport(ctx context.Context, a Actor, id string, job int64) error {
+func (s *Service) CancelMailImport(ctx context.Context, a Actor, id, job string) error {
 	m, t, err := s.transferMailbox(ctx, a, id, true)
 	if err != nil {
 		return err
 	}
-	if job <= 0 {
+	if !config.ValidImportID(job) {
 		return errorf(NotFound, "import not found")
 	}
 	ctx2, cancel := context.WithTimeout(ctx, mailTimeout)

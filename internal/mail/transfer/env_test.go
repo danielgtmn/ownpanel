@@ -171,7 +171,7 @@ func (e *env) jobJSON(sid string) string {
 }
 
 // wait waits until a job is in one of the states.
-func (e *env) wait(sid string, id int64, states ...string) config.ImportJob {
+func (e *env) wait(sid, id string, states ...string) config.ImportJob {
 	e.t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	for {
@@ -180,7 +180,7 @@ func (e *env) wait(sid string, id int64, states ...string) config.ImportJob {
 			return j
 		}
 		if time.Now().After(deadline) {
-			e.t.Fatalf("job %d: state %q (%s), want %v (%v)", id, j.State, j.Error, states, err)
+			e.t.Fatalf("job %s: state %q (%s), want %v (%v)", id, j.State, j.Error, states, err)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}

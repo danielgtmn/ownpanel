@@ -135,7 +135,7 @@ func TestMailRecordAndHealthTools(t *testing.T) {
 type importMail struct {
 	mu       sync.Mutex
 	hash     string
-	canceled []int64
+	canceled []string
 }
 
 func (f *importMail) Load(_ context.Context, cfg *mailconfig.Config) error {
@@ -165,26 +165,26 @@ func (f *importMail) StartImport(context.Context, string, mailconfig.ImportStart
 func (f *importMail) CreateUpload(context.Context, string, mailconfig.UploadRequest) (mailconfig.ImportJob, error) {
 	return mailconfig.ImportJob{}, nil
 }
-func (f *importMail) UploadPart(context.Context, string, int64, int64, io.Reader, int64) (int64, error) {
+func (f *importMail) UploadPart(context.Context, string, string, int64, io.Reader, int64) (int64, error) {
 	return 0, nil
 }
-func (f *importMail) ResumeImport(context.Context, string, int64, mailconfig.ImportResume) (mailconfig.ImportJob, error) {
+func (f *importMail) ResumeImport(context.Context, string, string, mailconfig.ImportResume) (mailconfig.ImportJob, error) {
 	return mailconfig.ImportJob{}, nil
 }
 func (f *importMail) job(sid string) mailconfig.ImportJob {
-	return mailconfig.ImportJob{ID: 7, StorageID: sid, Kind: mailconfig.ImportIMAP, State: mailconfig.ImportRunning,
+	return mailconfig.ImportJob{ID: "7", StorageID: sid, Kind: mailconfig.ImportIMAP, State: mailconfig.ImportRunning,
 		Host: "imap.example.org", Username: "me", Copied: 3, Created: time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC)}
 }
 func (f *importMail) ImportJobs(_ context.Context, sid string) ([]mailconfig.ImportJob, error) {
 	return []mailconfig.ImportJob{f.job(sid)}, nil
 }
-func (f *importMail) ImportJob(_ context.Context, sid string, id int64) (mailconfig.ImportJob, error) {
-	if id != 7 {
+func (f *importMail) ImportJob(_ context.Context, sid, id string) (mailconfig.ImportJob, error) {
+	if id != "7" {
 		return mailconfig.ImportJob{}, &mailconfig.Error{Status: 404, Msg: "unknown import"}
 	}
 	return f.job(sid), nil
 }
-func (f *importMail) CancelImport(_ context.Context, _ string, id int64) error {
+func (f *importMail) CancelImport(_ context.Context, _, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.canceled = append(f.canceled, id)
@@ -218,12 +218,13 @@ func TestMailImportTools(t *testing.T) {
 		list.Imports[0].Address != "info@example.com" || list.Imports[0].Created != "2026-11-25T10:00:00Z" {
 		t.Fatalf("imports %+v", list)
 	}
-	refused(t, call_(t, ro, "cancel_mail_import", map[string]any{"id": box.ID, "import_id": 7}), "can only read")
+	refused(t, call_(t, ro, "cancel_mail_import", map[string]any{"id": box.ID, "import_id": "7"}), "can only read")
 	cs := e.connect(t, e.write)
 	var out cancelledOutput
-	ok(t, call_(t, cs, "cancel_mail_import", map[string]any{"id": box.ID, "import_id": 7}), &out)
-	refused(t, call_(t, cs, "cancel_mail_import", map[string]any{"id": box.ID, "import_id": 8}), "unknown import")
-	if out.Cancelled != 7 || len(mail.canceled) != 1 {
+	ok(t, call_(t, cs, "cancel_mail_import", map[string]any{"id": box.ID, "import_id": "7"}), &out)
+	refused(t, call_(t, cs, "cancel_mail_import", map[string]any{"id": box.ID, "import_id": "8"}), "unknown import")
+	refused(t, call_(t, cs, "cancel_mail_import", map[string]any{"id": box.ID, "import_id": "../7"}), "not found")
+	if out.Cancelled != "7" || len(mail.canceled) != 1 {
 		t.Fatalf("cancel %+v %v", out, mail.canceled)
 	}
 }
