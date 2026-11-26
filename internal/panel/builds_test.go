@@ -20,7 +20,7 @@ func (f *fakeBuilds) Status(context.Context) (build.Status, error) { return f.st
 func TestBuildAvailability(t *testing.T) {
 	svc, _, _ := newService(t)
 	ctx := context.Background()
-	member := Actor{UserID: 2, Name: "bob", Via: ViaSession}
+	member := Actor{UserID: "2", Name: "bob", Via: ViaSession}
 	if _, err := svc.BuildAvailability(ctx, member); KindOf(err) != Forbidden {
 		t.Errorf("a member may see it: %v", err)
 	}
