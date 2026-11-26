@@ -72,9 +72,15 @@ func TestMailRulesPermissions(t *testing.T) {
 		run  func(w *mailWorld, a Actor) error
 		want []Kind
 	}{
-		{"show member's", func(w *mailWorld, a Actor) error { _, err := w.svc.MailboxRulesOf(ctx, a, w.bobBox); return err },
+		{"show member's", func(w *mailWorld, a Actor) error {
+			_, err := w.svc.MailboxRulesOf(ctx, a, w.bobBox)
+			return err
+		},
 			[]Kind{ok, ok, ok, ok, F, ok, F, U}},
-		{"show admin's", func(w *mailWorld, a Actor) error { _, err := w.svc.MailboxRulesOf(ctx, a, w.rootBox); return err },
+		{"show admin's", func(w *mailWorld, a Actor) error {
+			_, err := w.svc.MailboxRulesOf(ctx, a, w.rootBox)
+			return err
+		},
 			[]Kind{ok, ok, N, N, F, ok, F, U}},
 		{"set member's out-of-office", func(w *mailWorld, a Actor) error {
 			_, err := w.svc.SetMailboxOutOfOffice(ctx, a, w.bobBox, OutOfOfficeInput{Enabled: true, Text: "Gone."})
@@ -190,7 +196,7 @@ func TestMailRules(t *testing.T) {
 	}
 }
 
-func (w *mailWorld) mailboxStorageID(t *testing.T, id int64) string {
+func (w *mailWorld) mailboxStorageID(t *testing.T, id string) string {
 	t.Helper()
 	m, err := w.svc.store.Mailbox(context.Background(), id)
 	if err != nil {

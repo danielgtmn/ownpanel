@@ -1,12 +1,13 @@
 import type { Zone } from './types.ts'
 
-export type AccountGroup = { connectionId: number; connectionName: string; zones: Zone[] }
+export type AccountGroup = { connectionId: string; connectionName: string; zones: Zone[] }
 
 export const zoneKey = (zone: Pick<Zone, 'connection_id' | 'name'>) => `${zone.connection_id}/${zone.name}`
 
-// The domains to choose from, one group per account, accounts and domains by name.
+// The domains to choose from, one group per account, accounts and domains by name. Accounts with the same name keep
+// the order they came in (ids are opaque, so they are not sorted by).
 export function groupByAccount(zones: Zone[]): AccountGroup[] {
-  const groups = new Map<number, AccountGroup>()
+  const groups = new Map<string, AccountGroup>()
   for (const zone of zones) {
     let group = groups.get(zone.connection_id)
     if (!group) {
@@ -16,7 +17,7 @@ export function groupByAccount(zones: Zone[]): AccountGroup[] {
     group.zones.push(zone)
   }
   return [...groups.values()]
-    .sort((a, b) => a.connectionName.localeCompare(b.connectionName) || a.connectionId - b.connectionId)
+    .sort((a, b) => a.connectionName.localeCompare(b.connectionName))
     .map((group) => ({ ...group, zones: [...group.zones].sort((a, b) => a.name.localeCompare(b.name)) }))
 }
 

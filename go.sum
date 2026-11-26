@@ -1,9 +1,11 @@
 blitiri.com.ar/go/spf v1.6.0 h1:TK91HOya1R2J5b+x+NZfdYTqDqbr+Q+hil5gy8WzLDQ=
 blitiri.com.ar/go/spf v1.6.0/go.mod h1:x9HYT28jEB65YMJOIVWSx0p88YCJ2h1N0fDFEhhWFBc=
+github.com/danielgtmn/ablage v0.3.0 h1:c5BEzvVjLlzdgzObiohtCR6VHe78jZDJaExw6wGIZmM=
+github.com/danielgtmn/ablage v0.3.0/go.mod h1:xhVY+pQtwY3TGQ2T5lnqG3hKG7SUN9j63eznqageHLw=
 github.com/danielgtmn/panzerschrank v0.1.0 h1:wjhmu0ljHldHYAMA6lpPYPbDPvK12hV/4K4SUhbxekY=
 github.com/danielgtmn/panzerschrank v0.1.0/go.mod h1:dMqO7KAGZQPlbTtIdvK39Dw7Yj8tbJQcUFQH763aXgg=
-github.com/danielgtmn/sesam v1.0.0 h1:hVmurErpIwkNnxt5e9LxykgSypCY2lDaDk7iQxAw4DQ=
-github.com/danielgtmn/sesam v1.0.0/go.mod h1:S7i1/nzeYKzPC1lOYqII6JtLRKOpnn+J3zANavtpp8k=
+github.com/danielgtmn/sesam/v2 v2.0.0 h1:gXQv2cDhUU0NNVG3ZsDIhgfolFw9btOrIKrmhRom+3Y=
+github.com/danielgtmn/sesam/v2 v2.0.0/go.mod h1:BWAJOvvZTuT4ghnmT/7rF8cDXzyh7CURSW0Mgn5XkP4=
 github.com/dustin/go-humanize v1.1.0 h1:dbKTrvD0klcbBV/h4AWJdMuZogJACoMlvWIWZ5b2xWg=
 github.com/dustin/go-humanize v1.1.0/go.mod h1:hc1CvRkJMsgxqjmjMQF3QNRAZBwY8AXBAzKYoSX9sFI=
 github.com/emersion/go-ical v0.0.0-20261112170022-46c5b53a1723 h1:p8cDduDfznI5LDWxHDRD2B7b6y2TlFRVV4i5xzKq4xk=

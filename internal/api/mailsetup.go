@@ -275,10 +275,7 @@ func (s *Server) autodiscover(w http.ResponseWriter, r *http.Request, domain str
 // ---- Apple devices ----
 
 func (s *Server) appleMailProfile(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "mailbox")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	set, err := s.Panel.MailboxSetupOf(r.Context(), actorOf(r), id)
 	if err != nil {
 		writeFailure(w, err)

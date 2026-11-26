@@ -192,7 +192,7 @@ func (s *Service) mailSetupCaddy(ctx context.Context, o *caddy.Options, sites []
 		return err
 	}
 	reserved := map[string]bool{host: true, o.PanelDomain: true}
-	claimedBy := map[string]int64{} // name -> owner of the site or domain redirect
+	claimedBy := map[string]string{} // name -> owner of the site or domain redirect
 	for _, site := range sites {
 		for _, d := range site.Domains {
 			claimedBy[d] = site.OwnerID
@@ -272,7 +272,7 @@ type MailboxSetup struct {
 
 // MailboxSetupOf returns the settings for mail programs of a mailbox
 // (whoever may see the mailbox; no password, nothing secret).
-func (s *Service) MailboxSetupOf(ctx context.Context, a Actor, id int64) (MailboxSetup, error) {
+func (s *Service) MailboxSetupOf(ctx context.Context, a Actor, id string) (MailboxSetup, error) {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return MailboxSetup{}, err

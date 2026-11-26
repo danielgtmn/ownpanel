@@ -28,13 +28,13 @@ describe('collectAddresses', () => {
         { name: 'blog', domains: ['Blog.Example.com.'], live: false },
       ],
       zones: [],
-      redirects: [{ id: 3, source: 'go.example.com', target: 'https://example.org' }],
+      redirects: [{ id: '3', source: 'go.example.com', target: 'https://example.org' }],
     })
     expect(list).toEqual([
       { host: 'example.com', wildcard: false, use: { kind: 'site', site: 'main', live: true } },
       { host: 'www.example.com', wildcard: false, use: { kind: 'site', site: 'main', live: true } },
       { host: 'blog.example.com', wildcard: false, use: { kind: 'site', site: 'blog', live: false } },
-      { host: 'go.example.com', wildcard: false, use: { kind: 'redirect', id: 3, target: 'https://example.org' } },
+      { host: 'go.example.com', wildcard: false, use: { kind: 'redirect', id: '3', target: 'https://example.org' } },
     ])
   })
 
@@ -100,7 +100,7 @@ describe('collectAddresses', () => {
       {
         sites: [{ name: 'shop', domains: ['shop.example.com', 'example.org', 'example.com.au'], live: true }],
         zones: [],
-        redirects: [{ id: 1, source: 'go.other.com', target: 'https://example.com' }],
+        redirects: [{ id: '1', source: 'go.other.com', target: 'https://example.com' }],
         pathRedirectHosts: ['notexample.com'],
       },
       [{ zone: 'other.com', records: [{ name: 'x', type: 'A' }] }],
@@ -129,7 +129,7 @@ describe('recordHost', () => {
 
 describe('address states', () => {
   const site: Address = { host: 'example.com', wildcard: false, use: { kind: 'site', site: 'main', live: true } }
-  const redirect: Address = { host: 'go.example.com', wildcard: false, use: { kind: 'redirect', id: 1, target: 'https://x.org' } }
+  const redirect: Address = { host: 'go.example.com', wildcard: false, use: { kind: 'redirect', id: '1', target: 'https://x.org' } }
   const unused: Address = { host: 'shop.example.com', wildcard: false, use: { kind: 'none' } }
   const wildcard: Address = { host: '*.example.com', wildcard: true, use: { kind: 'none' } }
 

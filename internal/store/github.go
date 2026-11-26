@@ -1,16 +1,34 @@
 package store
 
 import (
+	"cmp"
 	"context"
-	"database/sql"
+	"errors"
+	"slices"
+	"strconv"
+	"strings"
 	"time"
+
+	"github.com/danielgtmn/ablage"
+)
+
+// GitHub connections: GitHub Apps the panel created from a manifest, and
+// where they are installed. A private App can only be installed on the
+// account that owns it, so connecting several GitHub accounts or
+// organisations means one App each; nothing here limits their number.
+
+// Account types GitHub reports for the owner of an App and of an
+// installation.
+const (
+	githubUser         = "User"
+	githubOrganization = "Organization"
 )
 
 // GitHubApp is a GitHub App the panel created. The three secrets are
 // stored as given; the panel seals them before.
 type GitHubApp struct {
-	ID            int64 // the panel's id
-	AppID         int64 // GitHub's id
+	ID            string // the panel's id
+	AppID         int64  // GitHub's id
 	Slug          string
 	Name          string
 	ClientID      string
@@ -28,8 +46,8 @@ type GitHubApp struct {
 
 // GitHubInstallation is where an App is installed.
 type GitHubInstallation struct {
-	ID                  int64 // GitHub's installation id
-	AppID               int64 // the panel's id of the App
+	ID                  int64  // GitHub's installation id
+	AppID               string // the panel's id of the App
 	AccountLogin        string
 	AccountType         string
 	RepositorySelection string
@@ -39,213 +57,218 @@ type GitHubInstallation struct {
 	UpdatedAt           time.Time
 }
 
-const githubAppCols = `a.id, a.app_id, a.slug, a.name, a.client_id, a.owner_login, a.owner_type, a.html_url,
-	a.private_key, a.webhook_secret, a.client_secret, coalesce(u.name, ''), a.created_at, a.last_checked_at, a.last_error`
+var (
+	errGitHubAppNotFound          = notFoundf("GitHub connection not found")
+	errGitHubInstallationNotFound = notFoundf("GitHub installation not found")
+)
 
-const githubAppFrom = ` FROM github_apps a LEFT JOIN users u ON u.id = a.created_by`
+// installationKey is the row id of an installation: GitHub's id as text.
+func installationKey(id int64) string { return strconv.FormatInt(id, 10) }
 
-func scanGitHubApp(row interface{ Scan(...any) error }) (GitHubApp, error) {
-	var a GitHubApp
-	var created int64
-	var checked sql.NullInt64
-	err := row.Scan(&a.ID, &a.AppID, &a.Slug, &a.Name, &a.ClientID, &a.OwnerLogin, &a.OwnerType, &a.HTMLURL,
-		&a.PrivateKey, &a.WebhookSecret, &a.ClientSecret, &a.CreatedBy, &created, &checked, &a.LastError)
-	if err != nil {
-		if noRows(err) {
-			return GitHubApp{}, notFoundf("GitHub connection not found")
-		}
-		return GitHubApp{}, err
-	}
-	a.CreatedAt = unix(created)
-	if checked.Valid {
-		at := unix(checked.Int64)
-		a.LastCheckedAt = &at
-	}
-	return a, nil
-}
-
-// CreateGitHubApp stores an App. createdBy is the user who connected it.
-func (s *Store) CreateGitHubApp(ctx context.Context, a GitHubApp, createdBy int64) (GitHubApp, error) {
-	var by sql.NullInt64
-	if createdBy != 0 {
-		by = sql.NullInt64{Int64: createdBy, Valid: true}
-	}
-	res, err := s.db.ExecContext(ctx, `INSERT INTO github_apps
-		(app_id, slug, name, client_id, owner_login, owner_type, html_url, private_key, webhook_secret, client_secret,
-		 created_by, created_at, last_checked_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		a.AppID, a.Slug, a.Name, a.ClientID, a.OwnerLogin, a.OwnerType, a.HTMLURL, a.PrivateKey, a.WebhookSecret,
-		a.ClientSecret, by, s.now(), s.now())
-	if isUnique(err) {
-		return GitHubApp{}, conflictf("this GitHub App is already connected")
-	}
-	if err != nil {
-		return GitHubApp{}, err
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return GitHubApp{}, err
-	}
-	return s.GitHubApp(ctx, id)
-}
-
-// GitHubApp returns one App by the panel's id.
-func (s *Store) GitHubApp(ctx context.Context, id int64) (GitHubApp, error) {
-	return scanGitHubApp(s.db.QueryRowContext(ctx, `SELECT `+githubAppCols+githubAppFrom+` WHERE a.id = ?`, id))
-}
-
-// GitHubApps lists every App, oldest first.
-func (s *Store) GitHubApps(ctx context.Context) ([]GitHubApp, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+githubAppCols+githubAppFrom+` ORDER BY a.created_at, a.id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []GitHubApp{}
-	for rows.Next() {
-		a, err := scanGitHubApp(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, a)
-	}
-	return out, rows.Err()
-}
-
-// DeleteGitHubApp forgets an App, its secrets and its installations.
-func (s *Store) DeleteGitHubApp(ctx context.Context, id int64) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM github_apps WHERE id = ?`, id)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return notFoundf("GitHub connection not found")
+func checkAccountType(t string) error {
+	if t != githubUser && t != githubOrganization {
+		return invalidf("unknown kind of GitHub account %q", t)
 	}
 	return nil
 }
 
+func checkGitHubApp(a GitHubApp) error {
+	if a.AppID <= 0 {
+		return invalidf("a GitHub App needs GitHub's id")
+	}
+	return checkAccountType(a.OwnerType)
+}
+
+func checkGitHubInstallation(i GitHubInstallation) error {
+	if i.ID <= 0 {
+		return invalidf("a GitHub installation needs GitHub's id")
+	}
+	if err := checkAccountType(i.AccountType); err != nil {
+		return err
+	}
+	if i.RepositorySelection != "all" && i.RepositorySelection != "selected" {
+		return invalidf("unknown repository selection %q", i.RepositorySelection)
+	}
+	return nil
+}
+
+func githubAppsOf(ctx context.Context, r repos, rows []githubAppRow) ([]GitHubApp, error) {
+	ids := make([]string, len(rows))
+	for i, a := range rows {
+		ids[i] = deref(a.CreatedBy)
+	}
+	names, err := userNames(ctx, r, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]GitHubApp, len(rows))
+	for i, a := range rows {
+		out[i] = GitHubApp{ID: a.ID, AppID: a.AppID, Slug: a.Slug, Name: a.Name, ClientID: a.ClientID,
+			OwnerLogin: a.OwnerLogin, OwnerType: a.OwnerType, HTMLURL: a.HTMLURL, PrivateKey: a.PrivateKey,
+			WebhookSecret: a.WebhookSecret, ClientSecret: a.ClientSecret, CreatedBy: names[deref(a.CreatedBy)],
+			CreatedAt: a.CreatedAt, LastCheckedAt: a.LastCheckedAt, LastError: a.LastError}
+	}
+	return out, nil
+}
+
+// CreateGitHubApp stores an App. createdBy is the id of the user who
+// connected it ("" for none).
+func (s *Store) CreateGitHubApp(ctx context.Context, a GitHubApp, createdBy string) (GitHubApp, error) {
+	if err := checkGitHubApp(a); err != nil {
+		return GitHubApp{}, err
+	}
+	now := s.now()
+	row := githubAppRow{AppID: a.AppID, Slug: a.Slug, Name: a.Name, ClientID: a.ClientID, OwnerLogin: a.OwnerLogin,
+		OwnerType: a.OwnerType, HTMLURL: a.HTMLURL, PrivateKey: a.PrivateKey, WebhookSecret: a.WebhookSecret,
+		ClientSecret: a.ClientSecret, CreatedBy: optional(createdBy), CreatedAt: now, LastCheckedAt: &now}
+	if err := s.r.githubApps.Create(ctx, &row); err != nil {
+		if errors.Is(err, ablage.ErrReference) {
+			return GitHubApp{}, errUserNotFound
+		}
+		return GitHubApp{}, dup(err, conflictf("this GitHub App is already connected"))
+	}
+	return s.GitHubApp(ctx, row.ID)
+}
+
+// GitHubApp returns one App by the panel's id.
+func (s *Store) GitHubApp(ctx context.Context, id string) (GitHubApp, error) {
+	if id == "" {
+		return GitHubApp{}, errGitHubAppNotFound
+	}
+	row, err := s.r.githubApps.Get(ctx, id)
+	if err != nil {
+		return GitHubApp{}, missing(err, errGitHubAppNotFound)
+	}
+	list, err := githubAppsOf(ctx, s.r, []githubAppRow{row})
+	if err != nil {
+		return GitHubApp{}, err
+	}
+	return list[0], nil
+}
+
+// GitHubApps lists every App, oldest first.
+func (s *Store) GitHubApps(ctx context.Context) ([]GitHubApp, error) {
+	rows, err := s.r.githubApps.Find(ctx, ablage.Query{OrderBy: []ablage.Order{ablage.Asc("created_at")}})
+	if err != nil {
+		return nil, err
+	}
+	return githubAppsOf(ctx, s.r, rows)
+}
+
+// DeleteGitHubApp forgets an App, its secrets and its installations.
+func (s *Store) DeleteGitHubApp(ctx context.Context, id string) error {
+	if id == "" {
+		return errGitHubAppNotFound
+	}
+	return missing(s.r.githubApps.Delete(ctx, id), errGitHubAppNotFound)
+}
+
 // RecordGitHubCheck stores when GitHub was last asked about the App and
 // what went wrong ("" if nothing).
-func (s *Store) RecordGitHubCheck(ctx context.Context, id int64, at time.Time, lastError string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE github_apps SET last_checked_at = ?, last_error = ? WHERE id = ?`,
-		at.Unix(), lastError, id)
+func (s *Store) RecordGitHubCheck(ctx context.Context, id string, at time.Time, lastError string) error {
+	_, err := s.r.githubApps.UpdateWhere(ctx, ablage.Eq("id", id), ablage.Row{"last_checked_at": seconds(at), "last_error": lastError})
 	return err
 }
 
-const githubInstCols = `id, app_id, account_login, account_type, repository_selection, suspended, repository_count,
-	created_at, updated_at`
-
-func scanGitHubInstallation(row interface{ Scan(...any) error }) (GitHubInstallation, error) {
-	var i GitHubInstallation
-	var count sql.NullInt64
-	var created, updated int64
-	err := row.Scan(&i.ID, &i.AppID, &i.AccountLogin, &i.AccountType, &i.RepositorySelection, &i.Suspended, &count,
-		&created, &updated)
+func installationOf(row githubInstallationRow) (GitHubInstallation, error) {
+	id, err := strconv.ParseInt(row.ID, 10, 64)
 	if err != nil {
-		if noRows(err) {
-			return GitHubInstallation{}, notFoundf("GitHub installation not found")
-		}
 		return GitHubInstallation{}, err
 	}
-	if count.Valid {
-		n := int(count.Int64)
-		i.RepositoryCount = &n
-	}
-	i.CreatedAt, i.UpdatedAt = unix(created), unix(updated)
-	return i, nil
+	return GitHubInstallation{ID: id, AppID: row.AppID, AccountLogin: row.AccountLogin, AccountType: row.AccountType,
+		RepositorySelection: row.RepositorySelection, Suspended: row.Suspended, RepositoryCount: row.RepositoryCount,
+		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}, nil
 }
 
 // GitHubInstallation returns one installation by GitHub's id.
 func (s *Store) GitHubInstallation(ctx context.Context, id int64) (GitHubInstallation, error) {
-	return scanGitHubInstallation(s.db.QueryRowContext(ctx, `SELECT `+githubInstCols+` FROM github_installations WHERE id = ?`, id))
+	row, err := s.r.githubInsts.Get(ctx, installationKey(id))
+	if err != nil {
+		return GitHubInstallation{}, missing(err, errGitHubInstallationNotFound)
+	}
+	return installationOf(row)
 }
 
 // GitHubInstallations lists the installations of one App, or of all if
-// appID is 0, by account.
-func (s *Store) GitHubInstallations(ctx context.Context, appID int64) ([]GitHubInstallation, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+githubInstCols+` FROM github_installations
-		WHERE ? = 0 OR app_id = ? ORDER BY lower(account_login), id`, appID, appID)
+// appID is "", by account (ignoring case), then GitHub's id.
+func (s *Store) GitHubInstallations(ctx context.Context, appID string) ([]GitHubInstallation, error) {
+	where := ablage.All
+	if appID != "" {
+		where = ablage.Eq("app_id", appID)
+	}
+	rows, err := s.r.githubInsts.Find(ctx, ablage.Query{Where: where})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []GitHubInstallation{}
-	for rows.Next() {
-		i, err := scanGitHubInstallation(rows)
+	out := make([]GitHubInstallation, 0, len(rows))
+	for _, row := range rows {
+		i, err := installationOf(row)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, i)
 	}
-	return out, rows.Err()
+	slices.SortFunc(out, func(a, b GitHubInstallation) int {
+		return cmp.Or(cmp.Compare(strings.ToLower(a.AccountLogin), strings.ToLower(b.AccountLogin)), cmp.Compare(a.ID, b.ID))
+	})
+	return out, nil
 }
 
-func upsertGitHubInstallation(ctx context.Context, tx *sql.Tx, i GitHubInstallation, now int64) error {
-	res, err := tx.ExecContext(ctx, `INSERT INTO github_installations
-		(id, app_id, account_login, account_type, repository_selection, suspended, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (id) DO UPDATE SET account_login = excluded.account_login, account_type = excluded.account_type,
-			repository_selection = excluded.repository_selection, suspended = excluded.suspended,
-			updated_at = excluded.updated_at
-		WHERE github_installations.app_id = excluded.app_id`,
-		i.ID, i.AppID, i.AccountLogin, i.AccountType, i.RepositorySelection, i.Suspended, now, now)
-	if err != nil {
+// putInstallation adds or updates one installation of an App. An
+// installation of another App is never taken over; a known one keeps its
+// repository count and when it was first seen.
+func putInstallation(ctx context.Context, r repos, i GitHubInstallation, now time.Time) error {
+	if err := checkGitHubInstallation(i); err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	key := installationKey(i.ID)
+	have, err := r.githubInsts.Get(ctx, key)
+	switch {
+	case errors.Is(err, ablage.ErrNotFound):
+		err := r.githubInsts.Create(ctx, &githubInstallationRow{ID: key, AppID: i.AppID, AccountLogin: i.AccountLogin,
+			AccountType: i.AccountType, RepositorySelection: i.RepositorySelection, Suspended: i.Suspended,
+			CreatedAt: now, UpdatedAt: now})
+		if errors.Is(err, ablage.ErrReference) {
+			return errGitHubAppNotFound
+		}
+		return err
+	case err != nil:
+		return err
+	}
+	if have.AppID != i.AppID {
 		return conflictf("the installation %d belongs to another GitHub connection", i.ID)
 	}
-	return nil
+	return r.githubInsts.Patch(ctx, key, ablage.Row{"account_login": i.AccountLogin, "account_type": i.AccountType,
+		"repository_selection": i.RepositorySelection, "suspended": i.Suspended, "updated_at": now})
 }
 
 // PutGitHubInstallation adds or updates one installation of an App.
 func (s *Store) PutGitHubInstallation(ctx context.Context, i GitHubInstallation) error {
-	return s.tx(ctx, func(tx *sql.Tx) error { return upsertGitHubInstallation(ctx, tx, i, s.now()) })
+	now := s.now()
+	return s.tx(ctx, func(r repos) error { return putInstallation(ctx, r, i, now) })
 }
 
 // ReplaceGitHubInstallations makes list the installations of an App:
 // others are removed, known ones keep their repository count.
-func (s *Store) ReplaceGitHubInstallations(ctx context.Context, appID int64, list []GitHubInstallation) error {
-	return s.tx(ctx, func(tx *sql.Tx) error {
-		keep := map[int64]bool{}
+func (s *Store) ReplaceGitHubInstallations(ctx context.Context, appID string, list []GitHubInstallation) error {
+	now := s.now()
+	return s.tx(ctx, func(r repos) error {
+		keep := make([]string, 0, len(list))
 		for _, i := range list {
 			i.AppID = appID
-			if err := upsertGitHubInstallation(ctx, tx, i, s.now()); err != nil {
+			if err := putInstallation(ctx, r, i, now); err != nil {
 				return err
 			}
-			keep[i.ID] = true
+			keep = append(keep, installationKey(i.ID))
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT id FROM github_installations WHERE app_id = ?`, appID)
-		if err != nil {
-			return err
-		}
-		var gone []int64
-		for rows.Next() {
-			var id int64
-			if err := rows.Scan(&id); err != nil {
-				rows.Close()
-				return err
-			}
-			if !keep[id] {
-				gone = append(gone, id)
-			}
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		for _, id := range gone {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM github_installations WHERE id = ?`, id); err != nil {
-				return err
-			}
-		}
-		return nil
+		_, err := r.githubInsts.DeleteWhere(ctx, ablage.And(ablage.Eq("app_id", appID), ablage.Not(ablage.In("id", keep...))))
+		return err
 	})
 }
 
 // SetGitHubRepositoryCount stores how many repositories an installation
 // may see.
 func (s *Store) SetGitHubRepositoryCount(ctx context.Context, id int64, n int) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE github_installations SET repository_count = ? WHERE id = ?`, n, id)
+	_, err := s.r.githubInsts.UpdateWhere(ctx, ablage.Eq("id", installationKey(id)), ablage.Row{"repository_count": n})
 	return err
 }

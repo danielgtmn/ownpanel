@@ -206,9 +206,9 @@ type mailWorld struct {
 	mail     *fakeMail
 	mx       *fakeMX
 	now      time.Time
-	bobBox   int64 // info@bobsite.example.com
-	rootBox  int64 // root@rootsite.example.com
-	bobAlias int64 // sales@bobsite.example.com
+	bobBox   string // info@bobsite.example.com
+	rootBox  string // root@rootsite.example.com
+	bobAlias string // sales@bobsite.example.com
 }
 
 // newMailWorld: the permission world with mail. bob has the active mail
@@ -242,7 +242,7 @@ func newMailWorld(t *testing.T) *mailWorld {
 			t.Fatalf("enable %s: %+v %v", c.d, d, err)
 		}
 	}
-	add := func(domain, local string) int64 {
+	add := func(domain, local string) string {
 		m, err := svc.store.CreateMailbox(ctx, store.Mailbox{StorageID: newStorageID(), Domain: domain, LocalPart: local,
 			PasswordHash: testHash(), QuotaBytes: DefaultQuotaBytes, SendPerHour: 100, SendPerDay: 500}, 0)
 		if err != nil {
@@ -437,14 +437,14 @@ func TestEnableMailDomainRules(t *testing.T) {
 	}
 	// Per-person cap.
 	for i := 1; i < MaxMailDomainsPerUser; i++ {
-		if _, err := svc.store.CreateMailDomain(ctx, "x"+string(rune('a'+i))+".other.org", 2, store.DKIMKey{Selector: "s", PrivateKey: []byte("k"), PublicKey: "p", State: store.DKIMActive}, 0); err != nil {
+		if _, err := svc.store.CreateMailDomain(ctx, "x"+string(rune('a'+i))+".other.org", "2", store.DKIMKey{Selector: "s", PrivateKey: []byte("k"), PublicKey: "p", State: store.DKIMActive}, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
 	_, err = svc.EnableMailDomain(ctx, bob, "full.other.org")
 	wantKind(t, err, Conflict)
 	// The user cannot be deleted while owning mail domains.
-	wantKind(t, svc.DeleteUser(ctx, admin, 2), Conflict)
+	wantKind(t, svc.DeleteUser(ctx, admin, "2"), Conflict)
 
 	// The private key is stored sealed.
 	keys, _ := svc.store.DKIMKeys(ctx, "shop.other.org")

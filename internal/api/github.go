@@ -207,11 +207,7 @@ func (s *Server) finishGitHubApp(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) startGitHubInstall(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "GitHub connection")
-	if !ok {
-		return
-	}
-	out, err := s.Panel.StartGitHubInstall(r.Context(), actorOf(r), id)
+	out, err := s.Panel.StartGitHubInstall(r.Context(), actorOf(r), r.PathValue("id"))
 	if err != nil {
 		writeFailure(w, err)
 		return
@@ -236,7 +232,7 @@ func (s *Server) finishGitHubInstall(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) githubRepositories(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "GitHub installation")
+	id, ok := githubID(w, r, "GitHub installation")
 	if !ok {
 		return
 	}
@@ -258,16 +254,23 @@ func (s *Server) refreshGitHub(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteGitHubApp(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "GitHub connection")
-	if !ok {
-		return
-	}
-	out, err := s.Panel.DeleteGitHubApp(r.Context(), actorOf(r), id)
+	out, err := s.Panel.DeleteGitHubApp(r.Context(), actorOf(r), r.PathValue("id"))
 	if err != nil {
 		writeFailure(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// githubID reads one of GitHub's own numeric ids (an installation's) from
+// the path. The panel's own ids are strings; GitHub's stay numbers.
+func githubID(w http.ResponseWriter, r *http.Request, what string) (int64, bool) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusNotFound, what+" not found")
+		return 0, false
+	}
+	return id, true
 }
 
 func capitalized(s string) string {

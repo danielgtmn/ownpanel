@@ -3,7 +3,6 @@ package storage
 import (
 	"bufio"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +11,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/danielgtmn/ablage"
 )
 
 // Shared mailboxes (G3 in wiki/Groupware-Architecture.md): the read state
@@ -38,18 +39,6 @@ func messageIDOf(file string) string {
 		return ""
 	}
 	return id
-}
-
-// FolderStatusAs is FolderStatus for a reader of a shared mailbox: Unseen
-// counts what that reader has not seen. "" is FolderStatus.
-func (s *Store) FolderStatusAs(ctx context.Context, id, name, reader string) (FolderStatus, error) {
-	st, err := s.FolderStatus(ctx, id, name)
-	if err != nil || reader == "" {
-		return st, err
-	}
-	err = s.rdb.QueryRowContext(ctx, `SELECT coalesce(sum(NOT EXISTS (SELECT 1 FROM shared_seen ss WHERE ss.message_id = m.id AND ss.reader = ?)), 0)
-		FROM messages m JOIN folders f ON f.id = m.folder_id WHERE f.storage_id = ? AND f.name = ?`, reader, id, st.Name).Scan(&st.Unseen)
-	return st, err
 }
 
 // CrossOptions describe a copy between two mailboxes.
@@ -86,27 +75,24 @@ func (s *Store) CopyAcross(ctx context.Context, srcID, from string, uids []uint3
 		return res, err
 	}
 	quota := s.quota(dstID)
-	err = s.write(ctx, func(tx *sql.Tx, ch *changes) error {
-		src, err := folderByName(tx, srcID, from)
+	err = s.write(ctx, func(tx *repos, ch *changes) error {
+		src, err := folderByName(ctx, tx, srcID, from)
 		if err != nil {
 			return err
 		}
-		dst, err := folderByName(tx, dstID, to)
+		dst, err := folderByName(ctx, tx, dstID, to)
 		if err != nil {
 			return err
 		}
-		res.UIDValidity = dst.uidValidity
-		next := dst.uidNext
+		res.UIDValidity = uint32(dst.UIDValidity)
+		msgs, err := messagesByUID(ctx, tx, srcID, src.ID, uids, opts.SrcReader)
+		if err != nil {
+			return err
+		}
+		next := dst.UIDNext
 		var added int64
 		var linked []string
-		for _, u := range sortedUnique(uids) {
-			m, err := scanMessage(tx.QueryRow(`SELECT `+messageCols+` FROM messages WHERE folder_id = ? AND uid = ?`, opts.SrcReader, src.id, u), srcID, opts.SrcReader)
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
-			}
-			if err != nil {
-				return err
-			}
+		for _, m := range msgs {
 			name, err := s.link(ch, srcID, m.file, dstID)
 			if err != nil {
 				return err
@@ -117,22 +103,18 @@ func (s *Store) CopyAcross(ctx context.Context, srcID, from string, uids []uint3
 				seen = slices.Contains(flags, FlagSeen)
 				flags = withSeen(flags, false)
 			}
-			ins, err := tx.Exec(`INSERT INTO messages (folder_id, storage_id, uid, file, size, internal_date, flags) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				dst.id, dstID, next, name, m.Size, m.InternalDate.Unix(), joinFlags(flags))
-			if err != nil {
+			c := messageRec{FolderID: dst.ID, StorageID: dstID, UID: next, File: name, Size: m.Size, InternalDate: sec(m.InternalDate)}
+			setFlags(&c, flags)
+			if err := tx.messages.Create(ctx, &c); err != nil {
 				return err
 			}
 			if seen {
-				row, err := ins.LastInsertId()
-				if err != nil {
-					return err
-				}
-				if _, err := tx.Exec(`INSERT INTO shared_seen (message_id, reader) VALUES (?, ?)`, row, opts.DstReader); err != nil {
+				if err := tx.sharedSeen.Create(ctx, &sharedSeenRec{MessageID: c.ID, Reader: opts.DstReader}); err != nil {
 					return err
 				}
 			}
-			res.Source = append(res.Source, u)
-			res.Dest = append(res.Dest, next)
+			res.Source = append(res.Source, m.UID)
+			res.Dest = append(res.Dest, uint32(next))
 			added += m.Size
 			next++
 		}
@@ -145,23 +127,23 @@ func (s *Store) CopyAcross(ctx context.Context, srcID, from string, uids []uint3
 			}
 		}
 		if quota > 0 {
-			var used int64
-			if err := tx.QueryRow(`SELECT used_bytes FROM mailboxes WHERE storage_id = ?`, dstID).Scan(&used); err != nil {
+			used, err := usedBytes(ctx, tx, dstID)
+			if err != nil {
 				return err
 			}
 			if used+added > quota {
 				return ErrOverQuota
 			}
 		}
-		if _, err := tx.Exec(`UPDATE folders SET uid_next = ? WHERE id = ?`, next, dst.id); err != nil {
+		if err := tx.folders.Patch(ctx, dst.ID, ablage.Row{"uid_next": next}); err != nil {
 			return err
 		}
-		if err := addUsage(tx, dstID, added, len(res.Dest)); err != nil {
+		if err := addUsage(ctx, tx, dstID, added, len(res.Dest)); err != nil {
 			return err
 		}
 		ch.add(dstID, Change{Kind: Appended, Folder: to, UIDs: res.Dest})
 		if opts.Move {
-			removed, err := s.removeMessages(tx, ch, srcID, src.id, res.Source)
+			removed, err := s.removeMessages(ctx, tx, ch, srcID, src.ID, res.Source)
 			if err != nil {
 				return err
 			}

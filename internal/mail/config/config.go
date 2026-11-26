@@ -252,6 +252,7 @@ var (
 	localPartRe = regexp.MustCompile(`^[a-z0-9!#$%&'*+/=?^_{|}~-]+(\.[a-z0-9!#$%&'*+/=?^_{|}~-]+)*$`)
 	selectorRe  = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 	storageIDRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	importIDRe  = regexp.MustCompile(`^[0-9a-z]{1,32}$`)
 )
 
 // ValidDomain tells whether d is a lowercase ASCII host name with at least
@@ -294,6 +295,12 @@ func ValidAddress(addr string) bool {
 // ValidStorageID tells whether id has the form of a storage id (32 lowercase
 // hex characters).
 func ValidStorageID(id string) bool { return storageIDRe.MatchString(id) }
+
+// ValidImportID tells whether id has the form of an import job id: 1 to 32
+// lowercase letters and digits (older jobs have digits only, newer ones 26
+// characters). The service names files after it, so anything else must be
+// refused before it reaches a path.
+func ValidImportID(id string) bool { return importIDRe.MatchString(id) }
 
 // Validate checks the configuration. It does not need the network.
 func (c *Config) Validate() error {

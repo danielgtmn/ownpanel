@@ -5,6 +5,7 @@ import {
   isIPv4,
   isIPv6,
   parseValues,
+  pendingChanges,
   routeServerError,
   sortRecordSets,
   ttlLabel,
@@ -12,6 +13,7 @@ import {
   validateRecordDraft,
   validateTtl,
   validateValues,
+  withChanges,
 } from './records.ts'
 import type { RecordSet } from './types.ts'
 
@@ -235,5 +237,32 @@ describe('parseValues and server errors', () => {
     expect(routeServerError('TTL must be between 60 and 86400.')).toEqual({ ttl: 'TTL must be between 60 and 86400.' })
     expect(routeServerError('"x" is not a valid IPv4 address.')).toHaveProperty('values')
     expect(routeServerError('Hetzner could not be reached.')).toHaveProperty('form')
+  })
+})
+
+describe('confirmed changes', () => {
+  const txt = (...values: string[]): RecordSet => ({ name: '@', type: 'TXT', ttl: null, values, locked: false })
+  const listed = [set('@', 'A'), txt('v=spf1 ~all'), set('old', 'A')]
+
+  it('hides a deleted set and shows a saved one while the list still has the old state', () => {
+    const changes = new Map([
+      ['A:old', null],
+      ['TXT:@', txt('v=spf1 ~all', 'MS=ms1')],
+      ['CNAME:www', set('www', 'CNAME')],
+    ])
+    const shown = withChanges(listed, changes)
+    expect(shown.map((s) => `${s.type}:${s.name}`).sort()).toEqual(['A:@', 'CNAME:www', 'TXT:@'])
+    expect(shown.find((s) => s.type === 'TXT')?.values).toEqual(['v=spf1 ~all', 'MS=ms1'])
+  })
+
+  it('keeps only the changes the list does not show yet', () => {
+    const changes = new Map([
+      ['A:old', null],
+      ['TXT:@', txt('MS=ms1', 'v=spf1 ~all')],
+    ])
+    expect([...pendingChanges(listed, changes).keys()]).toEqual(['A:old', 'TXT:@'])
+
+    const caughtUp = [set('@', 'A'), txt('v=spf1 ~all', 'MS=ms1')]
+    expect(pendingChanges(caughtUp, changes).size).toBe(0)
   })
 })

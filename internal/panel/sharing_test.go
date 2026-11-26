@@ -75,7 +75,7 @@ func TestSharedMailboxAndGrants(t *testing.T) {
 		t.Errorf("missing: %v", err)
 	}
 	for name, c := range map[string]struct {
-		id    int64
+		id    string
 		addr  string
 		right []string
 	}{

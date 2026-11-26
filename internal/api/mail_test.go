@@ -203,15 +203,15 @@ func TestMailRoutes(t *testing.T) {
 	wantKeys(t, rec.Body.Bytes(), aliasKeys...)
 	al := decode[panel.MailAlias](t, rec)
 	wantStatus(t, e.as("POST", "/api/mail/domains/example.com/aliases", `{"local_part":"info","targets":["a@example.org"]}`), 409, "mailbox")
-	rec = e.as("PUT", fmt.Sprintf("/api/mail/aliases/%d", al.ID), `{"local_part":"*","targets":["info@example.com","boss@example.org"]}`)
+	rec = e.as("PUT", fmt.Sprintf("/api/mail/aliases/%s", al.ID), `{"local_part":"*","targets":["info@example.com","boss@example.org"]}`)
 	wantStatus(t, rec, 200, "")
 	if a := decode[panel.MailAlias](t, rec); !a.CatchAll || len(a.Targets) != 2 {
 		t.Fatalf("alias %s", rec.Body)
 	}
-	for _, path := range []string{"/api/mail/aliases", "/api/mail/domains/example.com/aliases", fmt.Sprintf("/api/mail/aliases/%d", al.ID)} {
+	for _, path := range []string{"/api/mail/aliases", "/api/mail/domains/example.com/aliases", fmt.Sprintf("/api/mail/aliases/%s", al.ID)} {
 		wantStatus(t, e.as("GET", path, ""), 200, "")
 	}
-	wantStatus(t, e.as("DELETE", fmt.Sprintf("/api/mail/aliases/%d", al.ID), ""), 204, "")
+	wantStatus(t, e.as("DELETE", fmt.Sprintf("/api/mail/aliases/%s", al.ID), ""), 204, "")
 
 	// Read-only tokens read, but change nothing; tokens limited to sites see nothing.
 	_, read := e.createToken("read", "null")

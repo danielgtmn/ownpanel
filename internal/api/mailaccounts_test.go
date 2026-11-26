@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -44,7 +43,7 @@ func TestMailAccountRoutes(t *testing.T) {
 	rec = e.as("POST", "/api/mail/domains/example.com/mailboxes", `{"local_part":"anna","password":"mailbox-password-1","display_name":"Anna"}`)
 	wantBody(t, rec, 201, `"display_name":"Anna"`)
 	box := decode[panel.Mailbox](t, rec)
-	id := strconv.FormatInt(box.ID, 10)
+	id := box.ID
 	wantBody(t, e.as("PATCH", "/api/mail/mailboxes/"+id, `{"display_name":"Anna B.","app_passwords_only":true}`), 200, `"app_passwords_only":true`)
 	wantStatus(t, e.as("PATCH", "/api/mail/mailboxes/"+id, `{"display_name":"a\nb"}`), 400, "")
 	wantBody(t, e.as("PATCH", "/api/mail/mailboxes/"+id, `{"send_per_hour":10}`), 200, `"display_name":"Anna B."`)

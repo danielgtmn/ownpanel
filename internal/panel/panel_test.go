@@ -1,8 +1,6 @@
 package panel
 
 import (
-	"github.com/danielgtmn/sesam"
-
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
@@ -13,10 +11,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/danielgtmn/ablage/memstore"
+	"github.com/danielgtmn/sesam/v2"
 
 	"github.com/danielgtmn/ownpanel/internal/caddy"
 	"github.com/danielgtmn/ownpanel/internal/deploy"
@@ -73,11 +75,17 @@ func TestMain(m *testing.M) {
 }
 
 // admin is the signed-in first user of every test service.
-var admin = Actor{UserID: 1, Name: "root", Admin: true, Via: ViaSession}
+var admin = Actor{UserID: "1", Name: "root", Admin: true, Via: ViaSession}
 
 func newService(t *testing.T) (*Service, *fakeWeb, string) {
 	t.Helper()
-	svc, web, sites := newEmptyService(t)
+	return newServiceOn(t, openSQLite)
+}
+
+// newServiceOn is newService on the store open makes.
+func newServiceOn(t *testing.T, open openStore) (*Service, *fakeWeb, string) {
+	t.Helper()
+	svc, web, sites := newEmptyServiceOn(t, open)
 	// The first user gets id 1, which the admin actor refers to.
 	addUser(t, svc, admin.Name, store.RoleAdmin)
 	return svc, web, sites
@@ -121,15 +129,46 @@ func userHash(t *testing.T, pw string) string {
 	return h
 }
 
-// newEmptyService has no users yet, like a fresh install.
-func newEmptyService(t *testing.T) (*Service, *fakeWeb, string) {
+// openStore makes the store of a test service; dir is the service's data
+// directory.
+type openStore func(t *testing.T, dir string) *store.Store
+
+func openSQLite(t *testing.T, dir string) *store.Store {
 	t.Helper()
-	dir := t.TempDir()
 	st, err := store.Open(filepath.Join(dir, "ownpanel.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
+	return st
+}
+
+func openMemory(t *testing.T, dir string) *store.Store {
+	t.Helper()
+	st, err := store.New(memstore.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+// eachStore runs fn on a store in memory and on SQLite.
+func eachStore(t *testing.T, fn func(t *testing.T, open openStore)) {
+	t.Run("memory", func(t *testing.T) { fn(t, openMemory) })
+	t.Run("sqlite", func(t *testing.T) { fn(t, openSQLite) })
+}
+
+// newEmptyService has no users yet, like a fresh install.
+func newEmptyService(t *testing.T) (*Service, *fakeWeb, string) {
+	t.Helper()
+	return newEmptyServiceOn(t, openSQLite)
+}
+
+func newEmptyServiceOn(t *testing.T, open openStore) (*Service, *fakeWeb, string) {
+	t.Helper()
+	dir := t.TempDir()
+	st := open(t, dir)
+	st.NewUserID = countingIDs()
 	sites := filepath.Join(dir, "sites")
 	web := &fakeWeb{}
 	svc, err := New(Config{
@@ -585,4 +624,14 @@ func mustSites(t *testing.T, svc *Service) []Site {
 		t.Fatal(err)
 	}
 	return list
+}
+
+// countingIDs makes the ids "1", "2", … for the users of a test service,
+// so the actors above can name them.
+func countingIDs() func() string {
+	n := 0
+	return func() string {
+		n++
+		return strconv.Itoa(n)
+	}
 }

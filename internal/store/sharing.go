@@ -1,21 +1,25 @@
 package store
 
 import (
+	"cmp"
 	"context"
-	"database/sql"
+	"errors"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/danielgtmn/ablage"
 )
 
 // Shared mailboxes, delegation and distribution groups (G3).
 
 // MailboxGrant gives the personal mailbox GranteeID rights on MailboxID.
 type MailboxGrant struct {
-	MailboxID      int64
+	MailboxID      string
 	MailboxAddress string
 	MailboxKind    string
 	MailboxDomain  string
-	GranteeID      int64
+	GranteeID      string
 	GranteeStorage string
 	GranteeAddress string
 	GranteeDomain  string
@@ -25,105 +29,126 @@ type MailboxGrant struct {
 	CreatedAt time.Time
 }
 
-const grantCols = `g.mailbox_id, m.local_part || '@' || m.domain, m.kind, m.domain,
-	g.grantee_id, e.storage_id, e.local_part || '@' || e.domain, e.domain, e.display_name, g.rights, g.created_at`
-
-const grantFrom = ` FROM mailbox_grants g JOIN mailboxes m ON m.id = g.mailbox_id JOIN mailboxes e ON e.id = g.grantee_id`
-
-func scanGrant(row interface{ Scan(...any) error }) (MailboxGrant, error) {
-	var g MailboxGrant
-	var rights string
-	var created int64
-	if err := row.Scan(&g.MailboxID, &g.MailboxAddress, &g.MailboxKind, &g.MailboxDomain, &g.GranteeID, &g.GranteeStorage,
-		&g.GranteeAddress, &g.GranteeDomain, &g.GranteeName, &rights, &created); err != nil {
-		return g, err
-	}
-	g.Rights = strings.Fields(rights)
-	g.CreatedAt = unix(created)
-	return g, nil
-}
-
-// MailboxGrants returns grants, ordered by mailbox and grantee address:
-// all of them (both ids 0), those on mailboxID, or those held by granteeID.
-func (s *Store) MailboxGrants(ctx context.Context, mailboxID, granteeID int64) ([]MailboxGrant, error) {
-	q := `SELECT ` + grantCols + grantFrom
-	var args []any
+// MailboxGrants returns grants, ordered by mailbox (in the order the
+// mailboxes were created) and grantee address: all of them (both ids ""),
+// those on mailboxID, or those held by granteeID.
+func (s *Store) MailboxGrants(ctx context.Context, mailboxID, granteeID string) ([]MailboxGrant, error) {
+	where := ablage.All
 	switch {
-	case mailboxID != 0:
-		q += ` WHERE g.mailbox_id = ?`
-		args = append(args, mailboxID)
-	case granteeID != 0:
-		q += ` WHERE g.grantee_id = ?`
-		args = append(args, granteeID)
+	case mailboxID != "":
+		where = ablage.Eq("mailbox_id", mailboxID)
+	case granteeID != "":
+		where = ablage.Eq("grantee_id", granteeID)
 	}
-	rows, err := s.db.QueryContext(ctx, q+` ORDER BY g.mailbox_id, e.domain, e.local_part`, args...)
+	rows, err := s.r.grants.Find(ctx, ablage.Query{Where: where})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []MailboxGrant{}
-	for rows.Next() {
-		g, err := scanGrant(rows)
+	var ids []string
+	for _, g := range rows {
+		ids = append(ids, g.MailboxID, g.GranteeID)
+	}
+	boxes := map[string]mailboxRow{}
+	if len(ids) > 0 {
+		list, err := s.r.mailboxes.GetMany(ctx, unique(ids)...)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, g)
+		for _, m := range list {
+			boxes[m.ID] = m
+		}
 	}
-	return out, rows.Err()
+	type sorted struct {
+		g       MailboxGrant
+		mailbox mailboxRow
+		grantee mailboxRow
+	}
+	list := make([]sorted, 0, len(rows))
+	for _, g := range rows {
+		m, e := boxes[g.MailboxID], boxes[g.GranteeID]
+		list = append(list, sorted{MailboxGrant{
+			MailboxID: g.MailboxID, MailboxAddress: m.LocalPart + "@" + m.Domain, MailboxKind: m.Kind, MailboxDomain: m.Domain,
+			GranteeID: g.GranteeID, GranteeStorage: e.StorageID, GranteeAddress: e.LocalPart + "@" + e.Domain,
+			GranteeDomain: e.Domain, GranteeName: e.DisplayName, Rights: strings.Fields(g.Rights), CreatedAt: g.CreatedAt,
+		}, m, e})
+	}
+	slices.SortFunc(list, func(a, b sorted) int {
+		return cmp.Or(
+			a.mailbox.CreatedAt.Compare(b.mailbox.CreatedAt), strings.Compare(a.mailbox.ID, b.mailbox.ID),
+			strings.Compare(a.grantee.Domain, b.grantee.Domain), strings.Compare(a.grantee.LocalPart, b.grantee.LocalPart),
+		)
+	})
+	out := make([]MailboxGrant, len(list))
+	for i, x := range list {
+		out[i] = x.g
+	}
+	return out, nil
 }
 
 // MailboxByAddress returns the mailbox local@domain.
 func (s *Store) MailboxByAddress(ctx context.Context, domain, local string) (Mailbox, error) {
-	return scanMailbox(s.db.QueryRowContext(ctx, `SELECT `+mailboxCols+mailboxFrom+` WHERE m.domain = ? AND m.local_part = ?`, domain, local))
+	return findMailbox(ctx, s.r, ablage.And(ablage.Eq("domain", domain), ablage.Eq("local_part", local)))
 }
 
 // SetMailboxGrant gives grantee rights on a mailbox, or replaces its
 // rights; it returns whether a grant existed before. At most limit grants
 // per mailbox (<= 0: no limit).
-func (s *Store) SetMailboxGrant(ctx context.Context, mailboxID, granteeID int64, rights []string, limit int) (bool, error) {
+func (s *Store) SetMailboxGrant(ctx context.Context, mailboxID, granteeID string, rights []string, limit int) (bool, error) {
+	if mailboxID == granteeID {
+		return false, invalidf("a mailbox cannot be shared with itself")
+	}
 	existed := false
-	err := s.tx(ctx, func(tx *sql.Tx) error {
-		var n int
-		if err := tx.QueryRow(`SELECT count(*) FROM mailbox_grants WHERE mailbox_id = ? AND grantee_id = ?`, mailboxID, granteeID).Scan(&n); err != nil {
+	err := s.tx(ctx, func(r repos) error {
+		n, err := r.grants.Count(ctx, ablage.And(ablage.Eq("mailbox_id", mailboxID), ablage.Eq("grantee_id", granteeID)))
+		if err != nil {
 			return err
 		}
 		existed = n > 0
 		if !existed && limit > 0 {
-			if err := tx.QueryRow(`SELECT count(*) FROM mailbox_grants WHERE mailbox_id = ?`, mailboxID).Scan(&n); err != nil {
+			n, err := r.grants.Count(ctx, ablage.Eq("mailbox_id", mailboxID))
+			if err != nil {
 				return err
 			}
-			if n >= limit {
+			if n >= int64(limit) {
 				return conflictf("a mailbox can be shared with at most %d mailboxes", limit)
 			}
 		}
-		if _, err := tx.Exec(`INSERT INTO mailbox_grants (mailbox_id, grantee_id, rights, created_at) VALUES (?, ?, ?, ?)
-			ON CONFLICT (mailbox_id, grantee_id) DO UPDATE SET rights = excluded.rights`,
-			mailboxID, granteeID, strings.Join(rights, " "), s.now()); err != nil {
+		now := s.now()
+		if existed {
+			if _, err := r.grants.UpdateWhere(ctx, ablage.And(ablage.Eq("mailbox_id", mailboxID), ablage.Eq("grantee_id", granteeID)),
+				ablage.Row{"rights": strings.Join(rights, " ")}); err != nil {
+				return err
+			}
+		} else if err := r.grants.Create(ctx, &grantRow{MailboxID: mailboxID, GranteeID: granteeID,
+			Rights: strings.Join(rights, " "), CreatedAt: now}); err != nil {
+			if errors.Is(err, ablage.ErrReference) {
+				return errMailboxNotFound
+			}
 			return err
 		}
-		return grantsChangedByPanel(tx, s.now(), `id = ?`, mailboxID)
+		return grantsChangedByPanel(ctx, r, now, ablage.Eq("id", mailboxID))
 	})
 	return existed, err
 }
 
 // grantsChangedByPanel records that the panel changed the grants of the
 // mailboxes matching where (admin_grants_at).
-func grantsChangedByPanel(tx *sql.Tx, now int64, where string, args ...any) error {
-	_, err := tx.Exec(`UPDATE mailboxes SET admin_grants_at = ? WHERE `+where, append([]any{now}, args...)...)
+func grantsChangedByPanel(ctx context.Context, r repos, now time.Time, where ablage.Cond) error {
+	_, err := r.mailboxes.UpdateWhere(ctx, where, ablage.Row{"admin_grants_at": now})
 	return err
 }
 
 // DeleteMailboxGrant removes a grant.
-func (s *Store) DeleteMailboxGrant(ctx context.Context, mailboxID, granteeID int64) error {
-	return s.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.Exec(`DELETE FROM mailbox_grants WHERE mailbox_id = ? AND grantee_id = ?`, mailboxID, granteeID)
+func (s *Store) DeleteMailboxGrant(ctx context.Context, mailboxID, granteeID string) error {
+	return s.tx(ctx, func(r repos) error {
+		n, err := r.grants.DeleteWhere(ctx, ablage.And(ablage.Eq("mailbox_id", mailboxID), ablage.Eq("grantee_id", granteeID)))
 		if err != nil {
 			return err
 		}
-		if n, _ := res.RowsAffected(); n == 0 {
+		if n == 0 {
 			return notFoundf("this mailbox has no access")
 		}
-		return grantsChangedByPanel(tx, s.now(), `id = ?`, mailboxID)
+		return grantsChangedByPanel(ctx, r, s.now(), ablage.Eq("id", mailboxID))
 	})
 }
 
@@ -131,63 +156,70 @@ func (s *Store) DeleteMailboxGrant(ctx context.Context, mailboxID, granteeID int
 // password, app passwords and "only app passwords" go, and so do the
 // grants it holds on other mailboxes (only personal mailboxes may hold
 // grants). The time counts as the panel setting the password.
-func (s *Store) MakeMailboxShared(ctx context.Context, id int64) error {
+func (s *Store) MakeMailboxShared(ctx context.Context, id string) error {
 	now := s.now()
-	return s.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.Exec(`UPDATE mailboxes SET kind = 'shared', password_hash = '', app_passwords_only = 0,
-			admin_password_at = ?, admin_app_passwords_only_at = ? WHERE id = ?`, now, now, id)
+	return s.tx(ctx, func(r repos) error {
+		if err := patchMailbox(ctx, r, id, ablage.Row{"kind": "shared", "password_hash": "", "app_passwords_only": false,
+			"admin_password_at": now, "admin_app_passwords_only_at": now}); err != nil {
+			return err
+		}
+		// The mailboxes whose grants change get the panel's time first.
+		held, err := r.grants.Find(ctx, ablage.Query{Where: ablage.Eq("grantee_id", id)})
 		if err != nil {
 			return err
 		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return notFoundf("mailbox not found")
+		on := make([]string, len(held))
+		for i, g := range held {
+			on[i] = g.MailboxID
 		}
-		// The mailboxes whose grants change get the panel's time first.
-		if err := grantsChangedByPanel(tx, now, `id IN (SELECT mailbox_id FROM mailbox_grants WHERE grantee_id = ?)`, id); err != nil {
+		if err := grantsChangedByPanel(ctx, r, now, ablage.In("id", on...)); err != nil {
 			return err
 		}
-		for _, q := range []string{
-			`DELETE FROM mailbox_app_passwords WHERE mailbox_id = ?`,
-			`DELETE FROM mailbox_grants WHERE grantee_id = ?`,
-		} {
-			if _, err := tx.Exec(q, id); err != nil {
-				return err
-			}
+		if _, err := r.appPasswords.DeleteWhere(ctx, ablage.Eq("mailbox_id", id)); err != nil {
+			return err
 		}
-		return nil
+		_, err = r.grants.DeleteWhere(ctx, ablage.Eq("grantee_id", id))
+		return err
 	})
 }
 
 // MakeMailboxPersonal turns a shared mailbox into a personal one with the
 // password hash; it no longer keeps copies of sent mail. Its grants stay:
 // the person now shares their own mailbox with them.
-func (s *Store) MakeMailboxPersonal(ctx context.Context, id int64, hash string) error {
-	return s.updateMailbox(ctx, `UPDATE mailboxes SET kind = 'personal', password_hash = ?, keep_sent_copy = 0, admin_password_at = ? WHERE id = ?`,
-		hash, s.now(), id)
+func (s *Store) MakeMailboxPersonal(ctx context.Context, id, hash string) error {
+	return s.updateMailbox(ctx, id, ablage.Row{"kind": "personal", "password_hash": hash, "keep_sent_copy": false, "admin_password_at": s.now()})
 }
 
 // SetMailboxKeepSentCopy switches copies of sent mail of a mailbox.
-func (s *Store) SetMailboxKeepSentCopy(ctx context.Context, id int64, on bool) error {
-	return s.updateMailbox(ctx, `UPDATE mailboxes SET keep_sent_copy = ? WHERE id = ?`, on, id)
+func (s *Store) SetMailboxKeepSentCopy(ctx context.Context, id string, on bool) error {
+	return s.updateMailbox(ctx, id, ablage.Row{"keep_sent_copy": on})
 }
 
 // replaceGrants replaces all grants on a mailbox with those to the
 // mailboxes with the given storage ids (unknown ones are skipped).
-func replaceGrants(tx *sql.Tx, mailboxID int64, grants []GrantByStorage, now int64) error {
-	if _, err := tx.Exec(`DELETE FROM mailbox_grants WHERE mailbox_id = ?`, mailboxID); err != nil {
+func replaceGrants(ctx context.Context, r repos, mailboxID string, grants []GrantByStorage, now time.Time) error {
+	if _, err := r.grants.DeleteWhere(ctx, ablage.Eq("mailbox_id", mailboxID)); err != nil {
 		return err
 	}
+	storage := make([]string, len(grants))
+	for i, g := range grants {
+		storage[i] = g.StorageID
+	}
+	boxes, err := r.mailboxes.Find(ctx, ablage.Query{Where: ablage.In("storage_id", storage...)})
+	if err != nil {
+		return err
+	}
+	byStorage := map[string]string{}
+	for _, m := range boxes {
+		byStorage[m.StorageID] = m.ID
+	}
 	for _, g := range grants {
-		var grantee int64
-		err := tx.QueryRow(`SELECT id FROM mailboxes WHERE storage_id = ?`, g.StorageID).Scan(&grantee)
-		if noRows(err) || grantee == mailboxID {
+		grantee, ok := byStorage[g.StorageID]
+		if !ok || grantee == mailboxID {
 			continue
 		}
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`INSERT INTO mailbox_grants (mailbox_id, grantee_id, rights, created_at) VALUES (?, ?, ?, ?)
-			ON CONFLICT DO NOTHING`, mailboxID, grantee, strings.Join(g.Rights, " "), now); err != nil {
+		err := r.grants.Create(ctx, &grantRow{MailboxID: mailboxID, GranteeID: grantee, Rights: strings.Join(g.Rights, " "), CreatedAt: now})
+		if err := ignoreDup(err); err != nil {
 			return err
 		}
 	}

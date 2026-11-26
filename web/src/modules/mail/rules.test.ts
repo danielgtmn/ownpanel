@@ -259,8 +259,8 @@ describe('sender names, app passwords and organisations', () => {
 })
 
 describe('shared mailboxes', () => {
-  const person = (address: string) => ({ mailbox_id: 1, address, display_name: '', rights: ['read'], active: true })
-  const box = (address: string) => ({ mailbox_id: 2, address, kind: 'shared' as const, rights: ['read'], active: true })
+  const person = (address: string) => ({ mailbox_id: '1', address, display_name: '', rights: ['read'], active: true })
+  const box = (address: string) => ({ mailbox_id: '2', address, kind: 'shared' as const, rights: ['read'], active: true })
 
   it('sums up who uses a shared mailbox', () => {
     expect(accessFacts({ kind: 'shared', shared_with: [], access_to: [] })).toEqual(['Nobody has access yet'])

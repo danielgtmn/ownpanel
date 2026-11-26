@@ -13,7 +13,7 @@ import (
 var redirectKeys = []string{"id", "owner", "source_domain", "source_path", "target", "code", "keep_path", "keep_query", "created_at"}
 
 type redirectJSON struct {
-	ID           int64  `json:"id"`
+	ID           string `json:"id"`
 	Owner        string `json:"owner"`
 	SourceDomain string `json:"source_domain"`
 	SourcePath   string `json:"source_path"`
@@ -37,7 +37,7 @@ func TestRedirectRoutes(t *testing.T) {
 	wantStatus(t, rec, 201, "")
 	wantKeys(t, rec.Body.Bytes(), redirectKeys...)
 	dom := decode[redirectJSON](t, rec)
-	if _, err := time.Parse(time.RFC3339, dom.CreatedAt); err != nil || dom.ID == 0 || dom.Owner != "root" ||
+	if _, err := time.Parse(time.RFC3339, dom.CreatedAt); err != nil || dom.ID == "" || dom.Owner != "root" ||
 		dom.SourceDomain != "www.blog.example.com" || dom.SourcePath != "" || dom.Target != "https://blog.example.com" ||
 		dom.Code != 301 || !dom.KeepPath || !dom.KeepQuery {
 		t.Fatalf("created %s", rec.Body)
@@ -64,7 +64,7 @@ func TestRedirectRoutes(t *testing.T) {
 	}
 	wantStatus(t, d.root("GET", "/api/sites/nope/redirects", ""), 404, "")
 
-	rec = d.root("PUT", fmt.Sprintf("/api/redirects/%d", path.ID), `{"source_domain":"blog.example.com","source_path":"/older","target":"https://example.org/x","code":302}`)
+	rec = d.root("PUT", fmt.Sprintf("/api/redirects/%s", path.ID), `{"source_domain":"blog.example.com","source_path":"/older","target":"https://example.org/x","code":302}`)
 	wantStatus(t, rec, 200, "")
 	wantKeys(t, rec.Body.Bytes(), redirectKeys...)
 	if u := decode[redirectJSON](t, rec); u.SourcePath != "/older" || u.Code != 302 || u.KeepPath || u.CreatedAt != path.CreatedAt {
@@ -79,13 +79,13 @@ func TestRedirectRoutes(t *testing.T) {
 	wantStatus(t, d.root("POST", "/api/redirects", `{"source_domain":"blog.example.com","target":"https://example.com","code":301}`), 400, "belongs to the site blog")
 	wantStatus(t, d.root("PUT", "/api/redirects/9999", `{"source_domain":"a.example.com","target":"https://example.com","code":301}`), 404, "")
 	wantStatus(t, d.root("PUT", "/api/redirects/abc", `{}`), 404, "")
-	wantStatus(t, d.bob("PUT", fmt.Sprintf("/api/redirects/%d", dom.ID), `{"source_domain":"www.blog.example.com","target":"https://example.com","code":301}`), 404, "")
+	wantStatus(t, d.bob("PUT", fmt.Sprintf("/api/redirects/%s", dom.ID), `{"source_domain":"www.blog.example.com","target":"https://example.com","code":301}`), 404, "")
 	wantStatus(t, d.bob("POST", "/api/redirects", `{"source_domain":"blog.example.com","source_path":"/x","target":"/y","code":301}`), 400, "not a domain of one of your sites")
 	wantStatus(t, d.call(req{method: "GET", path: "/api/redirects"}), 401, "")
 	wantStatus(t, d.call(req{method: "POST", path: "/api/redirects", cookie: d.cookie, body: `{}`}), 403, "X-Ownpanel-Request")
 	_, readTok := d.createToken("read", "null")
 	wantStatus(t, d.call(req{method: "GET", path: "/api/redirects", token: readTok}), 200, "")
-	wantStatus(t, d.call(req{method: "DELETE", path: fmt.Sprintf("/api/redirects/%d", dom.ID), token: readTok}), 403, "can only read")
+	wantStatus(t, d.call(req{method: "DELETE", path: fmt.Sprintf("/api/redirects/%s", dom.ID), token: readTok}), 403, "can only read")
 	_, siteTok := d.createToken("write", `["blog"]`)
 	rec = d.call(req{method: "GET", path: "/api/redirects", token: siteTok})
 	if l := decode[[]redirectJSON](t, rec); len(l) != 1 || l[0].ID != path.ID {
@@ -94,8 +94,8 @@ func TestRedirectRoutes(t *testing.T) {
 	wantStatus(t, d.call(req{method: "POST", path: "/api/redirects", token: siteTok,
 		body: `{"source_domain":"x.example.org","target":"https://example.com","code":301}`}), 403, "domain redirects")
 
-	wantStatus(t, d.root("DELETE", fmt.Sprintf("/api/redirects/%d", path.ID), ""), 204, "")
-	wantStatus(t, d.root("DELETE", fmt.Sprintf("/api/redirects/%d", path.ID), ""), 404, "")
+	wantStatus(t, d.root("DELETE", fmt.Sprintf("/api/redirects/%s", path.ID), ""), 204, "")
+	wantStatus(t, d.root("DELETE", fmt.Sprintf("/api/redirects/%s", path.ID), ""), 404, "")
 }
 
 func TestDomainStatusAndPointRoutes(t *testing.T) {
@@ -107,7 +107,7 @@ func TestDomainStatusAndPointRoutes(t *testing.T) {
 	// The single status is the same object as an element of the site's list.
 	rec := d.root("GET", "/api/dns/domain-status?domain=blog.example.com", "")
 	want := `{"domain":"blog.example.com","state":"points_elsewhere","found":["198.51.100.1"],` +
-		`"zone":{"connection_id":` + id + `,"connection_name":"main","zone":"example.com","record_name":"blog"}}` + "\n"
+		`"zone":{"connection_id":"` + id + `","connection_name":"main","zone":"example.com","record_name":"blog"}}` + "\n"
 	if rec.Code != 200 || rec.Body.String() != want {
 		t.Fatalf("status: %d %s", rec.Code, rec.Body)
 	}
@@ -117,7 +117,7 @@ func TestDomainStatusAndPointRoutes(t *testing.T) {
 	}
 	rec = d.root("GET", "/api/dns/domain-status?domain=old.example.com", "")
 	if rec.Code != 200 || rec.Body.String() != `{"domain":"old.example.com","state":"no_record","found":[],`+
-		`"zone":{"connection_id":`+id+`,"connection_name":"main","zone":"example.com","record_name":"old"}}`+"\n" {
+		`"zone":{"connection_id":"`+id+`","connection_name":"main","zone":"example.com","record_name":"old"}}`+"\n" {
 		t.Fatalf("redirect status: %d %s", rec.Code, rec.Body)
 	}
 	wantStatus(t, d.root("GET", "/api/dns/domain-status?domain=unknown.example.com", ""), 404, "no site or redirect")
@@ -143,7 +143,7 @@ func TestDNSZoneRoutes(t *testing.T) {
 	zones := "/api/dns/connections/" + id + "/zones"
 
 	rec := d.root("POST", zones, `{"name":"fresh.com"}`)
-	if rec.Code != 201 || rec.Body.String() != `{"connection_id":`+id+`,"connection_name":"main","name":"fresh.com","read_only":false,`+
+	if rec.Code != 201 || rec.Body.String() != `{"connection_id":"`+id+`","connection_name":"main","name":"fresh.com","read_only":false,`+
 		`"nameservers":["hydrogen.ns.hetzner.com","oxygen.ns.hetzner.com","helium.ns.hetzner.de"],"adopted":true,"used_by":[]}`+"\n" {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body)
 	}
@@ -174,7 +174,7 @@ func TestDNSZoneRoutes(t *testing.T) {
 	wantStatus(t, d.root("DELETE", "/api/sites/blog", ""), 204, "")
 	rec = d.root("GET", "/api/redirects", "")
 	rid := decode[[]redirectJSON](t, rec)[0].ID
-	wantStatus(t, d.root("DELETE", fmt.Sprintf("/api/redirects/%d", rid), ""), 204, "")
+	wantStatus(t, d.root("DELETE", fmt.Sprintf("/api/redirects/%s", rid), ""), 204, "")
 	d.hz[hzToken].ProtectZone("fresh.com", true)
 	wantStatus(t, d.root("DELETE", zones+"/fresh.com", `{"confirm":"fresh.com"}`), 409, "protected against deletion")
 	d.hz[hzToken].ProtectZone("fresh.com", false)

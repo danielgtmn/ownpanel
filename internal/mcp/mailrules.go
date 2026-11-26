@@ -12,7 +12,7 @@ import (
 // person's own filters are their data and are not offered here.
 
 type outOfOfficeInput struct {
-	ID      int64  `json:"id" jsonschema:"mailbox id from list_mailboxes"`
+	ID      string `json:"id" jsonschema:"mailbox id from list_mailboxes"`
 	Subject string `json:"subject,omitempty" jsonschema:"subject of the reply; empty uses 'Auto:' and the subject of the message answered"`
 	Text    string `json:"text" jsonschema:"the reply, plain text, at most 8 KB"`
 	Start   string `json:"start,omitempty" jsonschema:"first day the reply is sent, YYYY-MM-DD; empty: from now"`
@@ -23,7 +23,7 @@ type outOfOfficeInput struct {
 }
 
 type clearOutOfOfficeInput struct {
-	ID int64 `json:"id" jsonschema:"mailbox id from list_mailboxes"`
+	ID string `json:"id" jsonschema:"mailbox id from list_mailboxes"`
 }
 
 type outOfOfficeInfo struct {

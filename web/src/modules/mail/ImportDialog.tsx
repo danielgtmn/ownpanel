@@ -317,7 +317,7 @@ function AccountForm({ target, onStarted }: { target: Target; onStarted: (job: M
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 // waitUntilRead polls a job until its file was read.
-async function waitUntilRead(target: Target, id: number, signal: AbortSignal): Promise<MailImport> {
+async function waitUntilRead(target: Target, id: string, signal: AbortSignal): Promise<MailImport> {
   for (;;) {
     const job = await getImport(target.domain, target.local_part, id)
     if (job.state !== 'uploading' && job.state !== 'checking') return job

@@ -117,6 +117,22 @@ older panel database can never expose another mailbox's mail. Data of a
 mailbox missing from the configuration is kept and reported, never deleted by
 a config load.
 
+**The index** `mail.db` is kept with [ablage](https://github.com/danielgtmn/ablage)
+repositories (`internal/mail/storage/records.go`): one writer connection
+(writes are serialized, as before) and a pool of read-only connections that
+read the last commit without waiting for a write. Row ids are strings; IMAP
+UIDs and UIDVALIDITY, the DAV sequence numbers and epoch, and the event
+cursor the panel reads are integer fields of their own. An index written by
+a version before ablage is converted once at start: the service first
+copies it to `mail.db.pre-ablage-<UTC time>` (0600) next to it, then
+converts every table in one transaction (rows keep their ids as text, the
+flags of a message become one field per system flag plus a list of
+keywords, times stay to the second). UIDs, UIDVALIDITY, DAV ETags and sync
+tokens and the event cursor do not change, so mail and calendar programs
+keep their caches. If the conversion fails, the index stays as it was and
+the service does not start; the backup stays either way and can be deleted
+once the service runs.
+
 **Block state** lives in the mail service (`mail.db`), not in the pushed
 configuration, so a full config push can never undo a block. The panel shows
 what `/status` reports and unblocks through the admin socket.
@@ -814,6 +830,11 @@ GET    /mailboxes/{sid}/imports/{id}      → ImportJob with failures
 DELETE /mailboxes/{sid}/imports/{id}      cancel (a finished job: remove) → 204
 GET    /mailboxes/{sid}/export            → application/zip stream
 ```
+
+`{id}` is the job's id, an opaque string of 1 to 32 lowercase letters and
+digits (jobs from before keep their number as text, new ones have 26
+characters). The service names spool files after it, so an id of any
+other form is refused as an unknown job (`404`) before it reaches a path.
 
 The panel mirrors these under `/api/mail/domains/{domain}/mailboxes/
 {local_part}/…` with the permission rules above. Activity:

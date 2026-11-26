@@ -22,7 +22,7 @@ type githubInstallationInfo struct {
 }
 
 type githubConnectionInfo struct {
-	ID            int64                    `json:"id" jsonschema:"the panel's id of the connection"`
+	ID            string                   `json:"id" jsonschema:"the panel's id of the connection"`
 	Name          string                   `json:"name" jsonschema:"name of the GitHub App the panel created"`
 	Owner         string                   `json:"owner" jsonschema:"GitHub user or organisation that owns the App"`
 	OwnerType     string                   `json:"owner_type" jsonschema:"user or organization"`

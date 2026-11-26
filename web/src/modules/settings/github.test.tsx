@@ -14,7 +14,7 @@ const installation: GitHubInstallation = {
 }
 
 const connection: GitHubConnection = {
-  id: 1,
+  id: '01hzconnection',
   app_id: 99,
   name: 'ownpanel panel.example.com 3f2a',
   slug: 'ownpanel-panel-example-com-3f2a',
