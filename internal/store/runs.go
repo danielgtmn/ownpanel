@@ -53,6 +53,8 @@ type Run struct {
 	CreatedAt    time.Time
 	StartedAt    *time.Time // nil until it starts
 	FinishedAt   *time.Time // nil until it ends
+	// Release is the version a succeeded run published.
+	Release string
 }
 
 var errRunNotFound = notFoundf("run not found")
@@ -61,7 +63,7 @@ func runOf(row siteRunRow) Run {
 	return Run{ID: row.ID, Site: row.SiteName, Trigger: row.Trigger, Status: row.Status, SourceKind: row.SourceKind,
 		RepositoryID: row.RepositoryID, Repository: row.Repository, Ref: row.Ref, CommitSHA: row.CommitSHA,
 		Message: row.Message, AuthorName: row.AuthorName, AuthorLogin: row.AuthorLogin, Pusher: row.Pusher,
-		Detail: row.Detail, CreatedAt: row.CreatedAt, StartedAt: row.StartedAt, FinishedAt: row.FinishedAt}
+		Detail: row.Detail, CreatedAt: row.CreatedAt, StartedAt: row.StartedAt, FinishedAt: row.FinishedAt, Release: row.Release}
 }
 
 func validCommitSHA(s string) bool {
@@ -211,6 +213,12 @@ func (s *Store) ClaimNextRun(ctx context.Context, site, supersededDetail string)
 // FinishRun gives a queued or running run its final status. ErrConflict if
 // it already has one, ErrInvalid for a status that is not final.
 func (s *Store) FinishRun(ctx context.Context, id, status, detail string) (Run, error) {
+	return s.FinishRunWithRelease(ctx, id, status, detail, "")
+}
+
+// FinishRunWithRelease is FinishRun that also records the version a
+// succeeded run published.
+func (s *Store) FinishRunWithRelease(ctx context.Context, id, status, detail, release string) (Run, error) {
 	if !RunFinished(status) {
 		return Run{}, invalidf("%q is not a final status of a run", status)
 	}
@@ -225,12 +233,46 @@ func (s *Store) FinishRun(ctx context.Context, id, status, detail string) (Run, 
 		if RunFinished(cur.Status) {
 			return conflictf("the run has already ended (%s)", cur.Status)
 		}
-		return r.runs.Patch(ctx, id, ablage.Row{"status": status, "detail": detail, "finished_at": s.now()})
+		return r.runs.Patch(ctx, id, ablage.Row{"status": status, "detail": detail, "finished_at": s.now(), "release": release})
 	})
 	if err != nil {
 		return Run{}, err
 	}
 	return s.Run(ctx, id)
+}
+
+// FailRunningRuns marks every running run failed with detail and returns
+// how many there were. For the start of the panel: nothing builds them
+// any more.
+func (s *Store) FailRunningRuns(ctx context.Context, detail string) (int, error) {
+	n, err := s.r.runs.UpdateWhere(ctx, ablage.Eq("status", RunRunning),
+		ablage.Row{"status": RunFailed, "detail": detail, "finished_at": s.now()})
+	return int(n), err
+}
+
+// ---- logs of runs ----
+
+// PutRunLog stores the log of a run, replacing the one it had.
+func (s *Store) PutRunLog(ctx context.Context, runID, log string, truncated bool) error {
+	return s.tx(ctx, func(r repos) error {
+		if _, err := r.runLogs.DeleteWhere(ctx, ablage.Eq("run_id", runID)); err != nil {
+			return err
+		}
+		err := r.runLogs.Create(ctx, &siteRunLogRow{RunID: runID, Log: log, Truncated: truncated, CreatedAt: s.now()})
+		if errors.Is(err, ablage.ErrReference) {
+			return errRunNotFound
+		}
+		return err
+	})
+}
+
+// RunLog returns the stored log of a run; ErrNotFound if it has none.
+func (s *Store) RunLog(ctx context.Context, runID string) (log string, truncated bool, err error) {
+	row, err := s.r.runLogs.First(ctx, ablage.Query{Where: ablage.Eq("run_id", runID)})
+	if err != nil {
+		return "", false, missing(err, notFoundf("the run has no log"))
+	}
+	return row.Log, row.Truncated, nil
 }
 
 // ---- delivery ids ----

@@ -37,14 +37,14 @@ type sourceInfo struct {
 type siteSourceOutput struct {
 	Site                string      `json:"site"`
 	Source              *sourceInfo `json:"source" jsonschema:"null if the site is not linked to a repository"`
-	PublishingAvailable bool        `json:"publishing_available" jsonschema:"false: building and publishing on push is not available on this server yet, so a push only records a run that waits"`
+	PublishingAvailable bool        `json:"publishing_available" jsonschema:"false: this server does not build sites, so a push only records a run that waits"`
 	LastRun             *runInfo    `json:"last_run" jsonschema:"the newest run of the site, null if there is none (list_site_runs lists more)"`
 }
 
 type runInfo struct {
 	ID          string `json:"id"`
-	Trigger     string `json:"trigger" jsonschema:"push: a push to the linked branch"`
-	Status      string `json:"status" jsonschema:"queued, running, succeeded, failed, cancelled or skipped (replaced by a newer push before it started)"`
+	Trigger     string `json:"trigger" jsonschema:"push: a push to the linked branch; manual: started with start_site_build (pusher names who)"`
+	Status      string `json:"status" jsonschema:"queued, running, succeeded (built and made live), failed, cancelled or skipped (replaced by a newer run before it started)"`
 	Repository  string `json:"repository"`
 	Branch      string `json:"branch,omitempty"`
 	Commit      string `json:"commit" jsonschema:"full commit id"`
@@ -53,10 +53,11 @@ type runInfo struct {
 	AuthorLogin string `json:"author_login,omitempty"`
 	Pusher      string `json:"pusher,omitempty"`
 	Detail      string `json:"detail,omitempty" jsonschema:"why the run was skipped, failed or cancelled"`
-	Waiting     string `json:"waiting,omitempty" jsonschema:"set while a queued run waits because this server cannot build yet"`
+	Waiting     string `json:"waiting,omitempty" jsonschema:"set while a queued run waits because this server does not build sites"`
 	CreatedAt   string `json:"created_at"`
 	StartedAt   string `json:"started_at,omitempty"`
 	FinishedAt  string `json:"finished_at,omitempty"`
+	Release     string `json:"release,omitempty" jsonschema:"the version a succeeded run published"`
 }
 
 func runOutput(r panel.Run) runInfo {
@@ -70,6 +71,7 @@ func runOutput(r panel.Run) runInfo {
 		ID: r.ID, Trigger: r.Trigger, Status: r.Status, Repository: r.Repository, Branch: r.Branch, Commit: r.Commit,
 		Message: r.Message, AuthorName: r.AuthorName, AuthorLogin: r.AuthorLogin, Pusher: r.Pusher, Detail: r.Detail,
 		Waiting: r.Waiting, CreatedAt: stamp(&r.CreatedAt), StartedAt: stamp(r.StartedAt), FinishedAt: stamp(r.FinishedAt),
+		Release: r.Release,
 	}
 }
 
@@ -77,7 +79,7 @@ type siteRunsOutput struct {
 	Site                string    `json:"site"`
 	Runs                []runInfo `json:"runs" jsonschema:"newest first"`
 	Kept                int       `json:"kept" jsonschema:"how many runs the panel keeps per site"`
-	PublishingAvailable bool      `json:"publishing_available" jsonschema:"false: this server cannot build yet, so queued runs wait"`
+	PublishingAvailable bool      `json:"publishing_available" jsonschema:"false: this server does not build sites, so queued runs wait"`
 }
 
 func sourceOutput(st panel.SiteSourceState) siteSourceOutput {
@@ -166,7 +168,7 @@ func addSourceTools(s *sdk.Server, p *panel.Service) {
 		Name:  "get_site_source",
 		Title: "Show where a site's code comes from",
 		Description: "Show the repository and branch a site is linked to and whether a push should publish it, or null " +
-			"if it is not linked. publishing_available tells whether this server builds and publishes on push yet; " +
+			"if it is not linked. publishing_available tells whether this server builds and publishes on push; " +
 			"while it is false, linking only records the choice.",
 		Annotations: reachesGitHub(annotations("Show where a site's code comes from", true, false, true)),
 	}, func(ctx context.Context, c call, in siteInput) (siteSourceOutput, error) {
@@ -210,7 +212,8 @@ func addSourceTools(s *sdk.Server, p *panel.Service) {
 		Title: "Link a site to a repository and branch",
 		Description: "Link a site to a GitHub repository and branch, replacing the link it had; also used to change the " +
 			"branch or publish_on_push. GitHub is asked whether the repository and the branch exist. Linking alone " +
-			"publishes nothing: see publishing_available in the answer. Safe to repeat with the same values.",
+			"publishes nothing: the next push (or start_site_build) builds the site with its build settings " +
+			"(set_site_build_settings). Safe to repeat with the same values.",
 		Annotations: reachesGitHub(annotations("Link a site to a repository and branch", false, true, true)),
 	}, func(ctx context.Context, c call, in linkSourceInput) (siteSourceOutput, error) {
 		st, err := p.SetSiteSource(ctx, c.actor, in.Site, panel.SiteSourceInput{
@@ -280,8 +283,8 @@ func addSourceTools(s *sdk.Server, p *panel.Service) {
 		Name:  "list_site_runs",
 		Title: "List the runs of a site",
 		Description: "List the newest runs of a site: one per push to its linked branch while publish_on_push is on, " +
-			"with commit, message, author and status. While publishing_available is false, queued runs wait for " +
-			"building on the server, which is not available yet.",
+			"and one per start_site_build, with commit, message, author, status and the published version. " +
+			"read_site_run_log shows a run's build log. While publishing_available is false, queued runs wait.",
 		Annotations: annotations("List the runs of a site", true, false, true),
 	}, func(ctx context.Context, c call, in siteInput) (siteRunsOutput, error) {
 		list, err := p.ListSiteRuns(ctx, c.actor, in.Site)

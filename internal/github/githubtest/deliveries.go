@@ -218,7 +218,11 @@ func (s *Server) devPush(w http.ResponseWriter, r *http.Request) {
 	if author == "" {
 		author = s.User
 	}
-	body := s.PushPayload(Push{RepoID: repoID, InstallationID: instID, Ref: "refs/heads/" + branch, After: q.Get("sha"),
+	sha := q.Get("sha")
+	if sha == "" {
+		sha = s.Head(repoID, branch)
+	}
+	body := s.PushPayload(Push{RepoID: repoID, InstallationID: instID, Ref: "refs/heads/" + branch, After: sha,
 		Message: q.Get("message"), AuthorName: author, AuthorLogin: author, Pusher: author})
 	id := q.Get("delivery")
 	if id == "" {

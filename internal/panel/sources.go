@@ -12,9 +12,9 @@ import (
 )
 
 // A site's source: the repository and branch its code comes from, and
-// whether a push publishes it. Linking only records the choice; fetching,
-// building and publishing on push come with the webhook (#109) and builds
-// on the server (#113). PublishingAvailable tells clients so.
+// whether a push publishes it. A push to the branch records a run
+// (github_webhook.go), which the panel builds and publishes (runner.go)
+// when this server builds sites; PublishingAvailable tells clients so.
 //
 // Who may do what:
 //   - seeing a site's source: whoever may see the site;
@@ -33,9 +33,9 @@ import (
 // unlinked. Nothing is published from it meanwhile.
 
 // PublishingAvailable reports whether a push to a linked branch publishes
-// the site yet. False until building on the server exists (#113): a push
-// records a run (runs.go) that waits.
-const PublishingAvailable = false
+// the site: whether this panel has a build service (Config.Builds). Without
+// one, a push records a run (runs.go) that waits.
+func (s *Service) PublishingAvailable() bool { return s.builds != nil }
 
 // Source states.
 const (
@@ -175,7 +175,7 @@ func (s *Service) GetSiteSource(ctx context.Context, a Actor, site string) (Site
 	if err != nil {
 		return SiteSourceState{}, err
 	}
-	out := SiteSourceState{Site: st.Name, PublishingAvailable: PublishingAvailable}
+	out := SiteSourceState{Site: st.Name, PublishingAvailable: s.PublishingAvailable()}
 	if out.LastRun, err = s.lastRun(ctx, st.Name); err != nil {
 		return SiteSourceState{}, storeError(err)
 	}
@@ -332,7 +332,7 @@ func (s *Service) SetSiteSource(ctx context.Context, a Actor, site string, in Si
 	if inst, err := s.store.GitHubInstallation(ctx, repo.InstallationID); err == nil {
 		v.Account = inst.AccountLogin
 	}
-	out := SiteSourceState{Site: st.Name, Source: &v, PublishingAvailable: PublishingAvailable}
+	out := SiteSourceState{Site: st.Name, Source: &v, PublishingAvailable: s.PublishingAvailable()}
 	if out.LastRun, err = s.lastRun(ctx, st.Name); err != nil {
 		return SiteSourceState{}, storeError(err)
 	}

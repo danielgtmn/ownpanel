@@ -30,7 +30,8 @@ const open = () => undefined
 describe('a run', () => {
   it('says what started it', () => {
     expect(runTrigger(run)).toBe('Push')
-    expect(runTrigger({ ...run, trigger: 'manual' })).toBe('Started by hand')
+    expect(runTrigger({ ...run, trigger: 'manual', pusher: 'root' })).toBe('Build now by root')
+    expect(runTrigger({ ...run, trigger: 'manual', pusher: undefined })).toBe('Build now')
     expect(runTrigger({ ...run, trigger: 'something-new' })).toBe('Other')
   })
 
@@ -97,7 +98,7 @@ describe('the list of runs', () => {
       succeeded: 'Published',
       failed: 'Failed',
       cancelled: 'Cancelled',
-      skipped: 'Replaced by a newer push',
+      skipped: 'Replaced by a newer build',
     } as const
     for (const [status, label] of Object.entries(labels)) {
       const html = renderToStaticMarkup(<RunRow run={{ ...run, status: status as Run['status'] }} onOpen={open} />)
@@ -108,7 +109,7 @@ describe('the list of runs', () => {
 
 describe('the details of a run', () => {
   it('lists everything known and keeps a place for the output', () => {
-    const html = renderToStaticMarkup(<RunDetails run={run} publishingAvailable={false} />)
+    const html = renderToStaticMarkup(<RunDetails site="blog" run={run} publishingAvailable={false} />)
     for (const text of ['Commit', 'Message', 'Author', 'Repository', 'acme/website', 'Branch', 'Started by', 'Received']) {
       expect(html, text).toContain(text)
     }
@@ -121,6 +122,7 @@ describe('the details of a run', () => {
   it('shows who pushed when that was someone else, and when it ran', () => {
     const html = renderToStaticMarkup(
       <RunDetails
+        site="blog"
         run={{
           ...run,
           status: 'failed',
@@ -137,6 +139,7 @@ describe('the details of a run', () => {
     expect(html).toContain('bob')
     expect(html).toContain('The build ran out of time.')
     expect(html).toContain('(took 1 min)')
-    expect(html).toContain('There is no output for this build.')
+    // The log itself is loaded once the dialog shows.
+    expect(html).toContain('Loading the output…')
   })
 })

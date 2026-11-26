@@ -24,7 +24,7 @@ import (
 
 // newGitHubEnv is a panel with a domain and HTTPS, connected to a fake
 // GitHub, with the admin "root" signed in.
-func newGitHubEnv(t *testing.T) (*env, *githubtest.Server) {
+func newGitHubEnv(t *testing.T, builds ...panel.BuildService) (*env, *githubtest.Server) {
 	t.Helper()
 	gh := githubtest.New()
 	t.Cleanup(gh.Close)
@@ -51,6 +51,7 @@ func newGitHubEnv(t *testing.T) (*env, *githubtest.Server) {
 		SetupCodeFile: filepath.Join(dir, "setup-code"),
 		Secrets:       box,
 		GitHub:        client,
+		Builds:        firstOr(builds),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -61,6 +62,13 @@ func newGitHubEnv(t *testing.T) (*env, *githubtest.Server) {
 	e := &env{t: t, h: (&Server{Panel: svc}).Handler(), svc: svc, code: filepath.Join(dir, "setup-code")}
 	e.cookie = e.setup("root", "root-password-1")
 	return e, gh
+}
+
+func firstOr(b []panel.BuildService) panel.BuildService {
+	if len(b) == 0 {
+		return nil
+	}
+	return b[0]
 }
 
 var noFollow = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

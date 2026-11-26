@@ -498,7 +498,7 @@ func (s *Service) SetGitSiteSource(ctx context.Context, a Actor, site string, in
 
 func (s *Service) gitState(ctx context.Context, src store.SiteSource) (SiteSourceState, error) {
 	v := s.gitSourceView(src)
-	out := SiteSourceState{Site: src.Site, Source: &v, PublishingAvailable: PublishingAvailable}
+	out := SiteSourceState{Site: src.Site, Source: &v, PublishingAvailable: s.PublishingAvailable()}
 	var err error
 	if out.LastRun, err = s.lastRun(ctx, src.Site); err != nil {
 		return SiteSourceState{}, storeError(err)
@@ -761,8 +761,8 @@ func validCommit(s string) bool {
 }
 
 // siteSources is the SourceFetcher of builds when Config.Sources is nil:
-// sources of kind git are fetched by FetchGitSource; fetching a commit
-// from a GitHub connection is not there yet.
+// sources of kind git are fetched by FetchGitSource, GitHub sources by
+// githubSources.
 type siteSources struct{ s *Service }
 
 func (f siteSources) FetchSource(ctx context.Context, ref SourceRef) (io.ReadCloser, int, error) {
@@ -771,7 +771,7 @@ func (f siteSources) FetchSource(ctx context.Context, ref SourceRef) (io.ReadClo
 		return nil, 0, storeError(err)
 	}
 	if src.Kind != store.SourceGit {
-		return nil, 0, errorf(Unavailable, "fetching a commit from a GitHub connection is not available yet")
+		return githubSources{f.s}.FetchSource(ctx, ref)
 	}
 	return f.s.FetchGitSource(ctx, ref.Site, ref.Commit)
 }

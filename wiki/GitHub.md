@@ -1,6 +1,6 @@
 # GitHub
 
-An administrator connects ownpanel to a GitHub account or organisation in a few clicks. Later steps use the connection to publish a site from a repository on every push ([#108](https://github.com/danielgtmn/ownpanel/issues/108), [#109](https://github.com/danielgtmn/ownpanel/issues/109), [#113](https://github.com/danielgtmn/ownpanel/issues/113)). Today the panel connects, shows the accounts and lists their repositories, a site can be linked to a repository and branch ([[Linking a site|Sites-and-Publishing#source-repository-and-branch]]), and GitHub tells the panel about every push, which the panel records as a **run** of the site and lists on the site page ([below](#what-happens-on-a-push)). Building and publishing is not available yet: a run waits until building on the server is available ([#113](https://github.com/danielgtmn/ownpanel/issues/113)).
+An administrator connects ownpanel to a GitHub account or organisation in a few clicks. Later steps use the connection to publish a site from a repository on every push ([#108](https://github.com/danielgtmn/ownpanel/issues/108), [#109](https://github.com/danielgtmn/ownpanel/issues/109), [#113](https://github.com/danielgtmn/ownpanel/issues/113)). The panel connects, shows the accounts and lists their repositories, a site can be linked to a repository and branch ([[Linking a site|Sites-and-Publishing#source-repository-and-branch]]), and GitHub tells the panel about every push. The panel records each push as a **run** of the site, builds the commit on the server with the site's [[build settings|Sites-and-Publishing#build-settings]] and makes the result live ([below](#what-happens-on-a-push)). On a server without the build environment ([[Building sites on the server|Sites-and-Publishing#building-a-site-from-its-source]]), runs wait.
 
 To publish from GitHub without connecting anything, use the [[GitHub Action|GitHub-Action]]: it builds in GitHub's CI and uploads the result.
 
@@ -40,7 +40,8 @@ For each use the panel asks GitHub for a short-lived token (at most an hour) nar
 
 - listing repositories: metadata read only;
 - listing a repository's branches and checking the branch when a site is linked: read access to the contents of that one repository;
-- fetching code (later, for builds): read access to the contents of the one repository being built.
+- fetching the commit of a build, and looking at a repository's files to suggest build settings: read access to the contents of the one repository;
+- reporting a build on its commit: write access to the commit statuses of the one repository (nothing else).
 
 These tokens are never stored and never shown.
 
@@ -51,17 +52,21 @@ Asking for permissions now saves you from approving new ones on every installati
 GitHub sends a notice to `https://<panel domain>/api/github/webhook` for every push to a repository the app may see. The panel checks it (see [[Security|Security#github]]) and then:
 
 - **A push to the linked branch** of a site with **publish on push** on records a **run** for that site: the commit, its message (first line), its author, who pushed, and the time. Several sites linked to the same repository and branch each get their own run. Sites are found by GitHub's numeric ids of the repository and the installation, never by name.
-- A run starts as **waiting** (`queued`). Today it stays that way: building on the server is not there yet ([#113](https://github.com/danielgtmn/ownpanel/issues/113)), and the site page and the API say so. A newer push replaces a run that has not started (it becomes **replaced by a newer push**, `skipped`).
-- The **Builds** section on the site page lists the site's runs, newest first: the commit (its short id links to the commit on GitHub), its message, its author, what started it (a push), the status and the time. It looks for new pushes every 20 seconds while the page is open. **Details** opens one run with everything the panel knows about it: who pushed, the repository and branch, when it was received, started and finished, and why it waits, was replaced or failed. The output of the build will be shown there too once builds on the server exist ([#115](https://github.com/danielgtmn/ownpanel/issues/115)). The panel keeps the last 30 runs of each site.
+- A run starts as **waiting** (`queued`). The panel builds one run per site at a time: it downloads the commit from GitHub, builds it in the build environment with the site's build settings, and publishes the output folder as a new version and makes it live, through the same checks and limits as an upload. A newer push replaces a run that has not started (it becomes **replaced by a newer build**, `skipped`); a run that is being built finishes first.
+- **A failed, cancelled or timed-out build changes nothing**: the live version stays. So does a run of a site without build settings: it fails and asks for them.
+- **Build now** on the site page (or the API and MCP) records a run of the newest commit of the linked branch, the same way, started by the person who pressed it.
+- The **Builds** section on the site page lists the site's runs, newest first: the commit (its short id links to the commit on GitHub), its message, its author, what started it (a push or "Build now"), the status and the time. It looks for new runs every 20 seconds while the page is open, every 3 seconds while one waits or builds. **Details** opens one run with everything the panel knows about it: who pushed, the repository and branch, when it was received, started and finished, the version it published, why it was replaced or failed, and the **output** of the build, live while it builds. **Cancel** stops a run that waits or builds. The panel keeps the last 30 runs of each site, with their output (up to 1 MB each; beyond that, the beginning and the last 64 KB). The values of secret variables are hidden in it.
+- **On GitHub**, each run shows as a status named `ownpanel` on its commit: pending while it builds, then success or failure with a short reason, and **Details** leads to the run on the site page (when the panel has its own domain). A status that cannot be posted (permission lowered on GitHub, GitHub unreachable) is only logged; the build is not affected.
+- **When the panel restarts**, runs it was building are marked failed ("the panel restarted while the site was being built"), and their builds are removed from the build environment; waiting runs are built as usual. Stopping the panel does not cancel builds with a status of their own: they end with the panel.
 
   | Status | Meaning |
   |---|---|
-  | Waiting | received, not built yet (today: until building on the server is available) |
+  | Waiting | received, not built yet (on a server without the build environment: until it has one) |
   | Building | being built |
   | Published | built and made live |
   | Failed | the build did not finish; the details say why |
   | Cancelled | stopped before it finished |
-  | Replaced by a newer push | a newer push came before this one was built |
+  | Replaced by a newer build | a newer push or "Build now" came before this one was built |
 
 **No run** is recorded for: pushes of tags, pushes that delete a branch, pushes to other branches, sites with publish on push off, sites whose connection is missing, whose repository the app no longer sees or whose access is paused on GitHub, and pushes older than seven days.
 
@@ -103,7 +108,8 @@ See [[Security|Security#github]]: what is stored, how the return from GitHub is 
 - HTTP: `/api/github/…` ([[API|API#github]]).
 - MCP: `get_github_status` and `list_github_repositories`, read only ([[MCP|MCP]]). Connecting and removing are done in the web interface.
 - Linking a site: `/api/sites/{name}/source` and the MCP tools `get_site_source`, `list_site_source_repositories`, `list_site_source_branches`, `link_site_source`, `unlink_site_source`.
-- Runs: `GET /api/sites/{name}/runs` and the MCP tool `list_site_runs` (read only); the site source also carries the newest run as `last_run`.
+- Runs: `GET /api/sites/{name}/runs` and the MCP tool `list_site_runs` (read only); the site source also carries the newest run as `last_run`. Build now: `POST /api/sites/{name}/runs` and `start_site_build`; cancel: `POST /api/sites/{name}/runs/{id}/cancel` and `cancel_site_run`; the output: `GET /api/sites/{name}/runs/{id}/log` and `read_site_run_log`.
+- Build settings: `/api/sites/{name}/build-settings` and `get_site_build_settings`, `set_site_build_settings`, `propose_site_build_settings`.
 
 ## Testing without GitHub
 
@@ -120,4 +126,10 @@ To see what a push does, let the stand-in sign one with the app's secret and sen
 
 ```sh
 scripts/github-push.sh http://127.0.0.1:9101 https://panel.localhost:8443 acme/website main "Fix the header" my-delivery-1
+```
+
+To build something, first give the stand-in a commit: post a folder as a tar.gz, and the push then names it:
+
+```sh
+tar -czf - -C my-site . | curl --data-binary @- 'http://127.0.0.1:9101/_dev/commit?repo=acme/website&branch=main'
 ```
