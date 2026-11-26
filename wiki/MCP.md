@@ -62,8 +62,10 @@ Version ids come from `get_site`; a version id starts with a UTC timestamp. Erro
 | `list_dns_domains` | `available` (optional) | Lists the domains (zones) in the panel through your own DNS connections: chosen ones and those your own sites, redirects or e-mail use (for administrators also the panel domain). Each with `connection_id`, `connection_name`, `domain`, `read_only`, `nameservers`, `adopted`, `used_by`; connections that fail are in `problems`. With `available: true`, the zones not in the panel yet. Read-only. |
 | `manage_dns_domain` | `connection_id`, `domain` | Manages a zone of your own connection in the panel. Nothing changes at the provider. Safe to repeat. |
 | `stop_managing_dns_domain` | `connection_id`, `domain` | Takes a chosen zone out of the panel; it stays at the provider. Refused while something of yours uses it. |
+| `list_dns_record_templates` | none | Lists the record templates (`id`, `title`, `description`, `params`, `own_mail`): ready-made records for Google Workspace, Microsoft 365 or Fastmail mail, or a text that proves you own the domain. `own_mail` marks e-mail on this server, which is set up with `set_up_mail_records` instead. Read-only. |
+| `apply_dns_record_template` | `connection_id`, `domain`, `template`, `params` (optional), `confirm` (optional) | Without `confirm` (the default) only returns what would change: for each record set `action` (`add`, `change`, `ok`, `conflict`), `current` and `new` values and a `note`; nothing is written, also with a `read` token. Show it to the user and call again with `confirm: true` only if they agree. Other TXT values are kept, the template's sender is merged into an existing SPF record, replaced MX records move the domain's mail. If any change is a `conflict`, nothing is written. Safe to repeat. |
 
-Tools that change something need a `write` token. Read-only tools are `list_sites`, `get_site`, `check_site_domains`, `list_redirects`, `get_mail_status`, `get_mail_records`, `get_mail_health`, `list_mail_domains`, `list_mailboxes`, `list_mail_aliases`, `list_mail_imports` and `list_dns_domains`. Tokens limited to sites cannot use the e-mail tools.
+Tools that change something need a `write` token. Read-only tools are `list_sites`, `get_site`, `check_site_domains`, `list_redirects`, `get_mail_status`, `get_mail_records`, `get_mail_health`, `list_mail_domains`, `list_mailboxes`, `list_mail_aliases`, `list_mail_imports`, `list_dns_domains` and `list_dns_record_templates`; `apply_dns_record_template` without `confirm` writes nothing either. Tokens limited to sites cannot use the e-mail tools.
 
 ### `publish_files`
 
@@ -93,6 +95,6 @@ curl --fail-with-body -X POST --data-binary @site.zip '<url>'
 
 ## Not available
 
-Connecting DNS accounts and changing records is not possible through MCP; use the web interface or the [[API|API]]. Choosing which domains are managed in the panel is (`manage_dns_domain`).
+Connecting DNS accounts and changing single records is not possible through MCP; use the web interface or the [[API|API]]. Choosing which domains are managed in the panel is (`manage_dns_domain`), and so is applying a record template (`apply_dns_record_template`).
 
 Mailboxes cannot be created and their passwords cannot be set through MCP, on purpose: mailbox passwords should never pass through an AI agent. For the same reason imports of mail cannot be started (they take another account's password) and mailboxes cannot be downloaded (it reads all their mail); use the web interface or the [[API|API]]. Use the web interface or the [[API|API]] (`POST /api/mail/domains/{domain}/mailboxes`, `POST /api/mail/mailboxes/{id}/password`).
