@@ -17,6 +17,8 @@ export type Version = {
   pending: boolean
   /** Opens this version, live or not; empty when versions have no address. */
   preview_url: string
+  /** The pull request this version is the preview of; removed when it is closed. */
+  pull_request?: number
 }
 
 /** The answer to publishing: the site and the new version. */

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   branchChoices,
   initialBranch,
+  previewsSummary,
   repositoryKey,
   runAuthor,
   runStatus,
@@ -18,6 +19,8 @@ const source = (patch: Partial<SiteSource>): SiteSource => ({
   status: 'linked',
   linked_by: 'root',
   linked_at: '2026-11-26T10:00:00Z',
+  pull_request_previews: true,
+  fork_previews: false,
   ...patch,
 })
 
@@ -83,5 +86,25 @@ describe('runs', () => {
     expect(runAuthor(run({}))).toBe('Ann Author (ann)')
     expect(runAuthor(run({ author_name: 'ann' }))).toBe('ann')
     expect(runAuthor(run({ author_name: '', author_login: undefined, pusher: 'bob' }))).toBe('bob')
+  })
+})
+
+describe('previews of pull requests', () => {
+  const linked: SiteSource = {
+    kind: 'github',
+    repository: 'acme/website',
+    branch: 'main',
+    publish_on_push: true,
+    status: 'linked',
+    linked_by: 'root',
+    linked_at: '2026-11-26T10:00:00Z',
+    pull_request_previews: true,
+    fork_previews: false,
+  }
+
+  it('sums up which pull requests get previews', () => {
+    expect(previewsSummary(linked)).toBe('Pull requests: previews')
+    expect(previewsSummary({ ...linked, fork_previews: true })).toBe('Pull requests: previews, also from forks')
+    expect(previewsSummary({ ...linked, pull_request_previews: false })).toBe('Pull requests: no previews')
   })
 })

@@ -15,6 +15,10 @@ export type SiteSource = {
   problem?: string
   linked_by: string
   linked_at: string
+  /** Pull requests against the branch from the same repository are built as previews. */
+  pull_request_previews: boolean
+  /** Pull requests from forks are built too, without the site's variables. */
+  fork_previews: boolean
 }
 
 export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'skipped'
@@ -48,6 +52,15 @@ export type Run = {
   finished_at?: string
   /** The version a succeeded run published. */
   release?: string
+  /** Runs of pull requests (trigger pull_request): its number and page. */
+  pull_request?: number
+  pull_request_url?: string
+  /** The pull request comes from a fork: built without the site's variables. */
+  fork?: boolean
+  /** owner/name of the fork. */
+  head_repository?: string
+  /** The preview the run published, while it exists. Carries the key that opens it. */
+  preview_url?: string
 }
 
 export type SiteSourceState = {
@@ -88,7 +101,18 @@ export type SourceInput = {
   publish_on_push: boolean
 }
 
+export type PreviewsInput = { pull_requests: boolean; forks: boolean }
+
 const sourcePath = (site: string) => `/sites/${encodeURIComponent(site)}/source`
+
+export const setSitePreviews = (site: string, input: PreviewsInput) =>
+  request<SiteSourceState>(`${sourcePath(site)}/previews`, { method: 'PUT', body: input })
+
+/** Which pull requests get previews, in a few words. */
+export function previewsSummary(source: SiteSource): string {
+  if (!source.pull_request_previews) return 'Pull requests: no previews'
+  return source.fork_previews ? 'Pull requests: previews, also from forks' : 'Pull requests: previews'
+}
 
 export const getSiteSource = (site: string) => request<SiteSourceState>(sourcePath(site))
 
@@ -136,7 +160,7 @@ export function runStatus(run: Run): { label: string; tone: 'positive' | 'neutra
     case 'running':
       return { label: 'Building', tone: 'neutral' }
     case 'succeeded':
-      return { label: 'Published', tone: 'positive' }
+      return { label: run.trigger === 'pull_request' ? 'Preview ready' : 'Published', tone: 'positive' }
     case 'failed':
       return { label: 'Failed', tone: 'warning' }
     case 'cancelled':

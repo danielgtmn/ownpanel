@@ -22,6 +22,10 @@ export function runTrigger(run: Run): string {
       return 'Push'
     case 'manual':
       return run.pusher ? `Build now by ${run.pusher}` : 'Build now'
+    case 'pull_request': {
+      const what = run.pull_request ? `Pull request #${run.pull_request}` : 'Pull request'
+      return run.fork ? `${what} from a fork` : what
+    }
     default:
       return 'Other'
   }
@@ -32,9 +36,8 @@ export function runActive(run: Run): boolean {
   return run.status === 'queued' || run.status === 'running'
 }
 
-/** Only links to GitHub's web pages: the address comes from the panel, but stays a link to a web page. */
-export function commitLink(run: Run): string | null {
-  const url = run.commit_url
+/** Only links to web pages: the address comes from the panel, but stays a link to a web page. */
+function webLink(url: string | undefined): string | null {
   if (!url) return null
   try {
     const parsed = new URL(url)
@@ -43,6 +46,15 @@ export function commitLink(run: Run): string | null {
     return null
   }
 }
+
+/** The commit's page on GitHub. */
+export const commitLink = (run: Run) => webLink(run.commit_url)
+
+/** The pull request's page on GitHub. */
+export const pullRequestLink = (run: Run) => webLink(run.pull_request_url)
+
+/** The preview a run of a pull request published, while it exists. */
+export const previewLink = (run: Run) => webLink(run.preview_url)
 
 /** How long a finished run took, like "45 s" or "3 min 5 s"; null while it has not run. */
 export function runDuration(run: Run): string | null {

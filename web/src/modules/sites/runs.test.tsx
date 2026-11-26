@@ -143,3 +143,48 @@ describe('the details of a run', () => {
     expect(html).toContain('Loading the output…')
   })
 })
+
+describe('a run of a pull request', () => {
+  const pr: Run = {
+    ...run,
+    trigger: 'pull_request',
+    status: 'succeeded',
+    waiting: undefined,
+    ref: 'refs/pull/7/head',
+    branch: undefined,
+    message: 'Add a <b>page</b>',
+    pull_request: 7,
+    pull_request_url: 'https://github.com/acme/website/pull/7',
+    preview_url: 'https://abc.preview.example.net/?ownpanel-preview=key',
+    release: '20261126T100000.000Z-abcdef',
+  }
+
+  it('is marked, links to the pull request and to its preview', () => {
+    expect(runTrigger(pr)).toBe('Pull request #7')
+    expect(runTrigger({ ...pr, fork: true })).toBe('Pull request #7 from a fork')
+    const html = renderToStaticMarkup(<RunRow run={pr} onOpen={open} />)
+    expect(html).toContain('data-preview')
+    expect(html).toContain('href="https://github.com/acme/website/pull/7"')
+    expect(html).toContain('href="https://abc.preview.example.net/?ownpanel-preview=key"')
+    expect(html).toContain('Open preview')
+    expect(html).toContain('Preview ready')
+    expect(html).toContain('Add a &lt;b&gt;page&lt;/b&gt;')
+  })
+
+  it('has no preview link once the preview is gone, and never one that is not a web page', () => {
+    const gone = renderToStaticMarkup(<RunRow run={{ ...pr, preview_url: undefined }} onOpen={open} />)
+    expect(gone).not.toContain('Open preview')
+    const script = renderToStaticMarkup(<RunRow run={{ ...pr, preview_url: 'javascript:alert(1)' }} onOpen={open} />)
+    expect(script).not.toContain('javascript:')
+  })
+
+  it('says in the details where it comes from and that it is not live', () => {
+    const fork = { ...pr, fork: true, head_repository: 'stranger/website' }
+    const html = renderToStaticMarkup(<RunDetails site="blog" run={fork} publishingAvailable />)
+    for (const text of ['Title', 'Comes from', 'the fork stranger/website', 'without', 'preview, not live', 'Open preview']) {
+      expect(html, text).toContain(text)
+    }
+    const gone = renderToStaticMarkup(<RunDetails site="blog" run={{ ...pr, preview_url: undefined }} publishingAvailable />)
+    expect(gone).toContain('Removed, or replaced by a newer one.')
+  })
+})

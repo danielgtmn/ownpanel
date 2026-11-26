@@ -20,6 +20,7 @@ export function siteVersions(site: Site): Version[] {
 /** What a version is for visitors right now. */
 export function versionState(version: Version): { text: string; tone: 'positive' | 'neutral' | 'warning' } {
   if (version.live) return { text: 'Live', tone: 'positive' }
+  if (version.pull_request) return { text: `Preview of pull request #${version.pull_request}`, tone: 'neutral' }
   if (version.pending) return { text: 'Not live yet', tone: 'warning' }
   return { text: 'Not live', tone: 'neutral' }
 }

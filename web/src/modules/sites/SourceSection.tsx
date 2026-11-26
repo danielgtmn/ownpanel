@@ -7,8 +7,10 @@ import { formatDate, isoTimestamp } from '../../shared/format/index.ts'
 import { useResource } from '../../shared/hooks/index.ts'
 import { useSession } from '../../shared/session/index.ts'
 import { ErrorState, ExternalIcon, LoadingState, Section } from '../../shared/ui/index.ts'
+import { PreviewsDialog } from './PreviewsDialog.tsx'
 import {
   getSiteSource,
+  previewsSummary,
   removeSiteSource,
   sourceProblem,
   type SiteSource,
@@ -39,6 +41,7 @@ function SourceRow({ source, publishingAvailable }: { source: SiteSource; publis
               Branch <span className="source-branch">{source.branch}</span>
             </li>
             <li>{source.publish_on_push ? 'Publish on push: on' : 'Publish on push: off'}</li>
+            {source.kind === 'github' ? <li>{previewsSummary(source)}</li> : null}
             <li>
               Linked <time dateTime={isoTimestamp(source.linked_at)}>{formatDate(source.linked_at)}</time>
               {source.linked_by ? ` by ${source.linked_by}` : ''}
@@ -64,6 +67,13 @@ export function SourceSection({ site }: { site: string }) {
   const { isAdmin } = useSession()
   const state = useResource(() => getSiteSource(site), `source:${site}`)
   const [editing, setEditing] = useState(false)
+  const [previews, setPreviews] = useState(false)
+
+  async function previewsSaved(next: SiteSourceState) {
+    setPreviews(false)
+    if (next.source) toast.success(`${previewsSummary(next.source)} for ${site}.`)
+    await state.reload()
+  }
 
   async function linked(next: SiteSourceState) {
     setEditing(false)
@@ -116,6 +126,11 @@ export function SourceSection({ site }: { site: string }) {
           )}
         </Button>
       ) : null}
+      {source?.kind === 'github' ? (
+        <Button onClick={() => setPreviews(true)}>
+          Pull requests<span className="visually-hidden">: choose which get previews</span>
+        </Button>
+      ) : null}
       {source ? (
         <Button pendingAnnouncement="Unlinking" onClick={() => unlink(source)}>
           Unlink<span className="visually-hidden"> the repository</span>
@@ -135,6 +150,15 @@ export function SourceSection({ site }: { site: string }) {
             : 'Not linked to a repository. An administrator can link it to one of the connected repositories.'}
         </p>
       )}
+      {source?.kind === 'github' ? (
+        <PreviewsDialog
+          open={previews}
+          onOpenChange={setPreviews}
+          site={site}
+          source={source}
+          onSaved={previewsSaved}
+        />
+      ) : null}
       {isAdmin ? (
         <SourceDialog
           open={editing}
