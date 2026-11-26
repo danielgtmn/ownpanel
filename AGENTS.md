@@ -27,6 +27,7 @@ internal/caddy/       builds the full Caddy config and loads it
 internal/deploy/      releases of a site (unpack, versions, make live)
 internal/dns/         provider-neutral DNS + hetzner/ (Cloud API only)
 internal/github/      GitHub App client (manifest, JWT, installations) + githubtest/
+internal/gitsource/   fetching a commit from any Git host (SSH, HTTPS) without running git + gitsourcetest/
 internal/backup/      the backup command
 internal/build/       builds of sites: shared types, the panel's client; worker/ is the build service
 internal/webui/       serves the embedded web app
