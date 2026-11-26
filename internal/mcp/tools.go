@@ -20,9 +20,11 @@ const stampLayout = "20060102T150405.000Z"
 // ---- Output types ----
 
 type versionInfo struct {
-	ID        string `json:"id" jsonschema:"version id; pass it to make_version_live"`
-	CreatedAt string `json:"created_at" jsonschema:"when the version was published, RFC 3339 (UTC)"`
-	Live      bool   `json:"live" jsonschema:"whether visitors currently see this version"`
+	ID         string `json:"id" jsonschema:"version id; pass it to make_version_live"`
+	CreatedAt  string `json:"created_at" jsonschema:"when the version was published, RFC 3339 (UTC)"`
+	Live       bool   `json:"live" jsonschema:"whether visitors currently see this version"`
+	NeverLive  bool   `json:"never_live" jsonschema:"published without being made live, and not live since"`
+	PreviewURL string `json:"preview_url" jsonschema:"address where this version can be opened, live or not; anyone with it can open the version, so share it only with people who should see it. Empty when the administrator has not set a domain for previews"`
 }
 
 type siteInfo struct {
@@ -46,10 +48,9 @@ func siteView(s panel.Site) siteInfo {
 	if out.Domains == nil {
 		out.Domains = []string{}
 	}
-	// The panel lists releases oldest first.
-	for i := len(s.Releases) - 1; i >= 0; i-- {
-		id := s.Releases[i]
-		v := versionInfo{ID: id, Live: id == s.Current}
+	for _, pv := range s.Versions { // newest first
+		id := pv.ID
+		v := versionInfo{ID: id, Live: pv.Live, NeverLive: pv.Pending, PreviewURL: pv.PreviewURL}
 		if len(id) >= len(stampLayout) {
 			if t, err := time.Parse(stampLayout, id[:len(stampLayout)]); err == nil {
 				v.CreatedAt = t.UTC().Format(time.RFC3339)
@@ -152,6 +153,19 @@ type makeLiveInput struct {
 type publishInput struct {
 	Site  string `json:"site" jsonschema:"name of an existing site"`
 	Files []File `json:"files" jsonschema:"all files of the new version; files of earlier versions are not carried over"`
+	Live  *bool  `json:"live,omitempty" jsonschema:"make the new version live at once (default true). false keeps the current version live: the new one can be opened at its preview_url and made live later with make_version_live"`
+}
+
+type uploadLinkInput struct {
+	Site string `json:"site" jsonschema:"site name as shown by list_sites"`
+	Live *bool  `json:"live,omitempty" jsonschema:"make the uploaded version live at once (default true); false only adds it, like publish_files with live false"`
+}
+
+type publishOutput struct {
+	Site       siteInfo `json:"site"`
+	Version    string   `json:"version" jsonschema:"id of the new version"`
+	Live       bool     `json:"live" jsonschema:"whether the new version is what visitors see now"`
+	PreviewURL string   `json:"preview_url" jsonschema:"address where the new version can be opened; empty when the administrator has not set a domain for previews"`
 }
 
 type domainInfo struct {
@@ -182,7 +196,7 @@ func newServer(p *panel.Service, version string) *sdk.Server {
 		Title: "List sites",
 		Description: "List the web sites you can manage in ownpanel, sorted by name. " +
 			"Use it first to see what exists. Returns for each site its name, domains, owner, " +
-			"the id of the live version and all kept versions (newest first).",
+			"the id of the live version and all kept versions (newest first, each with the address where it can be opened).",
 		Annotations: annotations("List sites", true, false, true),
 	}, func(ctx context.Context, c call, _ noInput) (sitesOutput, error) {
 		sites, err := p.Sites(ctx, c.actor)
@@ -200,7 +214,8 @@ func newServer(p *panel.Service, version string) *sdk.Server {
 		Name:  "get_site",
 		Title: "Show a site",
 		Description: "Show one site: its name, domains, owner, the id of the live version and all kept versions " +
-			"(newest first, with publish time). Use it to find version ids for make_version_live.",
+			"(newest first, with publish time, whether each is live and the address where it can be opened). " +
+			"Use it to find version ids for make_version_live.",
 		Annotations: annotations("Show a site", true, false, true),
 	}, func(ctx context.Context, c call, in siteInput) (siteOutput, error) {
 		site, err := p.Site(ctx, c.actor, in.Site)
@@ -266,9 +281,10 @@ func newServer(p *panel.Service, version string) *sdk.Server {
 	add(s, &sdk.Tool{
 		Name:  "make_version_live",
 		Title: "Make a version live",
-		Description: "Switch a site to one of its kept versions, for example to undo a bad publish. Without a version " +
-			"it goes back to the version before the live one. Takes effect immediately and keeps all versions. " +
-			"Safe to repeat. Get version ids from get_site.",
+		Description: "Switch a site to one of its kept versions, for example to undo a bad publish or to make a version " +
+			"live that was published with live false. Without a version it goes back to the last version before the live " +
+			"one that was live itself. Takes effect immediately and keeps all versions. Safe to repeat. Get version ids " +
+			"from get_site.",
 		Annotations: annotations("Make a version live", false, false, true),
 	}, func(ctx context.Context, c call, in makeLiveInput) (siteOutput, error) {
 		site, err := p.MakeLive(ctx, c.actor, in.Site, in.Version)
@@ -279,18 +295,20 @@ func newServer(p *panel.Service, version string) *sdk.Server {
 		Name:  "publish_files",
 		Title: "Publish files",
 		Description: "Publish a small static site by giving its files directly. This is the usual way to publish what you " +
-			"wrote yourself. The files become a new version that goes live at once; they replace the previous " +
-			"version completely, so include every file of the site (at least index.html). Paths are relative to the " +
-			"site root. Limits: 2000 files, 10 MB in total after decoding. For larger sites use create_upload_link. " +
-			"The site must already exist (create_site). Returns the site with its new live version.",
+			"wrote yourself. The files become a new version that goes live at once, unless live is false: then the " +
+			"current version stays live and the new one can be checked at its preview_url first, then made live with " +
+			"make_version_live. The files replace the previous version completely, so include every file of the site " +
+			"(at least index.html). Paths are relative to the site root. Limits: 2000 files, 10 MB in total after " +
+			"decoding. For larger sites use create_upload_link. The site must already exist (create_site). Returns the " +
+			"site, the new version and its preview address.",
 		Annotations: annotations("Publish files", false, false, false),
-	}, func(ctx context.Context, c call, in publishInput) (siteOutput, error) {
+	}, func(ctx context.Context, c call, in publishInput) (publishOutput, error) {
 		data, err := buildArchive(in.Files)
 		if err != nil {
-			return siteOutput{}, plainError(err.Error())
+			return publishOutput{}, plainError(err.Error())
 		}
-		site, err := p.Publish(ctx, c.actor, in.Site, bytes.NewReader(data))
-		return siteOutput{siteView(site)}, err
+		pub, err := p.PublishVersion(ctx, c.actor, in.Site, bytes.NewReader(data), in.Live == nil || *in.Live)
+		return publishOutput{Site: siteView(pub.Site), Version: pub.Release, Live: pub.Live, PreviewURL: pub.PreviewURL}, err
 	})
 
 	add(s, &sdk.Tool{
@@ -323,10 +341,11 @@ func newServer(p *panel.Service, version string) *sdk.Server {
 		Description: "Create a one-time upload link for publishing a large site as a .zip or .tar.gz archive (up to 512 MB). " +
 			"Use it when the site is too big for publish_files or already exists as an archive. Returns the URL and a " +
 			"ready-to-run curl command: run it where the archive is, with the file path filled in. The link works once, " +
-			"for 15 minutes, only for this site, and publishes as you. Treat the URL like a password.",
+			"for 15 minutes, only for this site, and publishes as you. Treat the URL like a password. With live false " +
+			"the uploaded version is not made live; the answer of the upload lists its preview_url.",
 		Annotations: annotations("Create an upload link", false, false, false),
-	}, func(ctx context.Context, c call, in siteInput) (uploadLinkOutput, error) {
-		link, err := p.CreateUploadLink(ctx, c.actor, in.Site)
+	}, func(ctx context.Context, c call, in uploadLinkInput) (uploadLinkOutput, error) {
+		link, err := p.CreateUploadLink(ctx, c.actor, in.Site, in.Live == nil || *in.Live)
 		if err != nil {
 			return uploadLinkOutput{}, err
 		}

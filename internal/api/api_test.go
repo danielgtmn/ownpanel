@@ -192,7 +192,7 @@ func TestSiteRoutes(t *testing.T) {
 	}{
 		{"empty list", "GET", "/api/sites", "", 200, "[]\n"},
 		{"create", "PUT", "/api/sites/blog", `{"domains":["blog.example.com"]}`, 200,
-			`{"name":"blog","domains":["blog.example.com"],"owner":"root","current_release":"","releases":[]}`},
+			`{"name":"blog","domains":["blog.example.com"],"owner":"root","current_release":"","releases":[],"versions":[],"preview_addresses":false}`},
 		{"get", "GET", "/api/sites/blog", "", 200, `"owner":"root"`},
 		{"list", "GET", "/api/sites", "", 200, `[{"name":"blog"`},
 		{"publish", "POST", "/api/sites/blog/deployments", tarGz(t, "v1"), 201, `"current_release":"`},

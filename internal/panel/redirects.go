@@ -260,6 +260,9 @@ func (s *Service) validRedirect(in RedirectInput) (store.Redirect, error) {
 	if mh := s.MailHost(); mh != "" && d == mh {
 		return store.Redirect{}, errorf(Invalid, "the domain %s is the name of the mail server", d)
 	}
+	if s.underPreviewDomain(d) {
+		return store.Redirect{}, errUnderPreviewDomain(d, s.PreviewDomain())
+	}
 	p, err := redirectPath(in.SourcePath)
 	if err != nil {
 		return store.Redirect{}, err

@@ -124,6 +124,111 @@ func TestPruneKeepsActiveRelease(t *testing.T) {
 	}
 }
 
+func TestAddDoesNotGoLive(t *testing.T) {
+	m := &Manager{Base: t.TempDir()}
+	// A first release that is not made live leaves the site without one.
+	p1, err := m.Add(t.Context(), "a", archive(t, entry{name: "index.html", body: "p1"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Current("a") != "" || !m.Pending("a", p1) {
+		t.Fatalf("current %q, pending %v", m.Current("a"), m.Pending("a", p1))
+	}
+	if b, err := os.ReadFile(filepath.Join(m.ReleaseDir("a", p1), "index.html")); err != nil || string(b) != "p1" {
+		t.Fatalf("release content: %q %v", b, err)
+	}
+	if _, err := m.Rollback("a", ""); !errors.Is(err, ErrNoRelease) {
+		t.Fatalf("going back without a live release: %v", err)
+	}
+
+	v1, err := m.Deploy(t.Context(), "a", archive(t, entry{name: "index.html", body: "v1"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := m.Add(t.Context(), "a", archive(t, entry{name: "index.html", body: "p2"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Current("a") != v1 || served(t, m, "a", "index.html") != "v1" {
+		t.Fatal("adding a release changed the live one")
+	}
+	if m.Pending("a", v1) || !m.Pending("a", p2) {
+		t.Fatal("pending markers are wrong")
+	}
+
+	// Making it live clears the marker; going back skips releases that
+	// were never live (p1) and returns to the one that was.
+	if _, err := m.Rollback("a", p2); err != nil {
+		t.Fatal(err)
+	}
+	if m.Pending("a", p2) || served(t, m, "a", "index.html") != "p2" {
+		t.Fatal("p2 not live")
+	}
+	p3, err := m.Add(t.Context(), "a", archive(t, entry{name: "index.html", body: "p3"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Rollback("a", p3); err != nil {
+		t.Fatal(err)
+	}
+	if id, err := m.Rollback("a", ""); err != nil || id != p2 {
+		t.Fatalf("going back from p3: %q %v, want p2", id, err)
+	}
+	if id, err := m.Rollback("a", ""); err != nil || id != v1 {
+		t.Fatalf("going back from p2: %q %v, want v1", id, err)
+	}
+	if _, err := m.Rollback("a", ""); !errors.Is(err, ErrNoRelease) {
+		t.Fatalf("going back past v1 should skip the never-live p1 and fail: %v", err)
+	}
+}
+
+func TestPruneKeepsLiveAndPreviousDespitePendingReleases(t *testing.T) {
+	m := &Manager{Base: t.TempDir()}
+	v1, err := m.Deploy(t.Context(), "a", archive(t, entry{name: "index.html", body: "v1"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2, err := m.Deploy(t.Context(), "a", archive(t, entry{name: "index.html", body: "v2"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pending []string
+	for i := 0; i < KeepReleases+3; i++ {
+		id, err := m.Add(t.Context(), "a", archive(t, entry{name: "index.html", body: "p"}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		pending = append(pending, id)
+	}
+	rel := m.Releases("a")
+	want := append([]string{v1, v2}, pending[len(pending)-KeepReleases:]...)
+	if strings.Join(rel, " ") != strings.Join(want, " ") {
+		t.Fatalf("kept %v\nwant %v", rel, want)
+	}
+	if m.Current("a") != v2 {
+		t.Fatal("live release changed")
+	}
+	// Markers of removed releases are gone too.
+	markers, _ := os.ReadDir(filepath.Join(m.Base, "a", "pending"))
+	if len(markers) != KeepReleases {
+		t.Fatalf("%d markers, want %d", len(markers), KeepReleases)
+	}
+	if id, err := m.Rollback("a", ""); err != nil || id != v1 {
+		t.Fatalf("going back: %q %v", id, err)
+	}
+}
+
+func TestAddFailureLeavesNoMarker(t *testing.T) {
+	m := &Manager{Base: t.TempDir()}
+	if _, err := m.Add(t.Context(), "a", archive(t, entry{name: "../x", body: "x"})); err == nil {
+		t.Fatal("expected error")
+	}
+	markers, _ := os.ReadDir(filepath.Join(m.Base, "a", "pending"))
+	if len(markers) != 0 || len(m.Releases("a")) != 0 {
+		t.Fatalf("left %d markers, %d releases", len(markers), len(m.Releases("a")))
+	}
+}
+
 // zipArchive builds a zip. Entries with a mode set get it as Unix mode bits.
 func zipArchive(t *testing.T, entries ...zipEntry) *bytes.Reader {
 	t.Helper()

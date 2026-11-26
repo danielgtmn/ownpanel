@@ -45,6 +45,8 @@ The panel domain, the server's public addresses and the certificate e-mail are n
 
 The mail server's name (`mail_host`) and the postmaster address (receives `postmaster@` and `abuse@` of the mail server and of domains without mailboxes) are panel settings too, changed by admins only. The certificate for the mail server is kept in `<data>/mail-tls`: with `-tls acme` from the public CA (the challenge comes in through Caddy on port 80, once the name points at this server), otherwise self-signed.
 
+The **domain for previews** (`preview_domain`) is a panel setting too, for admins only (Settings → Previews). Every kept version of a site gets an address `<label>.<preview domain>` ([[Sites and Publishing|Sites-and-Publishing#previews]]). Empty (the default) means versions have no preview address. It needs a wildcard DNS record `*.<preview domain>` (A and AAAA) to the server's addresses; when the domain is in a zone of a DNS account connected in the panel, Settings offers to create it ("Point to this server", `POST /api/settings/preview-domain/point`), otherwise it shows the records to create, and it shows whether the names point here. The panel suggests `preview.<panel domain>`, but a domain of its own (not below the panel's) is the safer choice ([[Security|Security#previews]]). It must be a plain host name with a dot; the panel domain, the mail server's name, and the domains of sites and redirects may not be below it. There is no flag for it.
+
 The flags `-panel-domain`, `-server-ip`, `-acme-email` and `-mail-host` still work and **win** over the stored values. A value set by flag is shown as locked ("set in the server configuration") and cannot be changed in the panel; remove the flag and restart to manage it in the panel again. Installs that pass these flags behave as before.
 
 Rules for the settings: the panel domain is a plain host name with at least one dot, not an IP address and not a domain of any site. Server addresses follow the rules of `-server-ip`. The e-mail must be a plain address (`you@example.com`). The panel suggests the machine's own addresses (it reads its network interfaces; no outside service is asked).
@@ -141,14 +143,15 @@ Everything the daemon owns is inside the `-data` directory:
     <site>/
       releases/<id>/     one directory per version; never modified after creation
       current            symlink to the live version
+      pending/<id>       empty marker: version published without being made live, and not live since
   caddy/                 Caddy's storage: certificates and keys
   state.json.imported    only if sites were imported from an old state.json
 ```
 
-- **`ownpanel.db`** holds users (password hashes), sessions, access tokens (hashed), sites and their domains, DNS connections (token encrypted), the activity log and settings. It is created with mode 0600. The schema is migrated automatically at start. A database from before the panel kept its data with [ablage](https://github.com/danielgtmn/ablage) is converted once at start; the copy from before is kept as `ownpanel.db.pre-ablage-<UTC time>` (mode 0600) and may be deleted once the new version runs well (see [[Installation|Installation#updating]]). A database converted by a nightly build before panel users referenced their sign-in account gets that reference once at start, after a copy `ownpanel.db.pre-auth-ref-<UTC time>` (mode 0600); it may be deleted the same way.
+- **`ownpanel.db`** holds users (password hashes), sessions, access tokens (hashed), sites and their domains, DNS connections (token encrypted), the activity log and settings (among them the secret preview addresses are derived from, encrypted with `secret.key`). It is created with mode 0600. The schema is migrated automatically at start. A database from before the panel kept its data with [ablage](https://github.com/danielgtmn/ablage) is converted once at start; the copy from before is kept as `ownpanel.db.pre-ablage-<UTC time>` (mode 0600) and may be deleted once the new version runs well (see [[Installation|Installation#updating]]). A database converted by a nightly build before panel users referenced their sign-in account gets that reference once at start, after a copy `ownpanel.db.pre-auth-ref-<UTC time>` (mode 0600); it may be deleted the same way.
 - **`secret.key`** is created on first start. Without it the stored DNS tokens cannot be used; connections must be added again. It is included in backups.
 - **`setup-code`** is created when no user exists and deleted once the first admin is created (or at start, if a user already exists).
-- **`sites/<site>/releases/<id>`**: an id looks like `20260131T120000.000Z-ab12cd`. The newest five versions of a site are kept; the live one is never removed.
+- **`sites/<site>/releases/<id>`**: an id looks like `20260131T120000.000Z-ab12cd`. The newest five versions of a site are kept, and besides them the live one and the one going back would return to ([[Sites and Publishing|Sites-and-Publishing#versions]]).
 - **`caddy/`** is where the generated Caddy config tells Caddy to keep certificates and keys, unless `-caddy-storage` names another directory (a server install uses `/var/lib/ownpanel-caddy/storage`).
 - **`state.json`**: an old JSON file with sites. If it exists and the database has no sites, they are imported once and the file is renamed to `state.json.imported`.
 

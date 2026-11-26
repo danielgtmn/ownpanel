@@ -14,10 +14,6 @@ func (s *Server) uploadRoutes(mux *http.ServeMux) {
 // is the credential, and it publishes as the user who created the link.
 func (s *Server) uploadWithLink(w http.ResponseWriter, r *http.Request) {
 	timeouts.Extend(w) // large archives on slow links
-	site, err := s.Panel.PublishWithUploadLink(r.Context(), r.PathValue("id"), http.MaxBytesReader(w, r.Body, MaxUploadBytes))
-	if err != nil {
-		writeFailure(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, site)
+	p, err := s.Panel.PublishWithUploadLink(r.Context(), r.PathValue("id"), http.MaxBytesReader(w, r.Body, MaxUploadBytes))
+	writePublication(w, p, err)
 }

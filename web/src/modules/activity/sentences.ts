@@ -130,6 +130,7 @@ export function describeDetail({ action, detail }: Pick<Activity, 'action' | 'de
   if (!detail) return ''
   switch (action) {
     case 'site.publish':
+    case 'site.publish-not-live':
     case 'site.make-live':
       return parseReleaseDate(detail) ? `Version from ${formatReleaseDate(detail)}` : detail
     case 'site.create':
@@ -167,8 +168,9 @@ export function describeDetail({ action, detail }: Pick<Activity, 'action' | 'de
     case 'settings.update':
       return detail.charAt(0).toUpperCase() + detail.slice(1).replaceAll('; ', ' · ')
     case 'site.upload-link': {
-      const match = /^valid until (.+)$/.exec(detail)
-      return match ? `Valid until ${formatDateTime(match[1])}` : detail
+      const match = /^valid until (\S+?)(, not made live)?$/.exec(detail)
+      if (!match) return detail
+      return `Valid until ${formatDateTime(match[1])}${match[2] ? ' · Publishes without making it live' : ''}`
     }
     case 'mail.domain.enable':
       return ''
@@ -239,6 +241,12 @@ export function describeActivity({ actor, action, target }: Entry): string {
       return about(target, (t) => `${who} changed the domains of ${t}`, `${who} changed the domains of a site`)
     case 'site.publish':
       return about(target, (t) => `${who} published new files for ${t}`, `${who} published new files for a site`)
+    case 'site.publish-not-live':
+      return about(
+        target,
+        (t) => `${who} published new files for ${t} without making them live`,
+        `${who} published new files for a site without making them live`,
+      )
     case 'site.make-live':
       return about(target, (t) => `${who} made another version of ${t} live`, `${who} made another version of a site live`)
     case 'site.delete':
