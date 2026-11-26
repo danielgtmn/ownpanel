@@ -369,6 +369,11 @@ func (s *Service) SetSitePreviews(ctx context.Context, a Actor, site string, in 
 // previewRunAllowed checks, when the runner takes a run of a pull request,
 // that the site still wants it built.
 func (s *Service) previewRunAllowed(ctx context.Context, r store.Run) error {
+	// Closing the pull request may have ended the run between the runner
+	// taking it and noting it as its own.
+	if cur, err := s.store.Run(ctx, r.ID); err == nil && store.RunFinished(cur.Status) {
+		return errorf(Conflict, "%s", cur.Detail)
+	}
 	src, err := s.store.SiteSource(ctx, r.Site)
 	if errors.Is(err, store.ErrNotFound) {
 		return errorf(Conflict, "the site is not linked to a repository any more")
