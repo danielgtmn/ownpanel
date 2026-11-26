@@ -40,7 +40,7 @@ This page describes what ownpanel does to protect your server, in plain words, a
 
 ### Uploaded archives
 
-Archives are treated as untrusted. Only regular files and folders are accepted (no links), entry names are checked, writes cannot leave the version's directory, and the size and entry limits are enforced on the bytes actually read. See [[Sites and Publishing|Sites-and-Publishing]].
+Archives are treated as untrusted. Only regular files and folders are accepted (no links), entry names are checked, writes cannot leave the version's directory, and the size and entry limits are enforced on the bytes actually read, including ignored entries. A zip's entry count is checked before its directory is loaded, so a large upload cannot make the panel hold its whole list of entries in memory. See [[Sites and Publishing|Sites-and-Publishing]].
 
 ### The web server
 

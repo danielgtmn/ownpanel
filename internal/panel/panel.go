@@ -426,7 +426,7 @@ func (s *Service) Publish(ctx context.Context, a Actor, name string, archive io.
 		return Site{}, err
 	}
 	first := s.deploys.Current(site.Name) == ""
-	id, err := s.deploys.Deploy(site.Name, archive)
+	id, err := s.deploys.Deploy(ctx, site.Name, archive)
 	if err != nil {
 		kind := Internal
 		if errors.Is(err, deploy.ErrBadArchive) {

@@ -46,7 +46,7 @@ A version is created from an archive:
 | Versions kept per site | 5 |
 | Upload time | 1 h; cut off earlier only if no data arrives for 1 min (see [[Security|Security]]) |
 
-The limits are enforced on the bytes actually read, not on sizes the archive declares.
+The limits are enforced on the bytes actually read, not on sizes the archive declares. Ignored files count toward both limits, and a zip with too many entries is refused before its list of entries is read into memory. Unpacking stops when the upload is cancelled.
 
 ## Publishing
 
