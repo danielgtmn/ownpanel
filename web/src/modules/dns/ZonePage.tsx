@@ -11,7 +11,17 @@ import { adoptZone, deleteRecord, deleteZone, listAvailableZones, listRecords, l
 import { DeleteDomainDialog } from './DeleteDomainDialog.tsx'
 import { Nameservers } from './Nameservers.tsx'
 import { RecordDialog, type RecordSubmit } from './RecordDialog.tsx'
-import { fullName, isEditableRecordSet, isProviderManaged, setKey, sortRecordSets, ttlLabel } from './records.ts'
+import {
+  fullName,
+  isEditableRecordSet,
+  isProviderManaged,
+  pendingChanges,
+  setKey,
+  sortRecordSets,
+  ttlLabel,
+  withChanges,
+  type ConfirmedChanges,
+} from './records.ts'
 import type { RecordSet, Zone } from './types.ts'
 import { findZone } from './zones.ts'
 
@@ -88,8 +98,20 @@ function Loaded({ connectionId, zoneInfo, records, reload }: LoadedProps) {
   const zone = zoneInfo.name
   const [dialog, setDialog] = useState<{ open: boolean; existing: RecordSet | null }>({ open: false, existing: null })
   const [deleting, setDeleting] = useState(false)
+  const [changes, setChanges] = useState<ConfirmedChanges>(new Map())
   const editable = !zoneInfo.read_only
   usePageTitle(zone)
+
+  // Once a reload brings a new list, forget the changes it shows by now.
+  const [listed, setListed] = useState(records)
+  if (listed !== records) {
+    setListed(records)
+    if (changes.size > 0) setChanges(pendingChanges(records, changes))
+  }
+
+  function confirmed(key: string, change: RecordSet | null) {
+    setChanges((current) => new Map(current).set(key, change))
+  }
 
   async function stopManaging() {
     const yes = await confirm({
@@ -116,7 +138,8 @@ function Loaded({ connectionId, zoneInfo, records, reload }: LoadedProps) {
   }
 
   const save: RecordSubmit = async (name, type, body) => {
-    await saveRecord(connectionId, zone, name, type, body)
+    const saved = await saveRecord(connectionId, zone, name, type, body)
+    confirmed(setKey(saved), saved)
     toast.success(`Saved the ${type} record for ${fullName(name, zone)}. DNS changes can take a few minutes to be visible.`)
     setDialog((current) => ({ ...current, open: false }))
     await reload()
@@ -133,6 +156,7 @@ function Loaded({ connectionId, zoneInfo, records, reload }: LoadedProps) {
     if (!yes) return
     try {
       await deleteRecord(connectionId, zone, set.name, set.type)
+      confirmed(setKey(set), null)
       toast.success(`Deleted the ${set.type} record for ${target}.`)
     } catch (error) {
       toast.error(errorMessage(error))
@@ -140,7 +164,7 @@ function Loaded({ connectionId, zoneInfo, records, reload }: LoadedProps) {
     await reload().catch(() => undefined)
   }
 
-  const sorted = sortRecordSets(records)
+  const sorted = sortRecordSets(withChanges(records, changes))
 
   return (
     <>
