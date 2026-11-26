@@ -285,6 +285,16 @@ func TestBuildMailWeb(t *testing.T) {
 			t.Errorf("config misses %s", want)
 		}
 	}
+	// With previews too, Caddy manages certificates for neither the mail
+	// host nor the preview wildcard, and the mail host's own certificate stays.
+	withPreviews := base
+	withPreviews.PreviewDomain, withPreviews.PreviewPermission = "preview.example.net", "http://127.0.0.1:8600/ask"
+	both := js(withPreviews)
+	for _, want := range []string{`"skip_certificates":["*.preview.example.net","mail.example.com"]`, `"load_pem":[{"certificate":`, `"on_demand":true`} {
+		if !strings.Contains(both, want) {
+			t.Errorf("config with previews misses %s", want)
+		}
+	}
 	// The mail host's route comes before the catch-all for unknown hosts.
 	if strings.Index(got, `"host":["mail.example.com"]}]`) > strings.Index(got, "Unknown site.") {
 		t.Error("mail host route after the catch-all")
