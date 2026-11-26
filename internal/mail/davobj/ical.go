@@ -330,6 +330,16 @@ func timingOf(c *ical.Component, tz *tzSet) (timing, error) {
 			t.unexpanded, t.lastStart = true, opt.Until
 			return t, nil
 		}
+		if neverOccurs(opt) {
+			// The rule selects no date: only DTSTART (always the first
+			// occurrence, RFC 5545) and RDATEs remain.
+			rules = nil
+			set.RDate(t.start)
+		}
+	}
+	if len(rules) > 0 {
+		opt, _ := rrule.StrToROptionInLocation(rules[0].Value, t.start.Location())
+		opt.Dtstart = t.start
 		t.capAt = t.start.AddDate(horizonYears, 0, 0)
 		if opt.Until.IsZero() || opt.Until.After(t.capAt) {
 			opt.Until, t.capped = t.capAt, true
