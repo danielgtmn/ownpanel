@@ -222,7 +222,7 @@ func TestGitHubWholeFlow(t *testing.T) {
 		t.Fatalf("manifest: %+v", m)
 	}
 	wantPerms := map[string]string{"contents": "read", "metadata": "read", "statuses": "write", "pull_requests": "write"}
-	if fmt.Sprint(m.DefaultPermissions) != fmt.Sprint(wantPerms) || !slices.Equal(m.DefaultEvents, []string{"push", "pull_request"}) {
+	if fmt.Sprint(m.DefaultPermissions) != fmt.Sprint(wantPerms) || !slices.Equal(m.DefaultEvents, []string{"push", "repository", "pull_request"}) {
 		t.Fatalf("permissions %v, events %v", m.DefaultPermissions, m.DefaultEvents)
 	}
 

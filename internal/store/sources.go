@@ -32,9 +32,9 @@ type SiteSource struct {
 	// RepositoryGone: GitHub reported that the installation no longer sees
 	// the repository (MarkRepositoryGone); linking again clears it.
 	RepositoryGone bool
-	CreatedBy    string // user name, "" if the user was removed
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	CreatedBy      string // user name, "" if the user was removed
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 const sourceCols = `s.site_name, s.kind, coalesce(s.installation_id, 0), coalesce(s.repository_id, 0), s.repository,

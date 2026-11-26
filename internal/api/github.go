@@ -47,11 +47,8 @@ func (s *Server) githubRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/github/installations", s.finishGitHubInstall)
 	mux.HandleFunc("GET /api/github/installations/{id}/repositories", s.githubRepositories)
 	mux.HandleFunc("POST /api/github/refresh", s.refreshGitHub)
-	// Reserved for GitHub's deliveries (#109); the App already sends them
-	// here, signed with its webhook secret.
-	mux.HandleFunc("POST "+panel.GitHubWebhookPath, func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotFound, "no such API endpoint")
-	})
+	// GitHub's deliveries to panel.GitHubWebhookPath: webhookRoutes
+	// (github_webhook.go), outside authentication.
 }
 
 func (s *Server) githubConnections(w http.ResponseWriter, r *http.Request) {

@@ -83,7 +83,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such API endpoint")
 	})
-	return apiHeaders(s.Build, s.authenticate(mux))
+	// The few routes reached without a session or token (GitHub's
+	// deliveries) bypass authenticate, matched by method and exact path;
+	// everything else goes through it unchanged.
+	outer := http.NewServeMux()
+	s.webhookRoutes(outer)
+	outer.Handle("/", s.authenticate(mux))
+	return apiHeaders(s.Build, outer)
 }
 
 // apiContentSecurityPolicy is sent with every API answer. They are data,

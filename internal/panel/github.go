@@ -103,9 +103,10 @@ var githubPermissions = map[string]string{
 	"pull_requests": "write",
 }
 
-// githubEvents are the deliveries the App subscribes to: pushes (#109) and
-// pull requests (#116). Installation changes are always delivered.
-var githubEvents = []string{"push", "pull_request"}
+// githubEvents are the deliveries the App subscribes to: pushes (#109),
+// changes of repositories such as renames (#109) and pull requests
+// (#116). Installation changes are always delivered.
+var githubEvents = []string{"push", "repository", "pull_request"}
 
 // GitHubPermissions returns what the App asks for, for documentation and
 // tests.

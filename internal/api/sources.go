@@ -14,6 +14,16 @@ func (s *Server) sourceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/sites/{name}/source", s.deleteSiteSource)
 	mux.HandleFunc("GET /api/sites/{name}/source/repositories", s.sourceRepositories)
 	mux.HandleFunc("GET /api/sites/{name}/source/branches", s.sourceBranches)
+	mux.HandleFunc("GET /api/sites/{name}/runs", s.siteRuns)
+}
+
+func (s *Server) siteRuns(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Panel.ListSiteRuns(r.Context(), actorOf(r), r.PathValue("name"))
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) getSiteSource(w http.ResponseWriter, r *http.Request) {

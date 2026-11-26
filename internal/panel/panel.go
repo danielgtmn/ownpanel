@@ -174,6 +174,8 @@ type Service struct {
 	github      *github.Client
 	githubFlows githubFlows
 	githubRepos githubRepoCache
+	// githubHooks limits GitHub's deliveries (github_webhook.go).
+	githubHooks githubHooks
 }
 
 // New returns a Service. It rejects invalid web server options up front, and
