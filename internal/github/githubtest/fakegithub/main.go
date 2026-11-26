@@ -33,11 +33,16 @@ func main() {
 	for _, r := range []struct {
 		owner, name string
 		private     bool
+		branches    []string
 	}{
-		{"octo-admin", "blog", false}, {"octo-admin", "notes", true},
-		{"acme", "website", true}, {"acme", "docs", false}, {"acme", "landing-page", true},
+		{"octo-admin", "blog", false, []string{"drafts"}}, {"octo-admin", "notes", true, nil},
+		{"acme", "website", true, []string{"release/2.0", "dev"}}, {"acme", "docs", false, nil},
+		{"acme", "landing-page", true, nil},
 	} {
-		srv.AddRepo(r.owner, r.name, r.private)
+		id := srv.AddRepo(r.owner, r.name, r.private)
+		for _, b := range r.branches {
+			srv.AddBranch(id, b)
+		}
 	}
 	fmt.Println("fake GitHub at", srv.URL)
 	stop := make(chan os.Signal, 1)

@@ -88,6 +88,8 @@ type Repo struct {
 	Name          string
 	Private       bool
 	DefaultBranch string
+	// Branches are the names of its branches (DefaultBranch first).
+	Branches []string
 }
 
 // IssuedToken is an installation token handed out by the fake.
@@ -185,8 +187,40 @@ func (s *Server) AddRepo(owner, name string, private bool) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := s.id()
-	s.repos = append(s.repos, Repo{ID: id, Owner: owner, Name: name, Private: private, DefaultBranch: "main"})
+	s.repos = append(s.repos, Repo{ID: id, Owner: owner, Name: name, Private: private, DefaultBranch: "main", Branches: []string{"main"}})
 	return id
+}
+
+// AddBranch adds a branch to a repository.
+func (s *Server) AddBranch(repoID int64, branch string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.repos {
+		if s.repos[i].ID == repoID && !slices.Contains(s.repos[i].Branches, branch) {
+			s.repos[i].Branches = append(s.repos[i].Branches, branch)
+		}
+	}
+}
+
+// RenameRepo renames a repository; its id stays.
+func (s *Server) RenameRepo(repoID int64, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.repos {
+		if s.repos[i].ID == repoID {
+			s.repos[i].Name = name
+		}
+	}
+}
+
+// SetInstallationRepos changes which repositories an installation may
+// see, as choosing them on GitHub does (nil: all of the account's).
+func (s *Server) SetInstallationRepos(id int64, repos []int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if i, ok := s.insts[id]; ok {
+		i.Repos = repos
+	}
 }
 
 // AddInstallation installs an App on an account directly (as if someone
@@ -357,6 +391,8 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /api/v3/app/installations/{id}", s.getInstallation)
 	mux.HandleFunc("POST /api/v3/app/installations/{id}/access_tokens", s.createToken)
 	mux.HandleFunc("GET /api/v3/installation/repositories", s.listRepos)
+	mux.HandleFunc("GET /api/v3/repos/{owner}/{repo}/branches", s.listBranches)
+	mux.HandleFunc("GET /api/v3/repos/{owner}/{repo}/branches/{branch...}", s.getBranch)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := r.Method + " " + r.URL.Path
 		s.mu.Lock()
@@ -726,4 +762,74 @@ func (s *Server) listRepos(w http.ResponseWriter, r *http.Request) {
 		sel = "all"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"total_count": len(all), "repository_selection": sel, "repositories": page(all, r)})
+}
+
+// repoOfToken finds the repository of a branch request and checks the
+// token may read its contents, as GitHub does (a repository the token may
+// not see is "Not Found").
+func (s *Server) repoOfToken(w http.ResponseWriter, r *http.Request) *Repo {
+	raw, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	t, ok := s.tokens[raw]
+	if !ok || !s.Now().Before(t.ExpiresAt) {
+		message(w, http.StatusUnauthorized, "Bad credentials")
+		return nil
+	}
+	i, ok := s.insts[t.InstallationID]
+	if !ok {
+		message(w, http.StatusUnauthorized, "Bad credentials")
+		return nil
+	}
+	for _, rp := range s.reposOf(i) {
+		if !strings.EqualFold(rp.Owner, r.PathValue("owner")) || !strings.EqualFold(rp.Name, r.PathValue("repo")) {
+			continue
+		}
+		if t.RepositoryIDs != nil && !slices.Contains(t.RepositoryIDs, rp.ID) {
+			break
+		}
+		if levels[t.Permissions["contents"]] < 1 {
+			message(w, http.StatusForbidden, "Resource not accessible by integration")
+			return nil
+		}
+		for k := range s.repos {
+			if s.repos[k].ID == rp.ID {
+				return &s.repos[k]
+			}
+		}
+	}
+	message(w, http.StatusNotFound, "Not Found")
+	return nil
+}
+
+func branchJSON(name string) map[string]any {
+	sum := sha256.Sum256([]byte(name))
+	return map[string]any{"name": name, "commit": map[string]any{"sha": hex.EncodeToString(sum[:20])}, "protected": false}
+}
+
+func (s *Server) listBranches(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rp := s.repoOfToken(w, r)
+	if rp == nil {
+		return
+	}
+	all := []map[string]any{}
+	for _, b := range rp.Branches {
+		all = append(all, branchJSON(b))
+	}
+	writeJSON(w, http.StatusOK, page(all, r))
+}
+
+func (s *Server) getBranch(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rp := s.repoOfToken(w, r)
+	if rp == nil {
+		return
+	}
+	name := r.PathValue("branch")
+	if !slices.Contains(rp.Branches, name) {
+		message(w, http.StatusNotFound, "Branch not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, branchJSON(name))
 }

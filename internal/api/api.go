@@ -70,6 +70,7 @@ var routeGroups = []func(*Server, *http.ServeMux){
 	(*Server).mailAccountRoutes,
 	(*Server).mailRulesRoutes,
 	(*Server).githubRoutes,
+	(*Server).sourceRoutes,
 	(*Server).buildRoutes,
 }
 

@@ -261,6 +261,37 @@ type githubInstallationRow struct {
 	UpdatedAt           time.Time
 }
 
+// siteSourceRow is where a site's code comes from: at most one per site
+// (unique SiteName), removed with the site. Kind is "github" or "git";
+// checkSource stands for the former table constraints.
+//
+// Kind github: a repository of a GitHub App installation, identified by
+// GitHub's numeric RepositoryID (external data, it survives renames);
+// Repository holds owner/name for display and is refreshed whenever the
+// panel sees the repository. InstallationID becomes nil when the
+// installation or its whole connection is removed: the source stays, so
+// the site shows "connection missing" with the repository it was linked
+// to, until someone links it again or unlinks it.
+//
+// Kind git: any Git host, fetched with a deploy key (#111). Repository
+// holds the clone address; DeployKey and NotifySecret are sealed by the
+// panel and stay empty until #111 fills them in.
+type siteSourceRow struct {
+	ID             string
+	SiteName       string `db:",ref=sites,cascade,unique"`
+	Kind           string
+	InstallationID *string `db:",ref=github_installations,setnull,index"`
+	RepositoryID   *int64  `db:",index"`
+	Repository     string
+	Branch         string
+	PublishOnPush  bool
+	DeployKey      []byte
+	NotifySecret   []byte
+	CreatedBy      *string `db:",ref=users,setnull,index"`
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
 // formatRow marks the storage format: a row with id formatAblage means the
 // database is kept by ablage (legacy.go).
 type formatRow struct {
@@ -292,6 +323,7 @@ type repos struct {
 	noForwarding *ablage.Repository[noForwardingRow]
 	githubApps   *ablage.Repository[githubAppRow]
 	githubInsts  *ablage.Repository[githubInstallationRow]
+	sources      *ablage.Repository[siteSourceRow]
 	format       *ablage.Repository[formatRow]
 }
 
@@ -347,6 +379,8 @@ func newRepos(st ablage.Store) (repos, error) {
 	add(err)
 	r.githubInsts, err = ablage.NewRepository[githubInstallationRow](st, "github_installations")
 	add(err)
+	r.sources, err = ablage.NewRepository[siteSourceRow](st, "site_sources")
+	add(err)
 	r.format, err = ablage.NewRepository[formatRow](st, "store_format")
 	add(err)
 	return r, errors.Join(errs...)
@@ -377,6 +411,7 @@ func (r repos) with(tx ablage.Store) repos {
 		noForwarding: r.noForwarding.With(tx),
 		githubApps:   r.githubApps.With(tx),
 		githubInsts:  r.githubInsts.With(tx),
+		sources:      r.sources.With(tx),
 		format:       r.format.With(tx),
 	}
 }

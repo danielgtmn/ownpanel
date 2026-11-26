@@ -136,6 +136,11 @@ export function describeDetail({ action, detail }: Pick<Activity, 'action' | 'de
     case 'site.create':
     case 'site.domains':
       return `Domains: ${detail}`
+    case 'site.source': {
+      const match = /^(.+), branch (\S+), publish on push (on|off)$/.exec(detail)
+      if (!match) return detail
+      return `${match[1]}, branch ${match[2]}, ${match[3] === 'on' ? 'publish on push' : 'no publishing on push'}`
+    }
     case 'user.create':
     case 'user.update':
     case 'account.email':
@@ -246,6 +251,10 @@ export function describeActivity({ actor, action, target }: Entry): string {
       return about(target, (t) => `${who} made another version of ${t} live`, `${who} made another version of a site live`)
     case 'site.delete':
       return about(target, (t) => `${who} removed the site ${t}`, `${who} removed a site`)
+    case 'site.source':
+      return about(target, (t) => `${who} linked ${t} to a repository`, `${who} linked a site to a repository`)
+    case 'site.source-remove':
+      return about(target, (t) => `${who} unlinked ${t} from its repository`, `${who} unlinked a site from its repository`)
     case 'user.create':
       return about(target, (t) => `${who} added ${t}`, `${who} added a person`)
     case 'user.update':

@@ -11,6 +11,8 @@ describe('describeActivity', () => {
     ['site.publish-not-live', 'blog', 'anna published new files for blog without making them live'],
     ['site.make-live', 'blog', 'anna made another version of blog live'],
     ['site.delete', 'shop', 'anna removed the site shop'],
+    ['site.source', 'blog', 'anna linked blog to a repository'],
+    ['site.source-remove', 'blog', 'anna unlinked blog from its repository'],
     ['user.create', 'max', 'anna added max'],
     ['user.update', 'max', 'anna changed the account of max'],
     ['user.delete', 'max', 'anna removed max'],
@@ -138,6 +140,8 @@ describe('describeDetail', () => {
   it.each([
     ['site.publish', '20261124T201315.622Z-fc3af4', /^Version from /],
     ['site.publish', 'something else', /^something else$/],
+    ['site.source', 'acme/site, branch release/2.0, publish on push on', /^acme\/site, branch release\/2\.0, publish on push$/],
+    ['site.source', 'acme/site, branch main, publish on push off', /^acme\/site, branch main, no publishing on push$/],
     ['site.create', 'a.example.com, b.example.com', /^Domains: a\.example\.com, b\.example\.com$/],
     ['user.create', 'role member', /^Role: Member$/],
     ['user.update', 'role admin, password changed', /^Role: Administrator · New password$/],

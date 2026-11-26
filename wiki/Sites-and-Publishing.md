@@ -142,6 +142,19 @@ Every kept version, live or not, can be opened on an address of its own once an 
 - **Certificates** are obtained only when a preview is opened for the first time, one per opened version, and only after the web server asked the panel that this exact name is a kept version. Names below the preview domain that are not previews get no certificate. See [[Security|Security]].
 - The preview domain and everything below it are reserved: no site, redirect, panel domain or mail server name may be below it.
 
+## Source: repository and branch
+
+A site can be linked to a **repository and branch** its code comes from, with **publish on push** on or off. On the site page, the **Source** section shows the repository (with a link to it), the branch, whether a push publishes, and who linked it; **Link repository** or **Change** opens a dialog to choose the repository and one of its branches, **Unlink** removes the link.
+
+> **Not yet:** linking only records the choice. Building and publishing on push starts once building on the server is available ([#109](https://github.com/danielgtmn/ownpanel/issues/109), [#113](https://github.com/danielgtmn/ownpanel/issues/113)). Until then, publish files as before. The answers of the API and MCP say so with `"publishing_available": false`.
+
+- **Where repositories come from:** a GitHub account or organisation connected under Settings → GitHub ([[GitHub|GitHub]]). The panel keeps GitHub's numeric id of the repository, so a renamed repository stays linked; the name shown is refreshed whenever the panel sees the repository.
+- **Who may link:** linking (and changing the branch or publish on push, which links anew) needs the same rights as changing the site (its owner or an administrator, a `write` token, a token limited to sites only for its sites) **and** the repository must be usable by that person: only administrators may use the connected repositories. A member therefore cannot link their site to an organisation's repository; to them those repositories do not exist. Members see a link an administrator made on their site and may unlink it.
+- **Checks:** the panel asks GitHub, as the connection, whether the repository is still shared with the panel and whether the branch exists, and refuses otherwise. Branch names follow Git's rules: at most 255 characters, no spaces or control characters, none of `~ ^ : ? * [ \`, no `..`, `//` or `@{`, no leading `-` or `/`, no part starting with `.` or ending in `.lock`, not `@` or `HEAD`.
+- **Status:** `linked`; `connection_missing` (the GitHub connection or its installation was removed: link again or unlink); `suspended` (access is paused on GitHub); `repository_missing` (the connection no longer sees the repository); `unchecked` (GitHub could not be asked; `problem` says why).
+- A site has at most one source. Deleting the site deletes its link; a new site of the same name starts without one. Linking and unlinking appear in the activity log (repository, branch and publish on push; never a token).
+- Later, any Git host with a deploy key ([#111](https://github.com/danielgtmn/ownpanel/issues/111)) is a second kind of source; the stored link already has room for it.
+
 ## Recognised kinds of sites
 
 Building sites on the server is being added ([#58](https://github.com/danielgtmn/ownpanel/issues/58)); nothing below runs yet. When a site's source is looked at, the panel recognises how the site is made and proposes a build command, the folder with the finished site and the build environment. The proposal is a starting point you confirm or change.
