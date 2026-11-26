@@ -25,6 +25,7 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/deploy"
 	"github.com/danielgtmn/ownpanel/internal/dns"
 	"github.com/danielgtmn/ownpanel/internal/github"
+	"github.com/danielgtmn/ownpanel/internal/gitsource"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/store"
 	"github.com/danielgtmn/panzerschrank"
@@ -106,6 +107,10 @@ type Config struct {
 	// GitHub is where GitHub connections are made (github.go); nil means
 	// github.com. Tests pass a client for a fake.
 	GitHub *github.Client
+	// TempDir is where large temporary files go: repositories fetched
+	// from Git hosts for builds (up to about 2.5 GB each, two at a time).
+	// "" means the system's temporary directory.
+	TempDir string
 }
 
 // Service owns every use case of the panel.
@@ -201,6 +206,13 @@ type Service struct {
 	// the notifications of Git hosts (gitsource.go, gitnotify.go).
 	gitChecks gitChecks
 	gitHooks  gitHooks
+	// gitCheckSlots and gitFetchSlots bound connections to Git hosts
+	// (gitslots.go); gitTips resolves branches after notifications
+	// (gitnotify.go); gitTempDir is where fetches keep temporary files.
+	gitCheckSlots slotLimiter
+	gitFetchSlots slotLimiter
+	gitTips       gitTips
+	gitTempDir    string
 }
 
 // New returns a Service. It rejects invalid web server options up front, and
@@ -241,6 +253,17 @@ func New(cfg Config) (*Service, error) {
 	if s.github == nil {
 		s.github = DefaultGitHub()
 	}
+	s.gitTempDir = cfg.TempDir
+	s.gitCheckSlots = slotLimiter{size: gitCheckSlots, perKey: gitCheckPerKey}
+	s.gitFetchSlots = slotLimiter{size: gitFetchSlots, perKey: gitFetchPerKey}
+	// Repository addresses may not point back at this server.
+	gitsource.SetOwnAddresses(func() []netip.Addr {
+		own := s.effectiveServerIPs()
+		if ifs, err := s.interfaces(); err == nil {
+			own = append(own, ifs...)
+		}
+		return own
+	})
 	// Builds report to their runs (and to cfg.Runs); commits come from the
 	// site's repository (GitHub or any Git host) unless the caller fetches them itself.
 	s.build.runs = runReporter{s: s, extra: cfg.Runs}

@@ -90,10 +90,6 @@ const (
 	gitCheckBurst = 20.0
 )
 
-// gitFetchSlots bounds fetches running at once (each may use up to
-// gitsource.DefaultLimits of temporary disk space).
-var gitFetchSlots = make(chan struct{}, 2)
-
 // GitSourceInput links a site to a Git repository.
 type GitSourceInput struct {
 	Repository    string `json:"repository"`
@@ -352,9 +348,11 @@ func (s *Service) InspectGitRepository(ctx context.Context, a Actor, site, addre
 	if err != nil {
 		return GitRepositoryCheck{}, gitError(err)
 	}
-	if err := s.allowGitCheck(a); err != nil {
+	release, err := s.beginGitCheck(ctx, a)
+	if err != nil {
 		return GitRepositoryCheck{}, err
 	}
+	defer release()
 	out := GitRepositoryCheck{Repository: addr.String(), Server: addr.ServerName(), Transport: addr.Scheme}
 	if addr.Scheme == gitsource.SchemeHTTPS {
 		b, err := gitsource.ListBranches(ctx, gitsource.Remote{Address: addr})
@@ -431,9 +429,11 @@ func (s *Service) SetGitSiteSource(ctx context.Context, a Actor, site string, in
 			}
 		}
 		if src.HostKey == "" {
-			if err := s.allowGitCheck(a); err != nil {
+			release, err := s.beginGitCheck(ctx, a)
+			if err != nil {
 				return SiteSourceState{}, err
 			}
+			defer release()
 			k, err := gitsource.ScanHostKey(ctx, addr)
 			if err != nil {
 				return SiteSourceState{}, gitError(err)
@@ -455,9 +455,11 @@ func (s *Service) SetGitSiteSource(ctx context.Context, a Actor, site string, in
 			src.CheckedAt, src.CheckError = nil, ""
 		}
 	case gitsource.SchemeHTTPS:
-		if err := s.allowGitCheck(a); err != nil {
+		release, err := s.beginGitCheck(ctx, a)
+		if err != nil {
 			return SiteSourceState{}, err
 		}
+		defer release()
 		if _, err := gitsource.BranchTip(ctx, gitsource.Remote{Address: addr}, in.Branch); err != nil {
 			return SiteSourceState{}, gitError(err)
 		}
@@ -573,9 +575,11 @@ func (s *Service) CheckGitSiteSource(ctx context.Context, a Actor, site string) 
 	if err != nil {
 		return GitSourceCheck{}, err
 	}
-	if err := s.allowGitCheck(a); err != nil {
+	release, err := s.beginGitCheck(ctx, a)
+	if err != nil {
 		return GitSourceCheck{}, err
 	}
+	defer release()
 	var b gitsource.Branches
 	ferr := s.reachGit(ctx, src, func(r gitsource.Remote) error {
 		var err error
@@ -626,9 +630,11 @@ func (s *Service) AcceptGitHostKey(ctx context.Context, a Actor, site, fingerpri
 	if fingerprint == "" {
 		return SiteSourceState{}, errorf(Invalid, "confirm the fingerprint of the new key")
 	}
-	if err := s.allowGitCheck(a); err != nil {
+	release, err := s.beginGitCheck(ctx, a)
+	if err != nil {
 		return SiteSourceState{}, err
 	}
+	defer release()
 	k, err := gitsource.ScanHostKey(ctx, addr)
 	if err != nil {
 		return SiteSourceState{}, gitError(err)
@@ -729,16 +735,15 @@ func (s *Service) FetchGitSource(ctx context.Context, site, commit string) (tree
 	if commit != "" && !validCommit(commit) {
 		return nil, 0, errorf(Invalid, "%q is not a full commit id", commit)
 	}
-	select {
-	case gitFetchSlots <- struct{}{}:
-		defer func() { <-gitFetchSlots }()
-	case <-ctx.Done():
-		return nil, 0, gitError(ctx.Err())
+	release, err := s.gitFetchSlots.acquire(ctx, "site:"+site, 0)
+	if err != nil {
+		return nil, 0, err
 	}
+	defer release()
 	var f gitsource.Fetched
 	err = s.reachGit(ctx, src, func(r gitsource.Remote) error {
 		var err error
-		f, err = gitsource.Fetch(ctx, r, src.Branch, commit, "", gitsource.Limits{})
+		f, err = gitsource.Fetch(ctx, r, src.Branch, commit, s.gitTempDir, gitsource.Limits{})
 		return err
 	})
 	if err != nil {
@@ -767,11 +772,54 @@ type siteSources struct{ s *Service }
 
 func (f siteSources) FetchSource(ctx context.Context, ref SourceRef) (io.ReadCloser, int, error) {
 	src, err := f.s.store.SiteSource(ctx, ref.Site)
-	if err != nil {
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, 0, storeError(err)
 	}
-	if src.Kind != store.SourceGit {
+	if err != nil || src.Kind != store.SourceGit {
+		// githubSources also says when the site has no repository.
 		return githubSources{f.s}.FetchSource(ctx, ref)
 	}
 	return f.s.FetchGitSource(ctx, ref.Site, ref.Commit)
+}
+
+// gitBranchTip asks a Git source's repository where its branch points,
+// with a check slot of the actor.
+func (s *Service) gitBranchTip(ctx context.Context, a Actor, src store.SiteSource) (string, error) {
+	release, err := s.beginGitCheck(ctx, a)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	var tip string
+	err = s.reachGit(ctx, src, func(r gitsource.Remote) error {
+		var err error
+		tip, err = gitsource.BranchTip(ctx, r, src.Branch)
+		return err
+	})
+	if err != nil {
+		return "", err
+	}
+	if !validCommit(tip) {
+		return "", errorf(Conflict, "the panel cannot build repositories with this kind of commit id yet")
+	}
+	return tip, nil
+}
+
+// startGitBuild is StartSiteBuild for a Git source: a run of the commit
+// the branch points at now.
+func (s *Service) startGitBuild(ctx context.Context, a Actor, src store.SiteSource) (Run, error) {
+	tip, err := s.gitBranchTip(ctx, a, src)
+	if err != nil {
+		return Run{}, err
+	}
+	r, err := s.store.AddRun(ctx, store.Run{
+		Site: src.Site, Trigger: RunTriggerManual, SourceKind: store.SourceGit, Repository: src.Repository,
+		Ref: "refs/heads/" + src.Branch, CommitSHA: tip, Pusher: a.label(),
+	}, runReplacedDetail, RunsKept)
+	if err != nil {
+		return Run{}, storeError(err)
+	}
+	s.record(ctx, a, "site.build-start", src.Site, fmt.Sprintf("%s, branch %s, commit %s", src.Repository, src.Branch, tip[:7]))
+	s.wakeRunner()
+	return s.viewRun(r), nil
 }

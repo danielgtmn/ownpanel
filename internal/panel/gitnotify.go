@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/danielgtmn/ownpanel/internal/github"
+	"github.com/danielgtmn/ownpanel/internal/gitsource"
 	"github.com/danielgtmn/ownpanel/internal/store"
 )
 
@@ -199,29 +200,27 @@ func (s *Service) ReceiveGitNotification(ctx context.Context, n GitNotification)
 	}
 	delivery := firstHeader(n.Header, github.HeaderDelivery, "X-Gitea-Delivery", "X-Forgejo-Delivery", "X-Gogs-Delivery",
 		"X-Gitlab-Event-UUID", "X-Request-UUID", "X-Request-Id")
-	if delivery != "" && !gitDeliveryPattern.MatchString(delivery) {
+	// Every host the panel supports names its deliveries; one without an
+	// id could be replayed without anyone noticing.
+	if !gitDeliveryPattern.MatchString(delivery) {
 		return GitHubDeliveryResult{}, ErrDeliveryRejected
 	}
 	event := firstHeader(n.Header, github.HeaderEvent, "X-Gitea-Event", "X-Forgejo-Event", "X-Gogs-Event", "X-Gitlab-Event",
 		"X-Event-Key")
 
 	s.pruneGitDeliveries(ctx)
-	if delivery != "" {
-		fresh, err := s.store.ClaimGitDelivery(ctx, src.ID, delivery)
-		if err != nil {
-			return GitHubDeliveryResult{}, storeError(err)
-		}
-		if !fresh {
-			slog.Info("Git notification ignored: seen before", "site", src.Site, "delivery", delivery)
-			return GitHubDeliveryResult{Result: DeliveryDuplicate}, nil
-		}
+	fresh, err := s.store.ClaimGitDelivery(ctx, src.ID, delivery)
+	if err != nil {
+		return GitHubDeliveryResult{}, storeError(err)
+	}
+	if !fresh {
+		slog.Info("Git notification ignored: seen before", "site", src.Site, "delivery", delivery)
+		return GitHubDeliveryResult{Result: DeliveryDuplicate}, nil
 	}
 	res, err := s.handleGitNotification(ctx, *src, event, n.Body)
 	if err != nil {
-		if delivery != "" {
-			if rerr := s.store.ReleaseGitDelivery(context.WithoutCancel(ctx), src.ID, delivery); rerr != nil {
-				slog.Error("could not forget a notification that failed", "site", src.Site, "err", rerr)
-			}
+		if rerr := s.store.ReleaseGitDelivery(context.WithoutCancel(ctx), src.ID, delivery); rerr != nil {
+			slog.Error("could not forget a notification that failed", "site", src.Site, "err", rerr)
 		}
 		if errors.Is(err, errMalformed) {
 			slog.Warn("Git notification refused: unexpected content", "site", src.Site, "delivery", delivery)
@@ -394,18 +393,122 @@ func (s *Service) handleGitNotification(ctx context.Context, src store.SiteSourc
 	if branch != src.Branch || !src.PublishOnPush {
 		return ignored, nil
 	}
-	run := store.Run{
-		Site: src.Site, Trigger: RunTriggerPush, SourceKind: store.SourceGit, Repository: src.Repository,
-		Ref: ref, CommitSHA: commit, Message: plainText(message, runMessageMax), AuthorName: plainText(author, runNameMax),
-		Pusher: plainText(pusher, runNameMax),
+	// The notification only says that the branch changed: the panel asks
+	// the repository where it points now and records a run of that commit
+	// (gitTips). Message, author and pusher are taken from the
+	// notification only when it names that very commit.
+	s.queueTipCheck(src, pushHint{commit: commit, message: message, author: author, pusher: pusher})
+	return GitHubDeliveryResult{Result: DeliveryAccepted}, nil
+}
+
+// DeliveryAccepted: the notification was accepted; the panel asks the
+// repository where the branch points and records a run of that commit.
+const DeliveryAccepted = "accepted"
+
+// pushHint is what a notification says about a push: untrusted, used only
+// for display when it matches the commit the panel finds itself.
+type pushHint struct {
+	commit, message, author, pusher string
+}
+
+// gitTips resolves where a site's branch points after notifications, one
+// at a time per source: notifications that arrive while one is resolved
+// are folded into one more round.
+type gitTips struct {
+	mu      sync.Mutex
+	pending map[string]*tipJob // by source row id
+	wg      sync.WaitGroup
+}
+
+type tipJob struct {
+	again bool
+	hint  pushHint
+}
+
+// tipCheckTimeout bounds one round of resolving a branch (waiting for a
+// check slot included).
+const tipCheckTimeout = gitsource.CheckTimeout + gitSlotWait
+
+func (s *Service) queueTipCheck(src store.SiteSource, hint pushHint) {
+	t := &s.gitTips
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.pending == nil {
+		t.pending = map[string]*tipJob{}
+	}
+	if j := t.pending[src.ID]; j != nil {
+		j.again, j.hint = true, hint
+		return
+	}
+	j := &tipJob{hint: hint}
+	t.pending[src.ID] = j
+	t.wg.Add(1)
+	go func() {
+		defer t.wg.Done()
+		for {
+			t.mu.Lock()
+			hint := j.hint
+			j.again = false
+			t.mu.Unlock()
+			s.recordTipRun(src.Site, src.ID, hint)
+			t.mu.Lock()
+			if !j.again {
+				delete(t.pending, src.ID)
+				t.mu.Unlock()
+				return
+			}
+			t.mu.Unlock()
+		}
+	}()
+}
+
+// recordTipRun asks the repository where the linked branch points and
+// records a run of that commit, unless the site's newest run already is
+// one of it that is waiting, building or published (a notification sent
+// again, or several for one push).
+func (s *Service) recordTipRun(site, sourceID string, hint pushHint) {
+	ctx, cancel := context.WithTimeout(context.Background(), tipCheckTimeout)
+	defer cancel()
+	src, err := s.store.SiteSource(ctx, site)
+	if err != nil || src.ID != sourceID || src.Kind != store.SourceGit || !src.PublishOnPush {
+		return // unlinked or changed meanwhile
+	}
+	release, err := s.gitCheckSlots.acquire(ctx, "site:"+site, gitSlotWait)
+	if err != nil {
+		slog.Warn("a push could not be checked: the panel is busy", "site", site)
+		return
+	}
+	defer release()
+	var tip string
+	if err := s.reachGit(ctx, src, func(r gitsource.Remote) error {
+		var err error
+		tip, err = gitsource.BranchTip(ctx, r, src.Branch)
+		return err
+	}); err != nil {
+		slog.Info("a push could not be checked", "site", site, "err", err)
+		return
+	}
+	if !validCommit(tip) {
+		return // SHA-256 repositories are not supported yet
+	}
+	if last, err := s.store.SiteRuns(ctx, site, 1); err == nil && len(last) == 1 && last[0].CommitSHA == tip &&
+		(last[0].Status == store.RunQueued || last[0].Status == store.RunRunning || last[0].Status == store.RunSucceeded) {
+		return
+	}
+	run := store.Run{Site: site, Trigger: RunTriggerPush, SourceKind: store.SourceGit, Repository: src.Repository,
+		Ref: "refs/heads/" + src.Branch, CommitSHA: tip}
+	if hint.commit == tip {
+		run.Message = plainText(hint.message, runMessageMax)
+		run.AuthorName = plainText(hint.author, runNameMax)
+		run.Pusher = plainText(hint.pusher, runNameMax)
 	}
 	if _, err := s.store.AddRun(ctx, run, runSupersededDetail, RunsKept); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return ignored, nil
+		if !errors.Is(err, store.ErrNotFound) {
+			slog.Error("could not record a run", "site", site, "err", err)
 		}
-		return GitHubDeliveryResult{}, storeError(err)
+		return
 	}
-	return GitHubDeliveryResult{Result: DeliveryHandled, Runs: 1}, nil
+	s.wakeRunner()
 }
 
 func firstNonEmpty(vals ...string) string {

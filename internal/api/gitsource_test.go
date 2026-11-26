@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -88,7 +89,7 @@ func TestGitSourceOverHTTP(t *testing.T) {
 		return resp.StatusCode, string(b)
 	}
 	gitlab := map[string]string{"X-Gitlab-Event": "Push Hook", "X-Gitlab-Token": secret, "X-Gitlab-Event-UUID": "u-1"}
-	if code, answer := send(gitlab, "application/json", body); code != 200 || answer != `{"result":"handled","runs":1}`+"\n" {
+	if code, answer := send(gitlab, "application/json", body); code != 200 || answer != `{"result":"accepted","runs":0}`+"\n" {
 		t.Fatalf("notify: %d %s", code, answer)
 	}
 	if code, answer := send(gitlab, "application/json", body); code != 200 || !strings.Contains(answer, "duplicate") {
@@ -110,7 +111,15 @@ func TestGitSourceOverHTTP(t *testing.T) {
 		t.Fatalf("form: %d", code)
 	}
 
-	runs := decode[panel.SiteRuns](t, e.as("GET", "/api/sites/blog/runs", ""))
+	// The panel asks the repository where the branch points, then records
+	// the run.
+	var runs panel.SiteRuns
+	for range 300 {
+		if runs = decode[panel.SiteRuns](t, e.as("GET", "/api/sites/blog/runs", "")); len(runs.Runs) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if len(runs.Runs) != 1 || runs.Runs[0].Commit != commit || runs.Runs[0].Message != "Hello" || runs.Runs[0].Pusher != "ada" {
 		t.Fatalf("runs: %+v", runs.Runs)
 	}

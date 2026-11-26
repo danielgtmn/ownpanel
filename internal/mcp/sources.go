@@ -10,7 +10,8 @@ import (
 )
 
 // A site's source: the repository and branch its code comes from. These
-// tools ask GitHub, so they are marked as reaching outside the panel.
+// tools ask GitHub or the Git server, so they are marked as reaching
+// outside the panel.
 
 type sourceInfo struct {
 	Kind           string `json:"kind" jsonschema:"github: a repository of a connected GitHub account; git: any Git repository by address"`

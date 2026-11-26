@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -367,9 +368,10 @@ func TestGitSourceReplaceKeys(t *testing.T) {
 		t.Fatalf("old secret: %v", err)
 	}
 	res, err := g.svc.ReceiveGitNotification(ctx, GitNotification{ID: newID, Header: githubHeaders(st.NotifySecret, body, "d3"), Body: body})
-	if err != nil || res.Runs != 1 {
+	if err != nil || res.Result != DeliveryAccepted {
 		t.Fatalf("new: %+v %v", res, err)
 	}
+	g.svc.gitTips.wg.Wait()
 	g.shown = append(g.shown, st.NotifySecret)
 	g.assertNoGitSecrets("log", g.logs.String())
 }
@@ -400,57 +402,93 @@ func TestGitNotificationFormats(t *testing.T) {
 	st := g.link(bob, "bobsite")
 	secret := st.NotifySecret
 	id := strings.TrimPrefix(st.Source.NotifyURL, "https://panel.example.com:8443"+GitNotifyPath)
-	commit := g.repo.Head("main")
-	gl := fmt.Appendf(nil, `{"object_kind":"push","ref":"refs/heads/main","after":%q,"checkout_sha":%q,"user_name":"Ada L",`+
-		`"commits":[{"id":%q,"message":"From GitLab","author":{"name":"Ada","email":"a@example.com"}}]}`, commit, commit, commit)
-	bbc := fmt.Appendf(nil, `{"actor":{"display_name":"Ada"},"push":{"changes":[{"new":{"type":"branch","name":"main",`+
-		`"target":{"hash":%q,"message":"From Bitbucket\n","author":{"raw":"Ada <a@example.com>"}}}}]}}`, commit)
-	bbs := fmt.Appendf(nil, `{"eventKey":"repo:refs_changed","actor":{"name":"ada"},"changes":[{"ref":{"id":"refs/heads/main",`+
-		`"displayId":"main","type":"BRANCH"},"fromHash":"0000000000000000000000000000000000000001","toHash":%q,"type":"UPDATE"}]}`, commit)
-	gh := pushBody("refs/heads/main", commit)
+	gl := func(c string) []byte {
+		return fmt.Appendf(nil, `{"object_kind":"push","ref":"refs/heads/main","after":%q,"checkout_sha":%q,"user_name":"Ada L",`+
+			`"commits":[{"id":%q,"message":"From GitLab","author":{"name":"Ada","email":"a@example.com"}}]}`, c, c, c)
+	}
+	bbc := func(c string) []byte {
+		return fmt.Appendf(nil, `{"actor":{"display_name":"Ada"},"push":{"changes":[{"new":{"type":"branch","name":"main",`+
+			`"target":{"hash":%q,"message":"From Bitbucket\n","author":{"raw":"Ada <a@example.com>"}}}}]}}`, c)
+	}
+	bbs := func(c string) []byte {
+		return fmt.Appendf(nil, `{"eventKey":"repo:refs_changed","actor":{"name":"ada"},"changes":[{"ref":{"id":"refs/heads/main",`+
+			`"displayId":"main","type":"BRANCH"},"fromHash":"0000000000000000000000000000000000000001","toHash":%q,"type":"UPDATE"}]}`, c)
+	}
+	gh := func(c string) []byte { return pushBody("refs/heads/main", c) }
 
 	cases := []struct {
 		name    string
-		body    []byte
-		headers map[string]string
+		body    func(string) []byte
+		headers func(body []byte, d string) map[string]string
 		message string
 	}{
-		{"GitHub", gh, map[string]string{"X-GitHub-Event": "push", "X-GitHub-Delivery": "gh-1", "X-Hub-Signature-256": "sha256=" + hmacHex(secret, gh)}, "Fix the header"},
-		{"Gitea", gh, map[string]string{"X-Gitea-Event": "push", "X-Gitea-Delivery": "gt-1", "X-Gitea-Signature": hmacHex(secret, gh)}, "Fix the header"},
-		{"Forgejo", gh, map[string]string{"X-Forgejo-Event": "push", "X-Forgejo-Delivery": "fj-1", "X-Forgejo-Signature": hmacHex(secret, gh),
-			"X-Hub-Signature-256": "sha256=" + hmacHex(secret, gh)}, "Fix the header"},
+		{"GitHub", gh, func(b []byte, d string) map[string]string {
+			return map[string]string{"X-GitHub-Event": "push", "X-GitHub-Delivery": d, "X-Hub-Signature-256": "sha256=" + hmacHex(secret, b),
+				"X-Hub-Signature": "sha1=0123456789012345678901234567890123456789"}
+		}, "Fix the header"},
+		{"Gitea", gh, func(b []byte, d string) map[string]string {
+			return map[string]string{"X-Gitea-Event": "push", "X-Gitea-Delivery": d, "X-Gitea-Signature": hmacHex(secret, b)}
+		}, "Fix the header"},
 		// Exactly the headers Gitea 1.24 sends (taken from a real delivery),
 		// with a SHA-1 signature next to the SHA-256 ones.
-		{"Gitea, all headers", gh, map[string]string{"X-GitHub-Delivery": "gt-all", "X-GitHub-Event": "push", "X-GitHub-Event-Type": "push",
-			"X-Gitea-Delivery": "gt-all", "X-Gitea-Event": "push", "X-Gitea-Signature": hmacHex(secret, gh), "X-Gogs-Delivery": "gt-all",
-			"X-Gogs-Event": "push", "X-Gogs-Signature": hmacHex(secret, gh), "X-Hub-Signature": "sha1=2e9f536656c0009e9be5e1d156198d063edca087",
-			"X-Hub-Signature-256": "sha256=" + hmacHex(secret, gh)}, "Fix the header"},
-		{"Gogs", gh, map[string]string{"X-Gogs-Event": "push", "X-Gogs-Delivery": "gg-1", "X-Gogs-Signature": hmacHex(secret, gh)}, "Fix the header"},
-		{"GitLab", gl, map[string]string{"X-Gitlab-Event": "Push Hook", "X-Gitlab-Event-UUID": "gl-1", "X-Gitlab-Token": secret}, "From GitLab"},
-		{"Bitbucket Cloud", bbc, map[string]string{"X-Event-Key": "repo:push", "X-Request-UUID": "{bb-1}", "X-Hub-Signature": "sha256=" + hmacHex(secret, bbc)}, "From Bitbucket"},
-		{"Bitbucket Server", bbs, map[string]string{"X-Event-Key": "repo:refs_changed", "X-Request-Id": "bbs-1", "X-Hub-Signature": "sha256=" + hmacHex(secret, bbs)}, ""},
+		{"Gitea, all headers", gh, func(b []byte, d string) map[string]string {
+			return map[string]string{"X-GitHub-Delivery": d, "X-GitHub-Event": "push", "X-GitHub-Event-Type": "push",
+				"X-Gitea-Delivery": d, "X-Gitea-Event": "push", "X-Gitea-Signature": hmacHex(secret, b), "X-Gogs-Delivery": d,
+				"X-Gogs-Event": "push", "X-Gogs-Signature": hmacHex(secret, b), "X-Hub-Signature": "sha1=2e9f536656c0009e9be5e1d156198d063edca087",
+				"X-Hub-Signature-256": "sha256=" + hmacHex(secret, b)}
+		}, "Fix the header"},
+		{"Forgejo", gh, func(b []byte, d string) map[string]string {
+			return map[string]string{"X-Forgejo-Event": "push", "X-Forgejo-Delivery": d, "X-Forgejo-Signature": hmacHex(secret, b),
+				"X-Hub-Signature-256": "sha256=" + hmacHex(secret, b)}
+		}, "Fix the header"},
+		{"Gogs", gh, func(b []byte, d string) map[string]string {
+			return map[string]string{"X-Gogs-Event": "push", "X-Gogs-Delivery": d, "X-Gogs-Signature": hmacHex(secret, b)}
+		}, "Fix the header"},
+		{"GitLab", gl, func(b []byte, d string) map[string]string {
+			return map[string]string{"X-Gitlab-Event": "Push Hook", "X-Gitlab-Event-UUID": d, "X-Gitlab-Token": secret}
+		}, "From GitLab"},
+		{"Bitbucket Cloud", bbc, func(b []byte, d string) map[string]string {
+			return map[string]string{"X-Event-Key": "repo:push", "X-Request-UUID": "{" + d + "}", "X-Hub-Signature": "sha256=" + hmacHex(secret, b)}
+		}, "From Bitbucket"},
+		{"Bitbucket Server", bbs, func(b []byte, d string) map[string]string {
+			return map[string]string{"X-Event-Key": "repo:refs_changed", "X-Request-Id": d, "X-Hub-Signature": "sha256=" + hmacHex(secret, b)}
+		}, ""},
 	}
-	for _, c := range cases {
-		h := http.Header{}
-		for k, v := range c.headers {
-			h.Set(k, v)
+	send := func(h map[string]string, body []byte) (GitHubDeliveryResult, error) {
+		hh := http.Header{}
+		for k, v := range h {
+			hh.Set(k, v)
 		}
-		res, err := g.svc.ReceiveGitNotification(ctx, GitNotification{ID: id, Header: h, Body: c.body})
-		if err != nil || res.Result != DeliveryHandled || res.Runs != 1 {
+		res, err := g.svc.ReceiveGitNotification(ctx, GitNotification{ID: id, Header: hh, Body: body})
+		g.svc.gitTips.wg.Wait()
+		return res, err
+	}
+	for i, c := range cases {
+		// A new push for every host: the panel records the commit it finds.
+		commit := g.repo.Commit(c.name, map[string]string{"n.txt": c.name})
+		body := c.body(commit)
+		h := c.headers(body, fmt.Sprintf("d-%d", i))
+		res, err := send(h, body)
+		if err != nil || res.Result != DeliveryAccepted {
 			t.Fatalf("%s: %+v %v", c.name, res, err)
 		}
 		runs, _ := g.svc.ListSiteRuns(ctx, bob, "bobsite")
+		if len(runs.Runs) != i+1 {
+			t.Fatalf("%s: %d runs", c.name, len(runs.Runs))
+		}
 		r := runs.Runs[0]
 		if r.Commit != commit || r.Branch != "main" || r.Message != c.message || r.Status != "queued" || r.Repository != st.Source.Repository ||
 			r.CommitURL != "" {
 			t.Fatalf("%s: run %+v", c.name, r)
 		}
 		// The same delivery again.
-		res, err = g.svc.ReceiveGitNotification(ctx, GitNotification{ID: id, Header: h, Body: c.body})
+		res, err = send(h, body)
 		if err != nil || res.Result != DeliveryDuplicate {
 			t.Fatalf("%s replayed: %+v %v", c.name, res, err)
 		}
 	}
+	commit := g.repo.Head("main")
+	body := gh(commit)
 
 	reject := func(name string, id string, h http.Header, body []byte) {
 		t.Helper()
@@ -460,31 +498,31 @@ func TestGitNotificationFormats(t *testing.T) {
 	}
 	hdr := func(kv ...string) http.Header {
 		h := http.Header{}
+		h.Set("X-GitHub-Delivery", "r-"+fmt.Sprint(len(kv)))
 		for i := 0; i < len(kv); i += 2 {
 			h.Set(kv[i], kv[i+1])
 		}
 		return h
 	}
-	reject("no proof", id, hdr("X-GitHub-Event", "push"), gh)
-	reject("wrong signature", id, hdr("X-Hub-Signature-256", "sha256="+hmacHex("wrong", gh)), gh)
-	reject("signature of another body", id, hdr("X-Hub-Signature-256", "sha256="+hmacHex(secret, bbc)), gh)
-	reject("only a sha1 signature", id, hdr("X-Hub-Signature", "sha1="+hmacHex(secret, gh)[:40]), gh)
-	reject("sha1 next to a wrong sha256", id, hdr("X-Hub-Signature", "sha1=00", "X-Hub-Signature-256", "sha256="+hmacHex("x", gh)), gh)
-	reject("bad hex", id, hdr("X-Gitea-Signature", "zz"), gh)
-	reject("wrong token", id, hdr("X-Gitlab-Token", secret+"x"), gl)
-	reject("one right, one wrong", id, hdr("X-Gitlab-Token", secret, "X-Hub-Signature-256", "sha256="+hmacHex("x", gl)), gl)
-	reject("unknown address", strings.Repeat("0", 32), githubHeaders(secret, gh, "x1"), gh)
-	reject("address of another form", "../../x", githubHeaders(secret, gh, "x2"), gh)
+	reject("no proof", id, hdr("X-GitHub-Event", "push"), body)
+	reject("wrong signature", id, hdr("X-Hub-Signature-256", "sha256="+hmacHex("wrong", body)), body)
+	reject("signature of another body", id, hdr("X-Hub-Signature-256", "sha256="+hmacHex(secret, gl(commit))), body)
+	reject("only a sha1 signature", id, hdr("X-Hub-Signature", "sha1="+hmacHex(secret, body)[:40]), body)
+	reject("sha1 next to a wrong sha256", id, hdr("X-Hub-Signature", "sha1=00", "X-Hub-Signature-256", "sha256="+hmacHex("x", body)), body)
+	reject("bad hex", id, hdr("X-Gitea-Signature", "zz"), body)
+	reject("wrong token", id, hdr("X-Gitlab-Token", secret+"x"), gl(commit))
+	reject("one right, one wrong", id, hdr("X-Gitlab-Token", secret, "X-Hub-Signature-256", "sha256="+hmacHex("x", gl(commit))), gl(commit))
+	reject("unknown address", strings.Repeat("0", 32), githubHeaders(secret, body, "x1"), body)
+	reject("address of another form", "../../x", githubHeaders(secret, body, "x2"), body)
 	bad := []byte(`{"ref": "refs/heads/main", "after": 5}`)
 	reject("malformed", id, githubHeaders(secret, bad, "x3"), bad)
-	two := append(append([]byte{}, gh...), gh...)
+	two := append(append([]byte{}, body...), body...)
 	reject("two values", id, githubHeaders(secret, two, "x4"), two)
-	reject("bad delivery id", id, githubHeaders(secret, gh, "a b"), gh)
-	// A malformed body with a delivery id leaves the id unused.
-	good := hdr("X-GitHub-Event", "push", "X-GitHub-Delivery", "x3", "X-Hub-Signature-256", "sha256="+hmacHex(secret, gh))
-	if res, err := g.svc.ReceiveGitNotification(ctx, GitNotification{ID: id, Header: good, Body: gh}); err != nil || res.Runs != 1 {
-		t.Fatalf("after a malformed one: %+v %v", res, err)
-	}
+	reject("bad delivery id", id, githubHeaders(secret, body, "a b"), body)
+	// Without a delivery id it could be replayed unnoticed: refused.
+	noID := http.Header{}
+	noID.Set("X-Hub-Signature-256", "sha256="+hmacHex(secret, body))
+	reject("without delivery id", id, noID, body)
 
 	ignored := func(name string, body []byte, h http.Header) {
 		t.Helper()
@@ -506,22 +544,57 @@ func TestGitNotificationFormats(t *testing.T) {
 	ignored("tag", tag, sign(tag, "t1", "push"))
 	del := pushBody("refs/heads/main", strings.Repeat("0", 40))
 	ignored("deleted branch", del, sign(del, "del1", "push"))
-	// Without a delivery id it is handled (no replay protection then; a
-	// build only ever fetches the branch's current commit).
-	h := http.Header{}
-	h.Set("X-Hub-Signature-256", "sha256="+hmacHex(secret, gh))
-	if res, err := g.svc.ReceiveGitNotification(ctx, GitNotification{ID: id, Header: h, Body: gh}); err != nil || res.Runs != 1 {
-		t.Fatalf("without delivery id: %+v %v", res, err)
-	}
 	// Publish on push off.
 	if _, err := g.svc.SetGitSiteSource(ctx, bob, "bobsite", GitSourceInput{Repository: g.addr, Branch: "main", HostKey: g.fingerprint()}); err != nil {
 		t.Fatal(err)
 	}
-	ignored("publish on push off", gh, sign(gh, "off1", "push"))
+	ignored("publish on push off", body, sign(body, "off1", "push"))
 
 	runs, _ := g.svc.ListSiteRuns(ctx, bob, "bobsite")
 	g.assertNoGitSecrets("runs", asJSON(t, runs))
 	g.assertNoGitSecrets("log", g.logs.String())
+}
+
+// M2 (security review): a notification only says that the branch changed.
+// An old notification sent again with a new delivery id, or one naming
+// any commit at all, records a run of the commit the branch points at
+// now, and none when that commit already waits or was published.
+func TestGitNotificationRecordsTheBranchTip(t *testing.T) {
+	g := newGitWorld(t)
+	ctx := context.Background()
+	st := g.link(bob, "bobsite")
+	id := strings.TrimPrefix(st.Source.NotifyURL, "https://panel.example.com:8443"+GitNotifyPath)
+	send := func(commit, delivery string) {
+		t.Helper()
+		body := pushBody("refs/heads/main", commit)
+		res, err := g.svc.ReceiveGitNotification(ctx, GitNotification{ID: id, Header: githubHeaders(st.NotifySecret, body, delivery), Body: body})
+		if err != nil || res.Result != DeliveryAccepted {
+			t.Fatalf("%+v %v", res, err)
+		}
+		g.svc.gitTips.wg.Wait()
+	}
+	old := g.repo.Head("main")
+	tip := g.repo.Commit("newer", map[string]string{"index.html": "newer"})
+	send(tip, "a")
+	// The old push replayed (new id): no run of the old commit, and the
+	// queued run of the tip is not replaced.
+	send(old, "b")
+	// Made up: a commit that does not exist.
+	send(strings.Repeat("ab", 20), "c")
+	runs, _ := g.svc.ListSiteRuns(ctx, bob, "bobsite")
+	if len(runs.Runs) != 1 || runs.Runs[0].Commit != tip || runs.Runs[0].Status != "queued" || runs.Runs[0].Message != "Fix the header" {
+		t.Fatalf("runs: %+v", runs.Runs)
+	}
+	// Notifications that name another commit than the tip leave the
+	// message empty (it is not the tip's).
+	if _, err := g.svc.store.FinishRun(ctx, runs.Runs[0].ID, "failed", "x"); err != nil {
+		t.Fatal(err)
+	}
+	send(old, "d")
+	runs, _ = g.svc.ListSiteRuns(ctx, bob, "bobsite")
+	if len(runs.Runs) != 2 || runs.Runs[0].Commit != tip || runs.Runs[0].Message != "" {
+		t.Fatalf("after a failed run: %+v", runs.Runs)
+	}
 }
 
 func TestGitSourceHTTPS(t *testing.T) {
@@ -697,4 +770,112 @@ func TestGitRunsHaveNoGitHubLink(t *testing.T) {
 	if v := g.svc.runViewFor(store.Run{SourceKind: store.SourceGitHub, Repository: "acme/site", CommitSHA: sha}); v.CommitURL == "" {
 		t.Error("GitHub run without a link")
 	}
+}
+
+// A push to a Git source is built and published by the runner, and
+// "Build now" and proposing build settings work for Git sources too.
+func TestGitSourceRunsAreBuilt(t *testing.T) {
+	g := newGitWorld(t)
+	ctx := context.Background()
+	fake := buildtest.Start(t)
+	g.svc.builds = fake.Client()
+	g.svc.build.poll = 5 * time.Millisecond
+	g.svc.gitTempDir = t.TempDir()
+	st := g.link(bob, "bobsite")
+	g.repo.Commit("site", map[string]string{"package.json": `{"devDependencies":{"vite":"5"},"scripts":{"build":"vite build"}}`})
+
+	prop, err := g.svc.DetectBuildSettings(ctx, bob, "bobsite")
+	if err != nil || prop.Commit != g.repo.Head("main") || prop.Result.Preset != "vite" {
+		t.Fatalf("proposal: %+v %v", prop, err)
+	}
+	if _, err := g.svc.SetSiteBuildSettings(ctx, bob, "bobsite", SiteBuildSettingsInput{Command: "npm run build", Output: "dist", Image: "node-24"}); err != nil {
+		t.Fatal(err)
+	}
+	runCtx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { defer close(done); g.svc.RunBuilds(runCtx) }()
+	defer func() { stop(); <-done }()
+
+	wait := func(commit string) Run {
+		t.Helper()
+		for range 400 {
+			runs, _ := g.svc.ListSiteRuns(ctx, bob, "bobsite")
+			for _, r := range runs.Runs {
+				if r.Commit == commit && store.RunFinished(r.Status) {
+					return r
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("no finished run of %s", commit)
+		return Run{}
+	}
+	// A push.
+	commit := g.repo.Commit("push", map[string]string{"index.html": "pushed"})
+	id := strings.TrimPrefix(st.Source.NotifyURL, "https://panel.example.com:8443"+GitNotifyPath)
+	body := pushBody("refs/heads/main", commit)
+	if _, err := g.svc.ReceiveGitNotification(ctx, GitNotification{ID: id, Header: githubHeaders(st.NotifySecret, body, "e1"), Body: body}); err != nil {
+		t.Fatal(err)
+	}
+	if r := wait(commit); r.Status != RunSucceeded || r.Release == "" {
+		t.Fatalf("push run: %+v", r)
+	}
+	// Build now.
+	r, err := g.svc.StartSiteBuild(ctx, bob, "bobsite")
+	if err != nil || r.Commit != commit || r.Trigger != RunTriggerManual {
+		t.Fatalf("build now: %+v %v", r, err)
+	}
+	if r := wait(commit); r.Status != RunSucceeded {
+		t.Fatalf("manual run: %+v", r)
+	}
+	if _, err := g.svc.StartSiteBuild(ctx, bobRead, "bobsite"); KindOf(err) != Forbidden {
+		t.Fatalf("read token: %v", err)
+	}
+	// Temporary files stay in the panel's directory and are gone after.
+	if left, _ := os.ReadDir(g.svc.gitTempDir); len(left) != 0 {
+		t.Fatalf("temporary files left: %v", left)
+	}
+}
+
+// L3/M1 (security review): checks and fetches are limited in all and per
+// person or site.
+func TestGitSlots(t *testing.T) {
+	l := slotLimiter{size: 2, perKey: 1}
+	ctx := context.Background()
+	a, err := l.acquire(ctx, "u1", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.acquire(ctx, "u1", time.Second); KindOf(err) != Throttled {
+		t.Fatalf("second for the same key: %v", err)
+	}
+	b, err := l.acquire(ctx, "u2", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if _, err := l.acquire(ctx, "u3", 50*time.Millisecond); KindOf(err) != Throttled || time.Since(start) > time.Second {
+		t.Fatalf("all slots taken: %v", err)
+	}
+	a()
+	a() // releasing twice is harmless
+	c, err := l.acquire(ctx, "u3", time.Second)
+	if err != nil {
+		t.Fatalf("after a release: %v", err)
+	}
+	b()
+	c()
+	if len(l.keys) != 0 || len(l.slots) != 0 {
+		t.Fatalf("left: %v %d", l.keys, len(l.slots))
+	}
+	// A fetch waits as long as its context allows.
+	x, _ := l.acquire(ctx, "s1", 0)
+	y, _ := l.acquire(ctx, "s2", 0)
+	cctx, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
+	defer cancel()
+	if _, err := l.acquire(cctx, "s3", 0); err == nil {
+		t.Fatal("got a slot although none was free")
+	}
+	x()
+	y()
 }
