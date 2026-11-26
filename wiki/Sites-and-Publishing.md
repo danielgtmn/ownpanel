@@ -82,6 +82,33 @@ A new version can also be added while the live one stays: visitors keep seeing t
 
 A site whose first version is published this way keeps answering "no content yet" on its domains until a version is made live. Who may publish this way is the same as for publishing: write access to the site.
 
+## Building a site from its source
+
+On a server where builds are set up ([[Installation|Installation#building-sites]]), the panel can also build a site and publish what the build produces: the source goes to the isolated build service, the build command runs there (for example `npm ci && npm run build`), and the output folder (for example `dist`) becomes a new version through the same path as an uploaded archive, with the same limits and checks. Building from a linked repository on every push comes with [#58](https://github.com/danielgtmn/ownpanel/issues/58); for now an administrator can build from an uploaded source archive:
+
+| Way | How |
+|---|---|
+| API | `POST /api/sites/{name}/builds` with the parts `settings` and `source`; see [[API|API]] |
+| MCP | `build_site` with the source files; see [[MCP|MCP]] |
+
+```sh
+cat > settings.json <<'JSON'
+{"command": "npm ci\nnpm run build", "output": "dist", "image": "node-24",
+ "env": {"NODE_ENV": "production"}, "secrets": {}, "live": false}
+JSON
+tar -czf source.tar.gz --exclude node_modules --exclude .git .
+curl --fail-with-body -H "Authorization: Bearer $TOKEN" \
+  -F 'settings=<settings.json' -F 'source=@source.tar.gz' \
+  https://panel.example.com/api/sites/demo/builds
+```
+
+- `command` runs with `sh` in the source folder and stops at the first failing line. `output` is relative to the source; `.` is the source itself. `image` is one of the build images (`node-24`, `node-22`; `GET /api/builds/status` lists them).
+- `env` and `secrets` are environment variables of the build. The values of `secrets` are replaced with `***` in the build's log; neither appears in the panel's log, the activity log, error messages or answers. Masking is a courtesy, not a barrier ([[Security|Security#builds]]): give a build only the secrets it needs.
+- The answer comes when the build has ended. A build that **fails, is cancelled or runs out of time never changes the site**: no version is added and the live version stays. An output that contains a link, a device or anything but plain files and folders, or that is too large, fails the build the same way. After success the output is a new version, live or not (`live`), exactly as if it had been uploaded.
+- **One build per site at a time.** A build requested while another of the same site runs waits; a newer request replaces one that waits (it ends as `skipped`). The build service also limits how many builds run on the server at once; when too many wait there, the request is refused with `429` and can be repeated later.
+- The panel waits for a build at most the longest build time plus half an hour (90 minutes); closing the request cancels the build. Builds that run longer than about an hour may lose their answer: the HTTP request is limited too.
+- When the panel restarts, builds the build service still runs for it are stopped and removed: their requests are gone, so nobody would publish them.
+
 ## Versions
 
 Every publish creates a version. Its id starts with a UTC timestamp, for example `20260131T120000.000Z-ab12cd`, so ids sort by time.
