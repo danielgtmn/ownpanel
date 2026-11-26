@@ -331,6 +331,10 @@ type Status struct {
 	// Listeners tells per listener ("smtp", "submission", "submissions",
 	// "imaps") whether it is listening, and the error if it could not.
 	Listeners []Listener `json:"listeners"`
+	// Web is the state of the web socket (the self-service area on the
+	// mail host); nil when the service runs without one. The service runs
+	// on when it cannot be set up; Error says why.
+	Web *Listener `json:"web,omitempty"`
 	// CertificateExpires is when the first certificate expires (zero if none).
 	CertificateExpires time.Time `json:"certificate_expires"`
 	// QueueLength is the number of messages waiting to be delivered.
@@ -396,6 +400,10 @@ type Event struct {
 	StorageID string    `json:"storage_id,omitempty"`
 	Address   string    `json:"address,omitempty"`
 	Detail    string    `json:"detail"`
+	// Account is set for the account events (EventPasswordChanged …
+	// EventAppPasswordUsed). It may hold a password hash or a MAC: the
+	// panel records it in its database, never in the activity log.
+	Account *AccountChange `json:"account,omitempty"`
 }
 
 // OutboundCheck is the result of trying to reach port 25 of another server.

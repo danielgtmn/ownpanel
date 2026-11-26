@@ -151,6 +151,8 @@ type MailDomain struct {
 	DKIMSelector string    `json:"dkim_selector"`
 	DKIMRecord   string    `json:"dkim_record"`
 	CreatedAt    time.Time `json:"created_at"`
+	// Organisation the domain belongs to; nil when it stands alone.
+	Organisation *MailDomainOrganisation `json:"organisation"`
 }
 
 func (s *Service) mailDomainView(ctx context.Context, d store.MailDomain) (MailDomain, error) {
@@ -189,7 +191,7 @@ func (s *Service) MailDomains(ctx context.Context, a Actor) ([]MailDomain, error
 		if !a.canSeeMail(d.OwnerID) {
 			continue
 		}
-		v, err := s.mailDomainView(ctx, d)
+		v, err := s.mailDomainViewFor(ctx, a, d)
 		if err != nil {
 			return nil, err
 		}
@@ -204,7 +206,7 @@ func (s *Service) MailDomainOf(ctx context.Context, a Actor, domain string) (Mai
 	if err != nil {
 		return MailDomain{}, err
 	}
-	return s.mailDomainView(ctx, d)
+	return s.mailDomainViewFor(ctx, a, d)
 }
 
 // mayUseMailDomain checks that a member may enable mail for d: it is a

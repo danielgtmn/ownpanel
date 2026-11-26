@@ -501,3 +501,47 @@ func TestGracefulShutdown(t *testing.T) {
 		t.Fatal("message lost")
 	}
 }
+
+// A generation started by a configuration change and retired before its
+// Serve registered the listener must not keep Shutdown waiting.
+func TestShutdownRightAfterReconfigure(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		e := start(t, testConfig(t))
+		// Serving: the first generation answers.
+		dial(t, e.addr, false).Close()
+		cfg := testConfig(t)
+		cfg.Limits.MaxRecipients = 9 + i
+		e.dir.Store(directory.New(cfg))
+		e.srv.Reconfigure()
+		done := make(chan error, 1)
+		go func() { done <- e.srv.Shutdown(context.Background()) }()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("round %d: Shutdown still waiting", i)
+		}
+	}
+}
+
+// Shutdown before Serve got going: Serve returns at once instead of
+// accepting for ever.
+func TestServeAfterShutdown(t *testing.T) {
+	e := start(t, testConfig(t))
+	dial(t, e.addr, false).Close()
+	srv := New(e.srv.opts)
+	srv.Shutdown(context.Background())
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(ln) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve kept accepting after Shutdown")
+	}
+}

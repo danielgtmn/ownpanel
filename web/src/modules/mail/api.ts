@@ -1,5 +1,6 @@
 import { ApiError, encodeSegment, fallbackMessage, request } from '../../shared/api/index.ts'
 import type {
+  AppPassword,
   ApplyResult,
   ImportCheck,
   ImportChoices,
@@ -9,14 +10,24 @@ import type {
   MailAlias,
   MailDomain,
   Mailbox,
+  MailboxChange,
+  MailOrganisation,
   MailRecords,
   MailStatus,
+  NewAppPassword,
 } from './types.ts'
 
 const domainPath = (domain: string) => `/mail/domains/${encodeSegment(domain)}`
 
-export const listMailDomains = async () => (await request<MailDomain[] | null>('/mail/domains')) ?? []
-export const getMailDomain = (domain: string) => request<MailDomain>(domainPath(domain))
+// Lists may come as null from the server; the interface always sees arrays.
+function withDomainLists(mail: MailDomain): MailDomain {
+  const organisation = mail.organisation ?? null
+  return { ...mail, organisation: organisation ? { ...organisation, domains: organisation.domains ?? [] } : null }
+}
+
+export const listMailDomains = async () =>
+  ((await request<MailDomain[] | null>('/mail/domains')) ?? []).map(withDomainLists)
+export const getMailDomain = async (domain: string) => withDomainLists(await request<MailDomain>(domainPath(domain)))
 export const enableMailDomain = (domain: string) =>
   request<MailDomain>('/mail/domains', { method: 'POST', body: { domain } })
 export const checkMailDomain = (domain: string) =>
@@ -28,14 +39,49 @@ export const deleteMailDomain = (domain: string, confirm: string) =>
 
 export const getMailStatus = () => request<MailStatus>('/mail/status')
 
+// ---- organisations ----
+
+const organisationPath = (id: string) => `/mail/organisations/${encodeSegment(id)}`
+
+export const listOrganisations = async () =>
+  ((await request<MailOrganisation[] | null>('/mail/organisations')) ?? []).map((organisation) => ({
+    ...organisation,
+    domains: organisation.domains ?? [],
+  }))
+export const createOrganisation = (name: string) =>
+  request<MailOrganisation>('/mail/organisations', { method: 'POST', body: { name } })
+export const renameOrganisation = (id: string, name: string) =>
+  request<MailOrganisation>(organisationPath(id), { method: 'PATCH', body: { name } })
+export const deleteOrganisation = (id: string) => request<void>(organisationPath(id), { method: 'DELETE' })
+// organisation "" lets the domain stand alone.
+export const setDomainOrganisation = async (domain: string, organisation: string) =>
+  withDomainLists(
+    await request<MailDomain>(`${domainPath(domain)}/organisation`, { method: 'PUT', body: { organisation } }),
+  )
+
 export const listMailboxes = async (domain: string) =>
   (await request<Mailbox[] | null>(`${domainPath(domain)}/mailboxes`)) ?? []
-export const createMailbox = (domain: string, localPart: string, password: string) =>
-  request<Mailbox>(`${domainPath(domain)}/mailboxes`, { method: 'POST', body: { local_part: localPart, password } })
+export const createMailbox = (domain: string, localPart: string, password: string, displayName = '') =>
+  request<Mailbox>(`${domainPath(domain)}/mailboxes`, {
+    method: 'POST',
+    body: displayName ? { local_part: localPart, password, display_name: displayName } : { local_part: localPart, password },
+  })
 export const setMailboxPassword = (id: number, password: string) =>
   request<void>(`/mail/mailboxes/${id}/password`, { method: 'POST', body: { password } })
-export const setMailboxLimits = (id: number, change: LimitsChange) =>
+export const setMailboxLimits = (id: number, change: LimitsChange) => updateMailbox(id, change)
+export const updateMailbox = (id: number, change: MailboxChange) =>
   request<Mailbox>(`/mail/mailboxes/${id}`, { method: 'PATCH', body: change })
+
+// ---- app passwords ----
+
+const appPasswordsPath = (id: number) => `/mail/mailboxes/${id}/app-passwords`
+
+export const listAppPasswords = async (id: number) => (await request<AppPassword[] | null>(appPasswordsPath(id))) ?? []
+// The answer carries the password once; callers show it and drop it.
+export const createAppPassword = (id: number, name: string) =>
+  request<NewAppPassword>(appPasswordsPath(id), { method: 'POST', body: { name } })
+export const revokeAppPassword = (id: number, appId: string) =>
+  request<void>(`${appPasswordsPath(id)}/${encodeSegment(appId)}`, { method: 'DELETE' })
 export const unblockMailbox = (id: number) => request<void>(`/mail/mailboxes/${id}/unblock`, { method: 'POST' })
 export const deleteMailbox = (id: number) => request<void>(`/mail/mailboxes/${id}`, { method: 'DELETE' })
 // A file download, opened as a link (the session cookie goes along).

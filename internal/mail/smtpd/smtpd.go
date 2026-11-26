@@ -156,6 +156,14 @@ func (s *Server) Serve(l net.Listener) error {
 		s.mu.Unlock()
 		return errors.New("smtpd: already serving")
 	}
+	select {
+	case <-s.done:
+		// Shutdown or Close came first: never start accepting.
+		s.mu.Unlock()
+		l.Close()
+		return nil
+	default:
+	}
 	s.ln = newLimitListener(l, d.Limits().ConnectionsPerIP, s.opts.MaxConnections, s.opts.IdleTimeout)
 	refusal := func(line string) string { return line }
 	if s.opts.ImplicitTLS {
@@ -259,6 +267,11 @@ func (s *Server) retire(g *generation, ctx context.Context) {
 	if err := g.srv.Shutdown(ctx); err != nil {
 		g.srv.Close()
 	}
+	// go-smtp closes only listeners its Serve has registered. A generation
+	// retired right after it was started (a configuration change followed
+	// by a shutdown) may not have got that far, and its Accept would wait
+	// forever; closing our own listener ends it either way.
+	g.ln.Close()
 	g.run.Wait()
 }
 
@@ -293,6 +306,7 @@ func (s *Server) Close() error {
 	s.mu.Unlock()
 	if g != nil {
 		g.srv.Close()
+		g.ln.Close() // see retire
 		g.run.Wait()
 	}
 	return s.closeListener()

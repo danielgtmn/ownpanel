@@ -508,3 +508,14 @@ func TestActivityLog(t *testing.T) {
 		t.Fatalf("newest first: %s", all[0])
 	}
 }
+
+func TestClientKey(t *testing.T) {
+	for in, want := range map[string]string{
+		"192.0.2.7": "192.0.2.7", "::ffff:192.0.2.7": "192.0.2.7", "2001:db8:1:2:3::4": "2001:db8:1::/48",
+		"fe80::1%eth0": "fe80::/48", "not an ip": "not an ip",
+	} {
+		if got := clientKey(in); got != want {
+			t.Errorf("clientKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

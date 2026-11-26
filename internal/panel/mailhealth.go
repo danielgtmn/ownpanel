@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/danielgtmn/ownpanel/internal/caddy"
 	"github.com/danielgtmn/ownpanel/internal/dns"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/mail/directory"
@@ -32,6 +33,7 @@ const (
 	HealthListeners    = "listeners"
 	HealthPostmaster   = "postmaster"
 	HealthBlocklists   = "blocklists"
+	HealthSelfService  = "self_service"
 )
 
 // Health check states.
@@ -118,7 +120,7 @@ func (s *Service) MailHealth(ctx context.Context, a Actor) (MailHealth, error) {
 	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
 	defer cancel()
 	host := s.MailHost()
-	ids := []string{HealthService, HealthMailHostDNS, HealthMailHostSPF, HealthPTR, HealthOutboundPort, HealthCertificate, HealthListeners, HealthPostmaster, HealthBlocklists}
+	ids := []string{HealthService, HealthMailHostDNS, HealthMailHostSPF, HealthPTR, HealthOutboundPort, HealthCertificate, HealthListeners, HealthPostmaster, HealthBlocklists, HealthSelfService}
 	out := MailHealth{MailHost: host, Checks: make([]MailHealthCheck, len(ids))}
 
 	// The status of the mail service feeds three checks; ask once.
@@ -159,11 +161,41 @@ func (s *Service) MailHealth(ctx context.Context, a Actor) (MailHealth, error) {
 	run(6, func() MailHealthCheck { return s.healthListeners(st) })
 	run(7, func() MailHealthCheck { return s.healthPostmaster(ctx) })
 	run(8, func() MailHealthCheck { return s.healthBlocklists(s.store.Settings(ctx)) })
+	run(9, func() MailHealthCheck { return s.healthSelfService(host, st) })
 	wg.Wait()
 	return out, nil
 }
 
 const noService = "The mail service is not set up on this server."
+
+// healthSelfService: mailbox users get their own sign-in page (and later
+// calendars and contacts) on the mail host, which needs a name of its own
+// (wiki/Groupware-Architecture.md, decision 7). The mail service runs on
+// without its web socket when it cannot set it up; st says so.
+func (s *Service) healthSelfService(host string, st *config.Status) MailHealthCheck {
+	if s.mail == nil {
+		return check("", HealthUnknown, noService)
+	}
+	switch s.selfServiceProblem() {
+	case selfServiceNoHost:
+		return check("", HealthUnknown, "The name of the mail server is not set yet.")
+	case selfServiceSameHost:
+		return check("", HealthWarning, "Choose a mail server name different from the panel's address to give mailbox users their own sign-in page.")
+	case selfServiceNoSocket:
+		return check("", HealthWarning, "Mailbox users have no sign-in page of their own on this server yet. Updating ownpanel adds it.")
+	}
+	if st != nil && st.Web != nil && !st.Web.Listening {
+		c := check("", HealthError, "Mailbox users cannot sign in at "+host+": the mail service could not set up its part of the sign-in page. Mail itself works; restarting the mail service tries again.")
+		if st.Web.Error != "" {
+			c.Found = []string{st.Web.Error}
+		}
+		return c
+	}
+	if s.opts.TLSMode != caddy.TLSOff && len(s.mailCertificates()) == 0 {
+		return check("", HealthWarning, "Mailbox users get their own sign-in page at "+host+" once the mail server has a certificate.")
+	}
+	return check("", HealthOK, "Mailbox users sign in at "+host+".")
+}
 
 func (s *Service) healthService(ctx context.Context, st *config.Status, stErr error) MailHealthCheck {
 	switch {

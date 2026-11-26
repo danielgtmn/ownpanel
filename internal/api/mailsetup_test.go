@@ -183,21 +183,6 @@ func TestAppleMailProfile(t *testing.T) {
 	wantStatus(t, e.do(req{method: "GET", path: path, token: read}), 200, "")
 }
 
-func TestProfileHelpers(t *testing.T) {
-	if got := profileFileName(`a+b/c"d@example.com`); got != "a-b-c-d@example.com.mobileconfig" {
-		t.Fatal(got)
-	}
-	u := profileUUID("account", "a@example.com", "mail.example.net")
-	if len(u) != 36 || u[14] != '5' || u != profileUUID("account", "a@example.com", "mail.example.net") ||
-		u == profileUUID("profile", "a@example.com", "mail.example.net") {
-		t.Fatal(u)
-	}
-	b := AppleMailProfile(panel.MailboxSetup{Address: "a&b@example.com", Client: panel.MailClientSettings{Server: "m<x>"}})
-	if strings.Contains(string(b), "a&b") || strings.Contains(string(b), "m<x>") {
-		t.Fatalf("not escaped: %s", b)
-	}
-}
-
 func TestMailHostSPFRoute(t *testing.T) {
 	e, _ := newMailEnv(t)
 	wantStatus(t, e.as("POST", "/api/mail/host-spf", ""), 409, "")

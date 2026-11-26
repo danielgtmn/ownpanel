@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"net/netip"
 	"os"
 	"regexp"
 	"strings"
@@ -67,6 +68,27 @@ type Credentials struct {
 	Password  string
 	ClientIP  string
 	UserAgent string
+}
+
+// clientKey is the unit the panel's own attempt limits count per client in:
+// the address for IPv4, the /48 for IPv6 (one customer often gets a whole
+// /48, and a /64 is cheap to vary), like the mail service's sign-in
+// throttle. Anything that is not an address is used as it is. (Sign-in
+// itself is limited by sesam, per address as given.)
+func clientKey(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	a = a.Unmap()
+	if !a.Is6() {
+		return a.String()
+	}
+	p, err := a.WithZone("").Prefix(48)
+	if err != nil {
+		return ip
+	}
+	return p.String()
 }
 
 func (c Credentials) meta() sesam.SessionMeta {
@@ -435,7 +457,7 @@ func (s *Service) Setup(ctx context.Context, code string, c Credentials) (User, 
 	} else if !needed {
 		return User{}, "", alreadySetUp
 	}
-	key := "setup-code:" + c.ClientIP
+	key := "setup-code:" + clientKey(c.ClientIP)
 	if err := s.auth.Limit(ctx, key, loginMaxPerName, loginWindow); err != nil {
 		return User{}, "", authError(err)
 	}

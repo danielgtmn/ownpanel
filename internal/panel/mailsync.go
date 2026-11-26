@@ -2,14 +2,17 @@ package panel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/mailsetup"
 	"github.com/danielgtmn/ownpanel/internal/store"
 )
 
@@ -42,6 +45,13 @@ func (s *Service) buildMailConfig(ctx context.Context) (*config.Config, error) {
 		return nil, err
 	}
 	cfg.Filter = filter
+	if s.secrets != nil {
+		// The key exists from the start, so the mail service can create
+		// app passwords before the panel ever did.
+		if cfg.AppPasswordKey, err = s.appPasswordKey(ctx); err != nil {
+			return nil, err
+		}
+	}
 	domains, err := s.store.MailDomains(ctx)
 	if err != nil {
 		return nil, err
@@ -53,7 +63,12 @@ func (s *Service) buildMailConfig(ctx context.Context) (*config.Config, error) {
 				continue
 			}
 			active[d.Domain] = true
-			cd := config.Domain{Name: d.Domain, DKIM: []config.DKIMKey{}, SendPerHour: config.DefaultDomainSendPerHour}
+			// A domain that stands alone is pushed without an organisation:
+			// the mail service treats it as its own (StandaloneOrganisation).
+			// "dom-" and a domain of up to 253 characters would not fit an
+			// organisation id and fail the push for everyone.
+			cd := config.Domain{Name: d.Domain, DKIM: []config.DKIMKey{}, SendPerHour: config.DefaultDomainSendPerHour,
+				Organisation: d.OrganisationID}
 			keys, err := s.store.DKIMKeys(ctx, d.Domain)
 			if err != nil {
 				return nil, err
@@ -78,11 +93,22 @@ func (s *Service) buildMailConfig(ctx context.Context) (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	appPasswords, err := s.store.AppPasswords(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+	byMailbox := map[int64][]config.AppPassword{}
+	for _, ap := range appPasswords {
+		byMailbox[ap.MailboxID] = append(byMailbox[ap.MailboxID], config.AppPassword{ID: ap.ID, Name: ap.Name, MAC: ap.MAC, Created: ap.CreatedAt})
+	}
 	for _, m := range mailboxes {
 		if active[m.Domain] {
 			cfg.Mailboxes = append(cfg.Mailboxes, config.Mailbox{
 				StorageID: m.StorageID, Address: m.LocalPart + "@" + m.Domain, PasswordHash: m.PasswordHash,
 				QuotaBytes: m.QuotaBytes, SendPerHour: m.SendPerHour, SendPerDay: m.SendPerDay,
+				DisplayName: m.DisplayName, AppPasswords: byMailbox[m.ID], AppPasswordsOnly: m.AppPasswordsOnly,
+				Revision: m.Revision, PasswordSetAt: unixOrZero(m.AdminPasswordAt),
+				DisplayNameSetAt: unixOrZero(m.AdminDisplayNameAt), AppPasswordsOnlySetAt: unixOrZero(m.AdminAppPasswordsOnlyAt),
 			})
 		}
 	}
@@ -95,10 +121,36 @@ func (s *Service) buildMailConfig(ctx context.Context) (*config.Config, error) {
 			cfg.Aliases = append(cfg.Aliases, config.Alias{Address: a.LocalPart + "@" + a.Domain, Targets: a.Targets})
 		}
 	}
+	// One domain, mailbox or alias the mail service would refuse must not
+	// stop the push for everyone: it is left out or cut down, and logged.
+	s.logLeftOut(cfg.DropInvalid())
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("the mail configuration is not valid: %w", err)
 	}
 	return cfg, nil
+}
+
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
+// logLeftOut logs what buildMailConfig left out of the configuration, once
+// for as long as it stays the same (the configuration is built on every
+// round of the background loop and for the status).
+func (s *Service) logLeftOut(notes []string) {
+	key := strings.Join(notes, "\n")
+	s.mailLeftOutMu.Lock()
+	defer s.mailLeftOutMu.Unlock()
+	if key == s.mailLeftOut {
+		return
+	}
+	s.mailLeftOut = key
+	for _, n := range notes {
+		slog.Error("mail configuration: left out of the push", "what", n)
+	}
 }
 
 // mailSync pushes the configuration to the mail service when it differs
@@ -193,23 +245,70 @@ var importEventActions = map[string]string{
 	config.EventImportInterrupted: "mail.mailbox.import-interrupted",
 }
 
+// keyMailEventsPending holds the account events that could not be
+// recorded yet (JSON), oldest first; see recordMailEvents.
+const keyMailEventsPending = "mail_events_pending"
+
+// maxPendingAccountEvents bounds keyMailEventsPending.
+const maxPendingAccountEvents = 1000
+
 // recordMailEvents copies new events of the mail service into the
 // activity log and remembers how far it got.
+//
+// Account events (applyAccountEvent) of one mailbox must be recorded in
+// order. One that cannot be recorded (the database failed) is kept in
+// keyMailEventsPending together with every later account event of the
+// same mailbox, and tried again first on every round; events of other
+// mailboxes and all other events go on. Until then the mail service keeps
+// the mailbox's change (its overlay), so nothing is lost.
 func (s *Service) recordMailEvents(ctx context.Context) error {
 	if s.mail == nil {
 		return nil
 	}
+	s.mailEventsMu.Lock()
+	defer s.mailEventsMu.Unlock()
 	m, err := s.store.Settings(ctx)
 	if err != nil {
 		return err
 	}
 	cursor, _ := strconv.ParseInt(m[keyMailEventsCursor], 10, 64)
+	var pending []config.Event
+	if v := m[keyMailEventsPending]; v != "" {
+		if err := json.Unmarshal([]byte(v), &pending); err != nil {
+			slog.Error("dropping damaged pending mailbox changes", "err", err)
+			pending = nil
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, mailTimeout)
 	defer cancel()
-	events, err := s.mail.Events(ctx, cursor)
-	if err != nil {
-		return err
+	events, fetchErr := s.mail.Events(ctx, cursor)
+
+	held := map[string]bool{} // storage ids whose account events wait
+	var still []config.Event
+	accountChanged := false
+	apply := func(e config.Event, retry bool) {
+		if held[e.StorageID] {
+			still = append(still, e)
+			return
+		}
+		changed, err := s.applyAccountEvent(ctx, e)
+		if err != nil {
+			held[e.StorageID] = true
+			still = append(still, e)
+			if !retry {
+				slog.Error("recording a mailbox change failed; it is tried again", "kind", e.Kind, "err", err)
+			}
+			return
+		}
+		accountChanged = accountChanged || changed
 	}
+	for _, e := range pending {
+		apply(e, true)
+	}
+	if len(still) > 0 && len(pending) > 0 {
+		slog.Warn("mailbox changes of the mail server are still not recorded", "count", len(still))
+	}
+
 	last := cursor
 	refusals := blocklistRefusals(m)
 	refused := false
@@ -218,6 +317,10 @@ func (s *Service) recordMailEvents(ctx context.Context) error {
 			continue
 		}
 		last = e.ID
+		if accountEventKinds[e.Kind] {
+			apply(e, false)
+			continue
+		}
 		target := maskSecretZones(e.Address)
 		if target == "" {
 			target = e.StorageID
@@ -252,14 +355,48 @@ func (s *Service) recordMailEvents(ctx context.Context) error {
 		}
 		s.record(ctx, mailActor, action, target, detail)
 	}
-	if last == cursor {
-		return nil
+	if len(still) > maxPendingAccountEvents {
+		slog.Error("too many mailbox changes of the mail server not recorded; dropping the newest", "dropped", len(still)-maxPendingAccountEvents)
+		still = still[:maxPendingAccountEvents]
 	}
-	values := map[string]string{keyMailEventsCursor: strconv.FormatInt(last, 10)}
-	if refused {
-		values[keyBlocklistRefused] = encodeRefusals(refusals, s.now())
+	pendingValue := ""
+	if len(still) > 0 {
+		b, err := json.Marshal(still)
+		if err != nil {
+			return err
+		}
+		pendingValue = string(b)
 	}
-	return s.store.PutSettings(ctx, values)
+	if last != cursor || pendingValue != m[keyMailEventsPending] || refused {
+		values := map[string]string{keyMailEventsCursor: strconv.FormatInt(last, 10), keyMailEventsPending: pendingValue}
+		if refused {
+			values[keyBlocklistRefused] = encodeRefusals(refusals, s.now())
+		}
+		if err := s.store.PutSettings(ctx, values); err != nil {
+			return err
+		}
+	}
+	if accountChanged {
+		// The mail service keeps its own change until a push includes it;
+		// push now rather than on the next round.
+		if err := s.mailSync(ctx); err != nil {
+			return err
+		}
+	}
+	return fetchErr
+}
+
+// catchUpMailEvents records what mailboxes changed themselves in the mail
+// service before an admin changes their password, display name or switch:
+// the push that follows then carries a revision that includes those
+// changes, and the admin's value takes effect at once rather than after
+// the next round of the background loop. (The push also says when the
+// admin set the field, so the mail service gives way even if this fails;
+// see config.Mailbox.PasswordSetAt.) Failures are logged only.
+func (s *Service) catchUpMailEvents(ctx context.Context) {
+	if err := s.recordMailEvents(ctx); err != nil && ctx.Err() == nil {
+		slog.Warn("reading the mail server's events before a change failed", "err", err)
+	}
 }
 
 // runMail is the mail part of Run: it activates domains whose MX record
@@ -320,13 +457,7 @@ type MailListener struct {
 }
 
 // MailClientSettings are what people enter in their mail program.
-type MailClientSettings struct {
-	Server          string `json:"server"`
-	IMAPPort        int    `json:"imap_port"`
-	SMTPPort        int    `json:"smtp_port"`
-	SMTPStartTLS    int    `json:"smtp_starttls_port"`
-	UserNameIsEmail bool   `json:"user_name_is_address"`
-}
+type MailClientSettings = mailsetup.ClientSettings
 
 // MailStatus tells how the mail service is doing.
 type MailStatus struct {

@@ -60,7 +60,7 @@ type session struct {
 	s    *Server
 	conn *smtp.Conn
 	ip   netip.Addr
-	box  *config.Mailbox // signed-in mailbox (a copy), nil before AUTH
+	box  *signin.Grant // signed-in mailbox (a copy), nil before AUTH
 
 	// One transaction:
 	dir      *directory.Directory
@@ -110,7 +110,7 @@ func (ss *session) signIn(user, pass string) error {
 	}
 	ss.box = &m
 	if ss.s.opts.Limits != nil {
-		ss.s.opts.Limits.SignedIn(context.Background(), m, ss.ip)
+		ss.s.opts.Limits.SignedIn(context.Background(), m.Mailbox, ss.ip)
 	}
 	return nil
 }
@@ -144,11 +144,11 @@ func (ss *session) Mail(from string, _ *smtp.MailOptions) error {
 	if !config.ValidAddress(addr) {
 		return errSenderAddress
 	}
-	if !dir.MaySendAs(ss.box, addr) {
+	if !dir.MaySendAs(&ss.box.Mailbox, addr) {
 		return errSenderDenied
 	}
 	if ss.s.opts.Limits != nil {
-		if err := ss.s.opts.Limits.Check(ctx, dir, *ss.box); err != nil {
+		if err := ss.s.opts.Limits.Check(ctx, dir, ss.box.Mailbox); err != nil {
 			return err
 		}
 	}
@@ -272,7 +272,7 @@ func (ss *session) Data(r io.Reader) error {
 		return err
 	}
 	if ss.s.opts.Limits != nil {
-		if err := ss.s.opts.Limits.Reserve(ctx, ss.dir, *ss.box); err != nil {
+		if err := ss.s.opts.Limits.Reserve(ctx, ss.dir, ss.box.Mailbox); err != nil {
 			return err
 		}
 	}
@@ -364,7 +364,7 @@ func (ss *session) checkFrom(hdr textproto.MIMEHeader) (string, error) {
 		if err != nil || len(sl) != 1 {
 			return "", errBadSender
 		}
-		if !ss.dir.MaySendAs(ss.box, directory.Normalize(sl[0].Address)) {
+		if !ss.dir.MaySendAs(&ss.box.Mailbox, directory.Normalize(sl[0].Address)) {
 			return "", errSenderHdr
 		}
 	case len(list) > 1:
@@ -373,7 +373,7 @@ func (ss *session) checkFrom(hdr textproto.MIMEHeader) (string, error) {
 	domain := ""
 	for _, a := range list {
 		addr := directory.Normalize(a.Address)
-		if !ss.dir.MaySendAs(ss.box, addr) {
+		if !ss.dir.MaySendAs(&ss.box.Mailbox, addr) {
 			return "", errFromDenied
 		}
 		if domain == "" {

@@ -132,12 +132,13 @@ func (s *Server) listMailboxes(w http.ResponseWriter, r *http.Request) {
 	answer(w, http.StatusOK, v, err)
 }
 
-const mailboxExample = `{"local_part": "info", "password": "a long password", "quota_bytes": 1073741824, "send_per_hour": 100, "send_per_day": 500}`
+const mailboxExample = `{"local_part": "info", "password": "a long password", "display_name": "Example Info", "quota_bytes": 1073741824, "send_per_hour": 100, "send_per_day": 500}`
 
 func (s *Server) createMailbox(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		LocalPart   string `json:"local_part"`
 		Password    string `json:"password"`
+		DisplayName string `json:"display_name"`
 		QuotaBytes  *int64 `json:"quota_bytes"`
 		SendPerHour *int   `json:"send_per_hour"`
 		SendPerDay  *int   `json:"send_per_day"`
@@ -146,7 +147,7 @@ func (s *Server) createMailbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, err := s.Panel.CreateMailbox(r.Context(), actorOf(r), r.PathValue("domain"), panel.MailboxInput{
-		LocalPart: body.LocalPart, Password: body.Password,
+		LocalPart: body.LocalPart, Password: body.Password, DisplayName: body.DisplayName,
 		QuotaBytes: body.QuotaBytes, SendPerHour: body.SendPerHour, SendPerDay: body.SendPerDay,
 	})
 	answer(w, http.StatusCreated, v, err)
@@ -168,14 +169,32 @@ func (s *Server) setMailboxLimits(w http.ResponseWriter, r *http.Request) {
 	}
 	// A missing field stays as it is.
 	var body struct {
-		QuotaBytes  *int64 `json:"quota_bytes"`
-		SendPerHour *int   `json:"send_per_hour"`
-		SendPerDay  *int   `json:"send_per_day"`
+		QuotaBytes       *int64  `json:"quota_bytes"`
+		SendPerHour      *int    `json:"send_per_hour"`
+		SendPerDay       *int    `json:"send_per_day"`
+		DisplayName      *string `json:"display_name"`
+		AppPasswordsOnly *bool   `json:"app_passwords_only"`
 	}
-	if !decodeJSON(w, r, &body, `{"quota_bytes": 1073741824, "send_per_hour": 50, "send_per_day": 200}`) {
+	if !decodeJSON(w, r, &body, `{"quota_bytes": 1073741824, "send_per_hour": 50, "send_per_day": 200, "display_name": "Anna Example", "app_passwords_only": false}`) {
 		return
 	}
-	v, err := s.Panel.SetMailboxLimits(r.Context(), actorOf(r), id, panel.MailboxLimits(body))
+	ctx, a := r.Context(), actorOf(r)
+	var v panel.Mailbox
+	var err error
+	if body.DisplayName != nil || body.AppPasswordsOnly != nil {
+		v, err = s.Panel.SetMailboxAccount(ctx, a, id, panel.MailboxAccount{DisplayName: body.DisplayName, AppPasswordsOnly: body.AppPasswordsOnly})
+		if err != nil && panel.KindOf(err) != panel.NotSynced {
+			writeFailure(w, err)
+			return
+		}
+	}
+	if body.QuotaBytes != nil || body.SendPerHour != nil || body.SendPerDay != nil || (body.DisplayName == nil && body.AppPasswordsOnly == nil) {
+		var lerr error
+		v, lerr = s.Panel.SetMailboxLimits(ctx, a, id, panel.MailboxLimits{QuotaBytes: body.QuotaBytes, SendPerHour: body.SendPerHour, SendPerDay: body.SendPerDay})
+		if lerr != nil {
+			err = lerr
+		}
+	}
 	answer(w, http.StatusOK, v, err)
 }
 
