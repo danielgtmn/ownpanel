@@ -238,11 +238,9 @@ func TestLoginThrottlingPerAddress(t *testing.T) {
 	}
 }
 
-// TestSuccessfulSignInsDoNotCountAgainstTheAddress is what the panel did
-// before sesam and what sesam's documentation of MaxAttemptsPerClient
-// says; sesam v0.3.0 counts every sign-in against the address.
+// TestSuccessfulSignInsDoNotCountAgainstTheAddress: people behind one
+// address (an office, a NAT) can keep signing in; only failures count.
 func TestSuccessfulSignInsDoNotCountAgainstTheAddress(t *testing.T) {
-	t.Skip("sesam v0.3.0 counts successful sign-ins against the per-address limit; to be fixed in sesam")
 	svc, _, _ := newService(t)
 	withClock(svc)
 	ctx := context.Background()
