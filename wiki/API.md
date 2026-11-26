@@ -65,7 +65,7 @@ Every id the API returns or takes is a **string**: `"id": "42"`, `"connection_id
 
 **Record set:** `{"name", "type", "ttl", "values": [..], "locked"}`. `name` is `@` for the zone itself; `ttl` is `null` for the zone default; TXT values are plain text.
 
-**GitHub connection:** `{"id", "app_id", "name", "slug", "owner", "owner_type", "html_url", "settings_url", "created_by", "created_at", "last_checked_at", "last_error", "installations": [{"id", "account", "account_type", "repository_selection", "suspended", "repository_count", "settings_url"}, …]}`. `owner_type` and `account_type` are `"user"` or `"organization"`; `repository_selection` is `"all"` or `"selected"`; `repository_count` is `null` until listed. `id` is the panel's id of the connection, a string like every id the panel makes; `app_id`, the installations' `id` and the repositories' `id` are GitHub's own ids and stay numbers. The app's key and secrets are never returned.
+**GitHub connection:** `{"id", "app_id", "name", "slug", "owner", "owner_type", "html_url", "settings_url", "created_by", "created_at", "last_checked_at", "last_error", "installations": [{"id", "account", "account_type", "repository_selection", "suspended", "repository_count", "settings_url", "sites"}, …]}`. `sites` lists the sites linked to one of the installation's repositories, `[{"site", "repository", "branch"}, …]` (only in `GET /api/github` and `POST /api/github/refresh`, otherwise empty). `owner_type` and `account_type` are `"user"` or `"organization"`; `repository_selection` is `"all"` or `"selected"`; `repository_count` is `null` until listed. `id` is the panel's id of the connection, a string like every id the panel makes; `app_id`, the installations' `id` and the repositories' `id` are GitHub's own ids and stay numbers. The app's key and secrets are never returned.
 
 **GitHub repository:** `{"id", "installation_id", "owner", "name", "full_name", "private", "archived", "default_branch", "html_url"}`.
 
@@ -207,7 +207,7 @@ Connecting an account is a browser flow with a stop at GitHub ([[GitHub|GitHub]]
 
 | Method | Path | Who | Request | Response |
 |---|---|---|---|---|
-| `GET` | `/api/github` | admin read | | `{"ready", "problem", "apps": [GitHub connection, …]}`. `ready` is false (and `problem` says why) without a panel domain with HTTPS |
+| `GET` | `/api/github` | admin read | | `{"ready", "problem", "apps": [GitHub connection, …], "sites_without_connection": [{"site", "repository", "branch"}, …]}`. `ready` is false (and `problem` says why) without a panel domain with HTTPS; `sites_without_connection` are sites linked to a repository whose connection or installation was removed |
 | `POST` | `/api/github/apps` | admin, signed in | `{"organization": "my-org"}` (`""` for your own account) | `{"url"}`: the panel's page (`/api/github/manifest?state=…`) to open in the browser; it sends you on to GitHub. `409` without a panel domain with HTTPS or when the organisation is already connected |
 | `GET` | `/api/github/manifest?state=…` | admin, signed in, same sign-in | | an HTML page with the form that creates the app on GitHub, with its own content security policy |
 | `GET` | `/api/github/app-created?code=…&state=…` | open (GitHub sends the browser here) | | `303` to `/#/settings?github=created&code=…&state=…`, or `github=failed` for malformed values. Changes nothing |

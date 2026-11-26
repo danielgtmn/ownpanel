@@ -136,6 +136,17 @@ type GitHub struct {
 	Ready   bool        `json:"ready"`
 	Problem string      `json:"problem,omitempty"`
 	Apps    []GitHubApp `json:"apps"`
+	// SitesWithoutConnection are sites linked to a repository whose
+	// connection or installation was removed (status connection_missing).
+	SitesWithoutConnection []GitHubLinkedSite `json:"sites_without_connection"`
+}
+
+// GitHubLinkedSite is a site linked to a repository, as the settings list
+// it.
+type GitHubLinkedSite struct {
+	Site       string `json:"site"`
+	Repository string `json:"repository"`
+	Branch     string `json:"branch"`
 }
 
 // GitHubApp is one connection: an App the panel created. Never its
@@ -171,6 +182,9 @@ type GitHubInstallation struct {
 	RepositoryCount *int `json:"repository_count"`
 	// SettingsURL is where the repositories are chosen on GitHub.
 	SettingsURL string `json:"settings_url"`
+	// Sites are the sites linked to one of its repositories (only filled
+	// in the list of connections).
+	Sites []GitHubLinkedSite `json:"sites"`
 }
 
 // GitHubRepository is a repository an installation may see.
@@ -236,7 +250,7 @@ func (s *Service) githubAppView(a store.GitHubApp, insts []store.GitHubInstallat
 		v.Installations = append(v.Installations, GitHubInstallation{
 			ID: i.ID, Account: i.AccountLogin, AccountType: accountTypeView(i.AccountType),
 			RepositorySelection: i.RepositorySelection, Suspended: i.Suspended, RepositoryCount: i.RepositoryCount,
-			SettingsURL: s.github.InstallationSettingsURL(acc, i.ID),
+			SettingsURL: s.github.InstallationSettingsURL(acc, i.ID), Sites: []GitHubLinkedSite{},
 		})
 	}
 	return v
@@ -481,9 +495,13 @@ func (s *Service) GitHubConnections(ctx context.Context, a Actor) (GitHub, error
 	if err := needGitHubSee(a); err != nil {
 		return GitHub{}, err
 	}
-	out := GitHub{Ready: true, Apps: []GitHubApp{}}
+	out := GitHub{Ready: true, Apps: []GitHubApp{}, SitesWithoutConnection: []GitHubLinkedSite{}}
 	if _, err := s.githubBase(); err != nil {
 		out.Ready, out.Problem = false, err.Error()
+	}
+	sources, err := s.store.GitHubSiteSources(ctx)
+	if err != nil {
+		return GitHub{}, storeError(err)
 	}
 	apps, err := s.store.GitHubApps(ctx)
 	if err != nil {
@@ -493,8 +511,29 @@ func (s *Service) GitHubConnections(ctx context.Context, a Actor) (GitHub, error
 	if err != nil {
 		return GitHub{}, storeError(err)
 	}
+	byInstallation := map[int64][]GitHubLinkedSite{}
+	for _, src := range sources {
+		linked := GitHubLinkedSite{Site: src.Site, Repository: src.Repository, Branch: src.Branch}
+		byInstallation[src.InstallationID] = append(byInstallation[src.InstallationID], linked)
+	}
+	known := map[int64]bool{}
 	for _, app := range apps {
-		out.Apps = append(out.Apps, s.githubAppView(app, insts))
+		v := s.githubAppView(app, insts)
+		for i := range v.Installations {
+			known[v.Installations[i].ID] = true
+			if sites := byInstallation[v.Installations[i].ID]; sites != nil {
+				v.Installations[i].Sites = sites
+			}
+		}
+		out.Apps = append(out.Apps, v)
+	}
+	// Sources keep their installation id only while it exists; anything
+	// else lost its connection.
+	for _, src := range sources {
+		if !known[src.InstallationID] {
+			out.SitesWithoutConnection = append(out.SitesWithoutConnection,
+				GitHubLinkedSite{Site: src.Site, Repository: src.Repository, Branch: src.Branch})
+		}
 	}
 	return out, nil
 }
