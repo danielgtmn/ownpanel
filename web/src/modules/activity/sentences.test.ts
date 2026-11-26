@@ -8,6 +8,7 @@ describe('describeActivity', () => {
     ['site.create', 'blog', 'anna created the site blog'],
     ['site.domains', 'blog', 'anna changed the domains of blog'],
     ['site.publish', 'blog', 'anna published new files for blog'],
+    ['site.publish-not-live', 'blog', 'anna published new files for blog without making them live'],
     ['site.make-live', 'blog', 'anna made another version of blog live'],
     ['site.delete', 'shop', 'anna removed the site shop'],
     ['user.create', 'max', 'anna added max'],
@@ -92,6 +93,11 @@ describe('e-mail activity', () => {
       'No storage limit · 50 messages an hour · 200 a day',
     )
     expect(describeDetail({ action: 'mail.domain.enable', detail: 'DKIM selector op202611' })).toBe('')
+    expect(describeDetail({ action: 'site.upload-link', detail: 'valid until 2026-11-26T10:00:00Z, not made live' })).toMatch(
+      /^Valid until .+ · Publishes without making it live$/,
+    )
+    expect(describeDetail({ action: 'site.upload-link', detail: 'valid until 2026-11-26T10:00:00Z' })).toMatch(/^Valid until [^·]+$/)
+    expect(describeDetail({ action: 'site.publish-not-live', detail: '20261126T101329.498Z-24eb1a' })).toMatch(/^Version from /)
     expect(describeDetail({ action: 'mail.domain.activate', detail: 'MX points to mail.example.com' })).toBe(
       'Its mail records point to mail.example.com',
     )
