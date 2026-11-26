@@ -37,8 +37,8 @@ Errors are JSON with a readable sentence:
 | `422` | a build ran and failed; the answer carries its result |
 | `409` | cannot be done in the current state: name taken, nothing to go back to, last admin, user still owns sites, setup already done, another import of the mailbox running |
 | `413` | a file or part of an upload is too large |
-| `429` | the build service is busy, too many failed sign-in attempts, too many sign-ins at the same moment, Hetzner's request limit was reached, or too many mail imports in an hour |
-| `502` | the change is saved but the web server could not be updated yet (the loop retries), or an outside service such as Hetzner or another mail server is unavailable or refused (for an import: its answer, never the password) |
+| `429` | the build service is busy, too many failed sign-in attempts, too many sign-ins at the same moment, Hetzner's or GitHub's request limit was reached, or too many mail imports in an hour |
+| `502` | the change is saved but the web server could not be updated yet (the loop retries), or an outside service such as Hetzner, GitHub or another mail server is unavailable or refused (for an import: its answer, never the password) |
 | `507` | not enough free disk space on the server (mail import) |
 | `500` | something went wrong on the server; the details are only in the log |
 
@@ -67,6 +67,10 @@ Every id the API returns or takes is a **string**: `"id": "42"`, `"connection_id
 **DNS connection:** `{"id", "provider", "name", "owner", "created_at", "last_checked_at", "last_error", "can_write", "zone_count"}`. `can_write` and `zone_count` are `null` while unknown; the token is never returned.
 
 **Record set:** `{"name", "type", "ttl", "values": [..], "locked"}`. `name` is `@` for the zone itself; `ttl` is `null` for the zone default; TXT values are plain text.
+
+**GitHub connection:** `{"id", "app_id", "name", "slug", "owner", "owner_type", "html_url", "settings_url", "created_by", "created_at", "last_checked_at", "last_error", "installations": [{"id", "account", "account_type", "repository_selection", "suspended", "repository_count", "settings_url"}, …]}`. `owner_type` and `account_type` are `"user"` or `"organization"`; `repository_selection` is `"all"` or `"selected"`; `repository_count` is `null` until listed. `id` is the panel's id of the connection, a string like every id the panel makes; `app_id`, the installations' `id` and the repositories' `id` are GitHub's own ids and stay numbers. The app's key and secrets are never returned.
+
+**GitHub repository:** `{"id", "installation_id", "owner", "name", "full_name", "private", "archived", "default_branch", "html_url"}`.
 
 **Redirect:** `{"id", "owner", "source_domain", "source_path", "target", "code", "keep_path", "keep_query", "created_at"}`. `source_path` is `""` for a whole-domain redirect, otherwise `/exact` or a prefix `/path/*`; `code` is `301`, `302`, `307` or `308`. See [[Redirects|Redirects]].
 
@@ -190,6 +194,25 @@ Domains whose DNS is managed elsewhere: kept in your panel as domains of their o
 | `POST` | `/api/redirects` | write; domain redirects need a token that is not limited to sites | `{"source_domain", "source_path", "target", "code", "keep_path", "keep_query"}` | `201` Redirect |
 | `PUT` | `/api/redirects/{id}` | write; owner, admin, or (path redirects) whoever may change the site | same as `POST` | Redirect |
 | `DELETE` | `/api/redirects/{id}` | same | | `204` |
+
+### GitHub
+
+Connecting an account is a browser flow with a stop at GitHub ([[GitHub|GitHub]]). "Admin, signed in" means an administrator with a password sign-in; those steps are bound to that very sign-in. "Admin" also allows an unrestricted `write` token; "admin read" also a read-only token. Members get `403`.
+
+| Method | Path | Who | Request | Response |
+|---|---|---|---|---|
+| `GET` | `/api/github` | admin read | | `{"ready", "problem", "apps": [GitHub connection, …]}`. `ready` is false (and `problem` says why) without a panel domain with HTTPS |
+| `POST` | `/api/github/apps` | admin, signed in | `{"organization": "my-org"}` (`""` for your own account) | `{"url"}`: the panel's page (`/api/github/manifest?state=…`) to open in the browser; it sends you on to GitHub. `409` without a panel domain with HTTPS or when the organisation is already connected |
+| `GET` | `/api/github/manifest?state=…` | admin, signed in, same sign-in | | an HTML page with the form that creates the app on GitHub, with its own content security policy |
+| `GET` | `/api/github/app-created?code=…&state=…` | open (GitHub sends the browser here) | | `303` to `/#/settings?github=created&code=…&state=…`, or `github=failed` for malformed values. Changes nothing |
+| `POST` | `/api/github/apps/finish` | admin, signed in, same sign-in as the start | `{"code", "state"}` | `201` GitHub connection. `400` for a used, expired, foreign or malformed `state`, or a code GitHub does not accept |
+| `POST` | `/api/github/apps/{id}/install` | admin, signed in | | `{"url"}`: GitHub's page where the app is installed and the repositories are chosen |
+| `GET` | `/api/github/installed?installation_id=…&state=…` | open (GitHub sends the browser here) | | `303` to `/#/settings?github=installed&installation_id=…&state=…` (`github=requested` when an organisation owner must approve first). Changes nothing |
+| `POST` | `/api/github/installations` | admin, signed in, same sign-in as the start | `{"installation_id", "state"}` | GitHub connection. `400` for a bad `state`; `404` if GitHub, asked as that app, does not know the installation |
+| `GET` | `/api/github/installations/{id}/repositories` | admin read | | `{"repositories": [GitHub repository, …], "truncated"}` (at most 3000; kept for a minute) |
+| `POST` | `/api/github/refresh` | admin | | the same as `GET /api/github`, after asking GitHub afresh where each app is installed; problems go into `last_error` |
+| `DELETE` | `/api/github/apps/{id}` | admin | | `{"name", "settings_url"}`: the stored key and secrets are gone; `settings_url` is where the app is deleted on GitHub |
+| `POST` | `/api/github/webhook` | | | reserved for GitHub's notices ([#109](https://github.com/danielgtmn/ownpanel/issues/109)); answers `404` for now |
 
 ### E-mail
 

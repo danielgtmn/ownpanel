@@ -34,6 +34,7 @@ On a server installed with `install.sh`, flags live in `/etc/ownpanel/ownpaneld.
 | `-mail-host` | empty | Name of the mail server (MX target, what mail programs connect to), e.g. `mail.example.com`. It cannot be a site, redirect or mail domain; it may be the panel domain. Overrides the panel settings (see below). |
 | `-reconcile-interval` | `30s` | How often the web server is re-synced in the background (a Go duration such as `30s` or `1m`). |
 | `-releases-api` | `https://api.github.com` | Where the panel looks for new releases ([[Installation|Installation#updating]]). Only change it for testing. |
+| `-github-url` | `https://github.com` | The GitHub that accounts are connected to ([[GitHub|GitHub]]); the API address follows from it (`api.github.com`, otherwise `<url>/api/v3`). Must be https, or http on a loopback address. Only change it for testing. |
 | `-server-ip` | none | Public IPv4/IPv6 address of this server that domains should point at. Repeat the flag or separate values with commas. Must be a public address unless `-tls` is `internal` or `off`. Overrides the panel settings (see below). Without addresses (here or in the settings) the domain status and "point to this server" are unavailable. |
 
 `-listen` with a wildcard host (`:8600`, `0.0.0.0:8600`) is reached by Caddy through `127.0.0.1`. The daemon does not terminate TLS itself; Caddy serves the panel over HTTPS on the panel domain and, during setup, on the server's addresses (see [[Security|Security]]).

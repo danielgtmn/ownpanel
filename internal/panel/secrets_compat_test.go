@@ -30,3 +30,17 @@ func TestSealedValuesStayReadable(t *testing.T) {
 		}
 	}
 }
+
+// TestGitHubPurposesNeverChange pins the purposes of the sealed GitHub App
+// secrets; the sealing itself is pinned above.
+func TestGitHubPurposesNeverChange(t *testing.T) {
+	for got, want := range map[string]string{
+		githubKeyPurpose:     "ownpanel github app private key",
+		githubWebhookPurpose: "ownpanel github app webhook secret",
+		githubClientPurpose:  "ownpanel github app client secret",
+	} {
+		if got != want {
+			t.Errorf("purpose %q changed to %q: stored GitHub connections could no longer be opened", want, got)
+		}
+	}
+}

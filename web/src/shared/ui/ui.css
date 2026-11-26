@@ -93,6 +93,12 @@
   max-width: 62ch;
 }
 
+.section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .section-body {
   margin-top: 1rem;
 }
@@ -340,6 +346,15 @@
   .form-actions > * {
     flex: 1 1 auto;
   }
+}
+
+/* Links drawn as buttons keep the button's look, not the color of links. */
+a[data-slot='button'] {
+  text-decoration: none;
+}
+
+a[data-slot='button'][data-variant='solid'] {
+  color: var(--ui-primary-foreground);
 }
 
 /* Links used as menu entries read as entries, not as underlined text. */

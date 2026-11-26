@@ -327,6 +327,8 @@ func TestToolsAndAnnotations(t *testing.T) {
 		"list_domains":                 {readOnly: true, idempotent: true},
 		"add_domain":                   {idempotent: true},
 		"remove_domain":                {},
+		"get_github_status":            {readOnly: true, idempotent: true},
+		"list_github_repositories":     {readOnly: true, idempotent: true},
 		"list_dns_connections":         {readOnly: true, idempotent: true},
 		"list_dns_records":             {readOnly: true, idempotent: true},
 		"set_dns_record":               {destructive: true, idempotent: true},
