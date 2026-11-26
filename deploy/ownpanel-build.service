@@ -1,0 +1,64 @@
+[Unit]
+Description=ownpanel build service
+Documentation=https://github.com/danielgtmn/ownpanel/wiki/Security#builds
+# Never without the build disk and the packet filter: stopping or
+# restarting ownpanel-build-setup stops or restarts this service too.
+BindsTo=ownpanel-build-setup.service
+After=ownpanel-build-setup.service network-online.target
+Wants=network-online.target
+# Restart=always, but not forever: if the binary cannot run the service at
+# all (e.g. after going back to a version without it), give up.
+StartLimitIntervalSec=10min
+StartLimitBurst=10
+
+# Builds run code nobody reviewed. This service runs them, each in a
+# container of rootless Podman, as the user ownpanel-build: not the panel's
+# user, not root. Root inside a container is this user outside, everyone
+# else an id from its subordinate range (/etc/subuid).
+# The panel talks to it through /run/ownpanel-build/worker.sock: systemd
+# creates /run/ownpanel-build as ownpanel-build with mode 0750, the service
+# creates the socket in it with mode 0660, and the user ownpanel is a member
+# of the group ownpanel-build (install.sh). Everything else of this user
+# (its home, the build disk, Podman's runtime directory) is 0700.
+[Service]
+User=ownpanel-build
+Group=ownpanel-build
+EnvironmentFile=/etc/ownpanel/build.env
+Environment=HOME=/var/lib/ownpanel-build/home
+ExecStart=/usr/local/bin/ownpaneld build-worker -socket /run/ownpanel-build/worker.sock -work /var/lib/ownpanel-build/work -resolvers /run/ownpanel-build-setup/resolvers -run-dir /run/ownpanel-build/podman -slots ${OWNPANEL_BUILD_SLOTS} -workspace-size ${OWNPANEL_BUILD_WORKSPACE_SIZE} -cache-size ${OWNPANEL_BUILD_CACHE_SIZE} -caches ${OWNPANEL_BUILD_CACHES}
+RuntimeDirectory=ownpanel-build
+RuntimeDirectoryMode=0750
+UMask=0077
+# The service's control group is handed to it, so every build gets its own
+# processor, memory and process limits from the kernel. All of a build's
+# processes stay below this unit: stopping it (or a crash) kills every
+# build, and the service removes what is left of them when it starts.
+Delegate=yes
+KillMode=control-group
+Restart=always
+RestartSec=5
+TimeoutStopSec=60
+# Builds are the first to go when the server runs out of memory.
+OOMScoreAdjust=500
+TasksMax=16384
+LimitNOFILE=65536
+
+# Hardening. What the panel and the other services keep is not even visible
+# to this service and its containers. Rootless Podman needs the set-user-ID
+# helpers newuidmap/newgidmap and user namespaces, so NoNewPrivileges= and
+# every option that implies it (system call filters, RestrictNamespaces=,
+# RestrictSUIDSGID=, …) are not used here; each container instead gets
+# no-new-privileges, no capabilities and Podman's system call filter.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ownpanel-build/home /var/lib/ownpanel-build/work
+ProtectHome=true
+PrivateTmp=true
+InaccessiblePaths=-/var/lib/ownpanel -/var/lib/ownpanel-mail -/var/lib/ownpanel-caddy -/var/lib/ownpanel-update -/etc/ownpanel -/run/ownpanel -/run/ownpanel-mail -/var/lib/ownpanel-build/disk.img -/var/backups
+# Devices: the usual pseudo devices, plus what the user-space network
+# (tun) and the terminal of a container need.
+DevicePolicy=closed
+DeviceAllow=/dev/net/tun rw
+DeviceAllow=char-pts rw
+
+[Install]
+WantedBy=multi-user.target
