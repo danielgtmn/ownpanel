@@ -116,6 +116,28 @@ Zones that are not primary zones at Hetzner (for example secondary zones) are ma
 - Zone lists are cached for 60 seconds, which keeps ownpanel well below Hetzner's limit of 3600 requests per hour per project. "Check" on a connection fetches the zone list afresh and shows the outcome in `last_error`.
 - Writes that change nothing are not sent to Hetzner.
 
+## Record templates
+
+**Set up a service** on a domain's records page adds the records a common service needs in one go. Choose what to set up, fill in what the service gave you, and the panel shows what would change before anything is written:
+
+| Template | Records |
+|---|---|
+| Confirm that you own this domain | a TXT record with the text a service gave you, at the domain or at a name you enter |
+| Google Workspace mail | `MX 1 smtp.google.com`, SPF `include:_spf.google.com` ([Google: MX](https://knowledge.workspace.google.com/admin/domains/set-up-mx-records-for-google-workspace), [SPF](https://knowledge.workspace.google.com/admin/security/set-up-spf)) |
+| Microsoft 365 mail | `MX 0 <your mail server>` (shown in the Microsoft 365 admin center under Domains), SPF `include:spf.protection.outlook.com`, `CNAME autodiscover → autodiscover.outlook.com` ([Microsoft](https://learn.microsoft.com/en-us/microsoft-365/admin/get-help-with-domains/create-dns-records-at-any-dns-hosting-provider)) |
+| Fastmail mail | `MX 10 in1-smtp` / `20 in2-smtp.messagingengine.com`, SPF `include:spf.messagingengine.com`, the three DKIM CNAMEs `fm1`–`fm3._domainkey`, SRV for sending (465) and IMAP (993) ([Fastmail](https://www.fastmail.help/hc/en-us/articles/360060591153-Manual-DNS-configuration)) |
+| E-mail on this server | no records here: it leads to the domain's e-mail page, which sets them up from the domain's e-mail settings ([[E-Mail|E-Mail]]) |
+
+How the records meet what is there:
+
+- **TXT values are added**, the other values at that name (other verification texts) are kept.
+- **SPF:** a domain may have only one SPF value. If there is one, the template's `include:` is added right after `v=spf1` and everything else stays; the preview shows the old value as replaced. Two SPF values, a value that excludes the new sender, or one that would need more than 10 DNS lookups is reported as a conflict.
+- **MX, SRV and CNAME** record sets are replaced as a whole; the preview shows the values they had. Replacing MX records moves the domain's mail to the new provider.
+- A **CNAME** where the name has other records, or other records where the name has a CNAME, is reported as a conflict.
+- Each record set is `add`, `change`, `ok` (already as it should be) or `conflict`. With any conflict nothing is written. Applying again when everything is `ok` writes nothing.
+
+Every written record set is a `dns.record.set` entry in the activity log, plus one `dns.template.apply`. Read-only domains do not offer templates. The preview needs what listing records needs (a `read` token is enough); applying needs what changing records needs. API: `GET /api/dns/templates`, `POST /api/dns/connections/{id}/zones/{zone}/templates/{template}` ([[API|API]]). Through MCP: `list_dns_record_templates` and `apply_dns_record_template` ([[MCP|MCP]]).
+
 ## Domain status
 
 Domain status works for every domain you control: the domains of sites you may see and the domains of your domain redirects ([[Redirects|Redirects]]). `GET /api/sites/{name}/domains/status` lists those of a site; `GET /api/dns/domain-status?domain=…` gives the same object for one domain.
@@ -148,7 +170,7 @@ It needs `write` access to the site (or to be allowed to change the domain redir
 
 ## Activity log
 
-`dns.connect`, `dns.disconnect`, `dns.record.set`, `dns.record.delete`, `dns.point`, `dns.zone.create`, `dns.zone.delete`, `dns.zone.adopt` (managing a zone here) and `dns.zone.release` (no longer) are recorded. Tokens never are, and TXT values longer than 60 characters are left out.
+`dns.connect`, `dns.disconnect`, `dns.record.set`, `dns.record.delete`, `dns.point`, `dns.zone.create`, `dns.zone.delete`, `dns.zone.adopt` (managing a zone here), `dns.zone.release` (no longer) and `dns.template.apply` are recorded. Tokens never are, and TXT values longer than 60 characters are left out.
 
 ## Through MCP
 

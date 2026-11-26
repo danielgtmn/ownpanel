@@ -90,6 +90,7 @@ func Handler(p *panel.Service, version string, opts ...Option) http.Handler {
 	addMailRulesTools(srv, p)
 	addDNSTools(srv, p)
 	addDomainTools(srv, p)
+	addDNSTemplateTools(srv, p)
 	// Stateless: every request carries its own token, so there is no session
 	// to remember or to hijack.
 	sdkHandler := sdk.NewStreamableHTTPHandler(
