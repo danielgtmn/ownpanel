@@ -326,6 +326,12 @@ func TestToolsAndAnnotations(t *testing.T) {
 		"list_domains":                 {readOnly: true, idempotent: true},
 		"add_domain":                   {idempotent: true},
 		"remove_domain":                {},
+		"list_dns_connections":         {readOnly: true, idempotent: true},
+		"list_dns_records":             {readOnly: true, idempotent: true},
+		"set_dns_record":               {destructive: true, idempotent: true},
+		"delete_dns_record":            {destructive: true, idempotent: true},
+		"check_domain":                 {readOnly: true, idempotent: true},
+		"point_domain_at_server":       {destructive: true, idempotent: true},
 	}
 	got := map[string]bool{}
 	for _, tool := range res.Tools {

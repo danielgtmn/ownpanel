@@ -1,6 +1,6 @@
 # MCP
 
-ownpaneld speaks the Model Context Protocol, so AI assistants can manage sites: create them, publish files, go back to an earlier version. The tools call the same operations as the API and are subject to the same permission checks.
+ownpaneld speaks the Model Context Protocol, so AI assistants can manage sites (create them, publish files, go back to an earlier version), redirects, e-mail and DNS records. The tools call the same operations as the API and are subject to the same permission checks.
 
 ## Endpoint and authentication
 
@@ -78,8 +78,16 @@ Version ids come from `get_site`; a version id starts with a UTC timestamp. Othe
 | `list_domains` | | Lists the domains you added whose DNS is managed elsewhere, each with `domain`, `created_at` and `used_by`. Read-only. |
 | `add_domain` | `domain` | Adds a domain whose DNS is managed elsewhere (a registrable domain like `example.com`), so it shows up in the panel on its own. Nothing changes at any provider. Safe to repeat. |
 | `remove_domain` | `domain` | Removes such a domain from your list; nothing changes at any provider. `still_used_by` says what of yours still keeps it in the panel. |
+| `list_dns_connections` | none | Lists your connections to DNS provider accounts: `id`, `provider`, `name`, `owner`, `created_at`, `last_checked_at`, `last_error`, `can_write`, `domain_count`. Never a token. Administrators also see other people's connections but can only use their own. Read-only. |
+| `list_dns_records` | `connection_id`, `domain` | Lists the record sets of a zone of your own connection as the provider has them now, `@` first: `name`, `type`, `ttl` (`null` is the zone's default), `values`, `locked`. Read-only. |
+| `set_dns_record` | `connection_id`, `domain`, `name`, `type`, `ttl` (optional), `values` | Creates or replaces the record set of one name and type; `values` replace all its values. `name` is relative to the zone (`@`, `www`). TXT values are plain text without quotes. Returns the record set as written. Safe to repeat. |
+| `delete_dns_record` | `connection_id`, `domain`, `name`, `type` | Deletes the record set of one name and type. A record set that does not exist is not an error; SOA and the zone's own NS records cannot be deleted. |
+| `check_domain` | `domain` | For one domain of your sites or whole-domain redirects: `state` and `found` as in `check_site_domains`, and `zone` (`connection_id`, `connection_name`, `zone`, `record_name`): where `point_domain_at_server` would write, `null` if none of your connections holds it. Read-only. |
+| `point_domain_at_server` | `domain` | "Point to this server" for one domain of your sites or whole-domain redirects: writes A and AAAA records with the server's addresses (TTL 300) into the zone of your own connection that holds it, and removes an address record set of a family the server has no address in. Refused if the name has a CNAME. Returns `changed`, empty if it already pointed here. |
 
 Tools that change something need a `write` token. Read-only tools are `list_sites`, `get_site`, `check_site_domains`, `list_redirects`, `get_mail_status`, `get_mail_records`, `get_mail_health`, `list_mail_domains`, `list_mailboxes`, `list_mail_aliases`, `list_mail_imports`, `list_mail_organisations`, `list_dns_domains` and `list_domains`. `list_mail_domains` also shows each domain's `organisation`, `list_mailboxes` the `display_name`, `app_passwords_only`, `kind` (`personal` or `shared`), `keep_sent_copy`, `shared_with` (who has access, each with `mailbox_id`, `address`, `display_name`, `rights`, `active`) and `access_to` (the mailboxes it may use, with `kind`); `active` is false when an access is not in effect because the domains are no longer in one organisation. Tokens limited to sites cannot use the e-mail, DNS and domain tools.
+
+The DNS tools follow the rules of the web interface ([[DNS|DNS]]): records are read and changed only through **your own** DNS connections, a connection of another person answers "not found" (an administrator is told whose it is), and pointing a domain needs a domain of a site or whole-domain redirect you can see. `list_dns_connections`, `list_dns_records` and `check_domain` are read-only as well; a token limited to sites may still use `check_domain` and `point_domain_at_server` for the domains of its sites.
 
 ### `publish_files`
 
@@ -109,7 +117,7 @@ curl --fail-with-body -X POST --data-binary @site.zip '<url>'
 
 ## Not available
 
-Connecting DNS accounts and changing records is not possible through MCP; use the web interface or the [[API|API]]. Choosing which domains are managed in the panel is (`manage_dns_domain`), and so is adding a domain whose DNS is managed elsewhere (`add_domain`).
+Connecting, checking and removing DNS provider accounts is not possible through MCP, on purpose: connecting one needs the provider's API token, which should never pass through an AI agent. Use the web interface or the [[API|API]]; once connected, the account's domains and records can be used through the tools above. Choosing which domains are managed in the panel is possible (`manage_dns_domain`), and so is adding a domain whose DNS is managed elsewhere (`add_domain`).
 
 Applying a record template is possible (`apply_dns_record_template`): it writes only after a preview the user agreed to.
 
