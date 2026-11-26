@@ -32,6 +32,7 @@ cd web && npm test             # web app tests (vitest, watch mode)
 cd web && npm test -- --run    # once
 cd web && npm run lint         # oxlint
 cd web && npm run build        # type check, then bundle
+scripts/go-test-group.sh mail  # one of the groups CI runs in parallel (see below)
 INSECURE=1 scripts/smoke.sh    # end-to-end against a running scripts/dev.sh
 scripts/commit-type_test.sh    # the commit message check
 actions/publish/publish_test.sh  # the GitHub Action against a real ownpaneld
@@ -69,5 +70,7 @@ Two channels, both built by `.github/workflows/release.yml` with `scripts/packag
 
 - **Nightly:** every push to `main` that changes something built into the archives (`cmd/`, `internal/`, `web/`, `go.mod`/`go.sum`, `install.sh`, `update.sh`, `deploy/`, `scripts/package.sh`, `Makefile`) rebuilds the prerelease `nightly`; pushes that only change documentation, the wiki or other workflows build nothing: the tag `nightly` moves to the new commit, the archives are replaced, the version is `nightly-YYYYMMDD-<commit>`. Never marked "latest".
 - **Stable:** releases are made from the long-lived branch `release`. To release, open a pull request `main → release` and merge it with a merge commit. The push to `release` starts the workflow: its `tag` job reads the commits since the last `v*` tag and computes the next version, `fix:`/`perf:` the patch, `feat:` the minor and `feat!:` (or a `BREAKING CHANGE:` line) the major version, and pushes the tag `v<version>`. The `release` job then builds and publishes it as the "latest" release, with notes listing the pull requests merged since the previous tag. A push without `feat:`, `fix:` or `perf:` commits releases nothing. The `commits` check on that pull request shows which release it will make.
+
+CI runs the Go tests in parallel jobs `go (<group>)`, one per group of `scripts/go-test-group.sh`: `internal/panel` split into shards by test name, `internal/mail/...`, and every other package. `go (vet)` checks formatting, runs `go vet` and checks that the groups together run every package and every panel test exactly once (`scripts/go-test-group.sh check`). The required check `go` passes when all of them passed or were skipped because no Go file changed. Adding a group means adding it to the script and to the matrix in `ci.yml`.
 
 Pull requests and pushes to `release` run CI like `main`. CI only runs the jobs whose files changed: on pull requests compared with the base branch, on pushes compared with the previous commit. If a stable release fails after its tag was pushed, use "Re-run failed jobs" on the run (re-running the `tag` job finds the tag and releases nothing). The workflow can also be started by hand: `dry-run` builds the archives without publishing (kept as a workflow artifact for 7 days), `nightly` publishes a nightly from `main` now.

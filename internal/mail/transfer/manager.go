@@ -769,6 +769,11 @@ func (m *Manager) scheduleLocked() {
 		if busy[j.StorageID] {
 			continue
 		}
+		// A file job is ready (and can be resumed) while its scan is still
+		// finishing; it starts when the scan has ended.
+		if _, ok := m.active[j.ID]; ok {
+			continue
+		}
 		if j.Kind == config.ImportIMAP {
 			if _, ok := m.passwords[j.ID]; !ok {
 				j.State = config.ImportInterrupted
@@ -798,7 +803,9 @@ func (m *Manager) startLocked(j config.ImportJob, scan bool) {
 			m.run(ctx, a, j)
 		}
 		m.mu.Lock()
-		delete(m.active, j.ID)
+		if m.active[j.ID] == a {
+			delete(m.active, j.ID)
+		}
 		m.scheduleLocked()
 		m.mu.Unlock()
 	}()
