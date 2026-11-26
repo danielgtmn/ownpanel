@@ -613,6 +613,13 @@ in the service. The same is said in [[Security|Security]].
   read state does not change. First `UID`, `FLAGS`, `INTERNALDATE`,
   `RFC822.SIZE` are fetched; messages over the message size limit are
   skipped without downloading. `\Deleted` messages are skipped.
+- **The other server is untrusted:** its answers are read as they come
+  (folder list at most 10 000 entries; per folder pass at most 2 000 000
+  new messages, the rest follows with the next repeat; flags and sizes in
+  batches of 500). Each step may receive a bounded number of bytes (16 MiB
+  for answers that are not a message, the message size limit plus 1 MiB
+  for a message), and the connection ends when nothing can be read or
+  written for 5 minutes.
 - Flags kept: `\Seen`, `\Answered`, `\Flagged`, `\Draft`, and keywords that
   are valid here (at most 50; `$Forwarded`, `$Junk`, `$NotJunk`, `$MDNSent`
   among them); invalid keywords are dropped, not the message.

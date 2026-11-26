@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,27 @@ const maxReconnects = 3
 // reconnectDelay is the pause before connecting again (tests shorten it).
 var reconnectDelay = 10 * time.Second
 
+// Bounds of what another server's answers may make the service hold.
+var (
+	// maxListed is the most LIST entries read (maxFolders are copied;
+	// \Noselect entries and the rest of a namespace may come on top).
+	maxListed = 10 * maxFolders
+	// maxFolderMessages is the most messages of one folder one pass
+	// looks at; a repeat goes on from the watermark.
+	maxFolderMessages = 2_000_000
+	// fetchBatch is how many messages' flags, dates and sizes are
+	// fetched at a time.
+	fetchBatch = 500
+)
+
+// Bytes per message the other server may send for a UID or for the
+// flags, date and size of a message (generous: real ones are about 30
+// and 150).
+const (
+	uidBytes  = 64
+	metaBytes = 4 << 10
+)
+
 // errConnLost: the connection to the other server broke; the job
 // connects again and goes on from the watermarks.
 type errConnLost struct{ err error }
@@ -29,6 +51,7 @@ type errConnLost struct{ err error }
 func (e *errConnLost) Error() string { return "the connection was lost: " + e.err.Error() }
 
 func (s *session) logout() {
+	s.lc.allow(controlBytes)
 	done := make(chan struct{})
 	go func() {
 		s.c.Logout().Wait()
@@ -44,6 +67,7 @@ func (s *session) logout() {
 // folders lists the folders of the account, with message counts and
 // sizes when counts is set.
 func (s *session) folders(counts bool) ([]sourceFolder, error) {
+	s.lc.allow(controlBytes)
 	caps := s.c.Caps()
 	prefix := ""
 	if caps.Has(imap.CapNamespace) || caps.Has(imap.CapIMAP4rev2) {
@@ -56,8 +80,18 @@ func (s *session) folders(counts bool) ([]sourceFolder, error) {
 			prefix = ns.Personal[0].Prefix
 		}
 	}
-	list, err := s.c.List("", "*", nil).Collect()
-	if err != nil {
+	s.lc.allow(controlBytes)
+	cmd := s.c.List("", "*", nil)
+	var list []*imap.ListData
+	for l := cmd.Next(); l != nil; l = cmd.Next() {
+		if len(list) >= maxListed {
+			// Not read to its end: the session is given up.
+			s.close()
+			return nil, remoteErr("%s lists more than %d folders", s.host, maxListed)
+		}
+		list = append(list, l)
+	}
+	if err := cmd.Close(); err != nil {
 		return nil, err
 	}
 	var out []sourceFolder
@@ -97,6 +131,7 @@ func (s *session) folders(counts bool) ([]sourceFolder, error) {
 // count fills in messages and bytes of a folder: STATUS (SIZE) where the
 // server has it, else the sizes of all messages.
 func (s *session) count(f *sourceFolder, caps imap.CapSet) error {
+	s.lc.allow(controlBytes)
 	if caps.Has(imap.CapStatusSize) || caps.Has(imap.CapIMAP4rev2) {
 		st, err := s.c.Status(f.remote, &imap.StatusOptions{NumMessages: true, Size: true}).Wait()
 		if err != nil {
@@ -118,14 +153,46 @@ func (s *session) count(f *sourceFolder, caps imap.CapSet) error {
 	if sel.NumMessages == 0 {
 		return nil
 	}
-	bufs, err := s.c.Fetch(imap.SeqSet{{Start: 1, Stop: 0}}, &imap.FetchOptions{RFC822Size: true}).Collect()
-	if err != nil {
-		return err
+	// Summed as the answers come, not collected.
+	s.lc.allow(controlBytes + int64(min(int(sel.NumMessages), maxFolderMessages))*metaBytes)
+	cmd := s.c.Fetch(imap.SeqSet{{Start: 1, Stop: 0}}, &imap.FetchOptions{RFC822Size: true})
+	for msg := cmd.Next(); msg != nil; msg = cmd.Next() {
+		for item := msg.Next(); item != nil; item = msg.Next() {
+			if sz, ok := item.(imapclient.FetchItemDataRFC822Size); ok {
+				f.bytes += sz.Size
+			}
+		}
 	}
-	for _, b := range bufs {
-		f.bytes += b.RFC822Size
+	return cmd.Close()
+}
+
+// uidsFrom returns the UIDs from from on of the selected folder, in
+// order, at most maxFolderMessages of them (more says whether there were
+// more). Only the UIDs are kept, not the answers.
+func (s *session) uidsFrom(from imap.UID, numMessages uint32) (uids []imap.UID, more bool, err error) {
+	s.lc.allow(controlBytes + int64(min(int(numMessages), maxFolderMessages))*uidBytes)
+	var set imap.UIDSet
+	set.AddRange(from, 0)
+	cmd := s.c.Fetch(set, &imap.FetchOptions{UID: true})
+	for msg := cmd.Next(); msg != nil; msg = cmd.Next() {
+		for item := msg.Next(); item != nil; item = msg.Next() {
+			u, ok := item.(imapclient.FetchItemDataUID)
+			// "n:*" also returns the last message when it is below n.
+			if !ok || u.UID < from {
+				continue
+			}
+			if len(uids) >= maxFolderMessages {
+				more = true
+				continue
+			}
+			uids = append(uids, u.UID)
+		}
 	}
-	return nil
+	if err := cmd.Close(); err != nil {
+		return nil, false, err
+	}
+	slices.Sort(uids)
+	return slices.Compact(uids), more, nil
 }
 
 func imapFlags(fs []imap.Flag) []string {
@@ -193,6 +260,9 @@ func (r *runner) imapErr(s *session, err error, doing string) error {
 	if r.ctx.Err() != nil {
 		return r.ctx.Err()
 	}
+	if s.lc.tooMuch() {
+		return remoteErr("%s on %s failed: %s", doing, s.host, errTooMuch)
+	}
 	if downloadLimited(err) {
 		return &errPaused{msg: s.host + " limits downloads for now (" + s.clean(err) + "); continue later, e.g. tomorrow"}
 	}
@@ -209,6 +279,7 @@ func (r *runner) copyIMAPFolder(s *session, f planned) error {
 	if err := r.ensureFolder(f.Local, f.SpecialUse, nil); err != nil {
 		return err
 	}
+	s.lc.allow(controlBytes)
 	sel, err := s.c.Select(f.Remote, &imap.SelectOptions{ReadOnly: true}).Wait()
 	if err != nil {
 		e := r.imapErr(s, err, "opening "+f.Remote)
@@ -233,28 +304,52 @@ func (r *runner) copyIMAPFolder(s *session, f planned) error {
 	if sel.NumMessages == 0 {
 		return r.endFolder()
 	}
-	var set imap.UIDSet
-	set.AddRange(from, 0)
-	bufs, err := s.c.Fetch(set, &imap.FetchOptions{UID: true, Flags: true, InternalDate: true, RFC822Size: true}).Collect()
+	uids, more, err := s.uidsFrom(from, sel.NumMessages)
 	if err != nil {
 		return r.imapErr(s, err, "reading "+f.Remote)
 	}
-	// "n:*" also returns the last message when it is below n.
-	bufs = slices.DeleteFunc(bufs, func(b *imapclient.FetchMessageBuffer) bool { return b.UID < from })
-	slices.SortFunc(bufs, func(a, b *imapclient.FetchMessageBuffer) int { return int(a.UID) - int(b.UID) })
-	for _, b := range bufs {
-		mark := &storage.Watermark{Host: r.j.Host, Username: r.j.Username, Folder: f.Remote, UIDValidity: sel.UIDValidity, LastUID: uint32(b.UID)}
-		done, err := r.copyIMAPMessage(s, f, b, mark)
+	// Flags, dates and sizes in batches, so the answers held at a time
+	// stay small however large the folder is.
+	for len(uids) > 0 {
+		batch := uids[:min(len(uids), fetchBatch)]
+		uids = uids[len(batch):]
+		bufs, err := s.metadata(batch)
 		if err != nil {
-			return err
+			return r.imapErr(s, err, "reading "+f.Remote)
 		}
-		if !done {
-			if err := st.RecordImported(context.WithoutCancel(r.ctx), sid, f.Local, nil, mark); err != nil {
+		for _, b := range bufs {
+			mark := &storage.Watermark{Host: r.j.Host, Username: r.j.Username, Folder: f.Remote, UIDValidity: sel.UIDValidity, LastUID: uint32(b.UID)}
+			done, err := r.copyIMAPMessage(s, f, b, mark)
+			if err != nil {
 				return err
+			}
+			if !done {
+				if err := st.RecordImported(context.WithoutCancel(r.ctx), sid, f.Local, nil, mark); err != nil {
+					return err
+				}
 			}
 		}
 	}
+	if more {
+		// The rest comes with the next repeat, from the watermark.
+		msg := "the folder has more than " + strconv.Itoa(maxFolderMessages) + " new messages; run the import again for the rest"
+		if err := r.fail(f.Remote, nil, msg); err != nil {
+			return err
+		}
+	}
 	return r.endFolder()
+}
+
+// metadata fetches UID, flags, date and size of the given messages, in
+// UID order.
+func (s *session) metadata(batch []imap.UID) ([]*imapclient.FetchMessageBuffer, error) {
+	s.lc.allow(controlBytes + int64(len(batch))*metaBytes)
+	bufs, err := s.c.Fetch(imap.UIDSetNum(batch...), &imap.FetchOptions{UID: true, Flags: true, InternalDate: true, RFC822Size: true}).Collect()
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(bufs, func(a, b *imapclient.FetchMessageBuffer) int { return int(a.UID) - int(b.UID) })
+	return bufs, nil
 }
 
 // copyIMAPMessage copies one message; done tells whether the watermark
@@ -268,6 +363,11 @@ func (r *runner) copyIMAPMessage(s *session, f planned, b *imapclient.FetchMessa
 	}
 	if err := r.beforeWrite(b.RFC822Size); err != nil {
 		return false, err
+	}
+	if r.maxSize > 0 {
+		s.lc.allow(r.maxSize + bodySlack)
+	} else {
+		s.lc.allow(-1)
 	}
 	cmd := s.c.Fetch(imap.UIDSetNum(b.UID), &imap.FetchOptions{
 		UID:         true,
