@@ -29,14 +29,14 @@ Version ids come from `get_site`; a version id starts with a UTC timestamp. Erro
 
 | Tool | Arguments | What it does |
 |---|---|---|
-| `list_sites` | none | Lists the sites you can manage, sorted by name. For each: name, domains, owner, id of the live version, all kept versions (newest first, each with `id`, `created_at`, `live`). |
+| `list_sites` | none | Lists the sites you can manage, sorted by name. For each: name, domains, owner, id of the live version, all kept versions (newest first, each with `id`, `created_at`, `live`, `never_live` and `preview_url`, the address where the version can be opened, empty without a domain for previews). |
 | `get_site` | `site` | Shows one site in the same form. |
 | `create_site` | `name`, `domains` (optional list) | Creates a new, empty site you own. Fails if the name or a domain is taken. Nothing is served until something is published. Needs a `write` token that is not limited to sites. |
 | `set_site_domains` | `name`, `domains` | Replaces the whole domain list of an existing site. Domains not listed stop being served. Safe to repeat. |
 | `delete_site` | `name`, `confirm_name` | Permanently deletes the site with all its files and versions. `confirm_name` must equal `name`, otherwise nothing happens. Needs a `write` token that is not limited to sites. |
-| `publish_files` | `site`, `files` | Publishes files given directly as a new live version, replacing the previous version completely. The site must exist. See below. |
-| `create_upload_link` | `site` | Creates a one-time upload link for a `.zip` or `.tar.gz` of up to 512 MB. Returns `url`, `curl_command`, `expires_at`, `max_size_mb`. |
-| `make_version_live` | `site`, `version` (optional) | Switches to a kept version; without `version`, back to the version before the live one. Safe to repeat. |
+| `publish_files` | `site`, `files`, `live` (optional, default `true`) | Publishes files given directly as a new version, replacing the previous version completely. With `live: false` the live version stays and the new one can be checked at its preview address first. Returns `site`, `version`, `live` and `preview_url`. The site must exist. See below. |
+| `create_upload_link` | `site`, `live` (optional, default `true`) | Creates a one-time upload link for a `.zip` or `.tar.gz` of up to 512 MB; with `live: false` the uploaded version is not made live. Returns `url`, `curl_command`, `expires_at`, `max_size_mb`. |
+| `make_version_live` | `site`, `version` (optional) | Switches to a kept version, also one published with `live: false`; without `version`, back to the last version before the live one that was live itself. Safe to repeat. |
 | `check_site_domains` | `site` | For each domain: `domain`, `state` (`points_here`, `points_elsewhere`, `no_record`, `lookup_failed`) and `found` (addresses it points to). Needs `-server-ip` to be configured; see [[DNS|DNS]]. |
 | `list_redirects` | `site` (optional) | Lists the redirects you can see, or only the path redirects of one site. Each with `id`, `owner`, `source_domain`, `source_path`, `target`, `code`, `keep_path`, `keep_query`, `created_at`. Read-only. See [[Redirects|Redirects]]. |
 | `set_redirect` | `id` (optional), `source_domain`, `source_path` (optional), `target`, `code` (optional, default 301), `keep_path`, `keep_query` (optional) | Creates a redirect, or replaces the one with `id`. Without `source_path` the whole domain redirects; with it, one path (`/old`) or a prefix (`/blog/*`) on a domain of one of your sites. Returns the redirect. |
