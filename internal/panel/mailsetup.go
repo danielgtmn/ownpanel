@@ -12,6 +12,7 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/caddy"
 	"github.com/danielgtmn/ownpanel/internal/dns"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/mailsetup"
 	"github.com/danielgtmn/ownpanel/internal/store"
 )
 
@@ -191,7 +192,7 @@ func (s *Service) mailSetupCaddy(ctx context.Context, o *caddy.Options, sites []
 		return err
 	}
 	reserved := map[string]bool{host: true, o.PanelDomain: true}
-	claimedBy := map[string]int64{} // name -> owner of the site or domain redirect
+	claimedBy := map[string]string{} // name -> owner of the site or domain redirect
 	for _, site := range sites {
 		for _, d := range site.Domains {
 			claimedBy[d] = site.OwnerID
@@ -229,8 +230,14 @@ type MailClientSetup struct {
 	Client MailClientSettings `json:"client"`
 }
 
+// clientSettings are the settings for programs; calendars and contacts
+// only when the mail host serves them (mailWeb).
 func (s *Service) clientSettings(host string) MailClientSettings {
-	return MailClientSettings{Server: host, IMAPPort: 993, SMTPPort: 465, SMTPStartTLS: 587, UserNameIsEmail: true}
+	c := mailsetup.Settings(host)
+	if host == s.MailHost() && s.selfServiceProblem() == "" {
+		c = c.WithDAV()
+	}
+	return c
 }
 
 // errNoMailSetup is the answer of the public setup for everything that is
@@ -265,7 +272,7 @@ type MailboxSetup struct {
 
 // MailboxSetupOf returns the settings for mail programs of a mailbox
 // (whoever may see the mailbox; no password, nothing secret).
-func (s *Service) MailboxSetupOf(ctx context.Context, a Actor, id int64) (MailboxSetup, error) {
+func (s *Service) MailboxSetupOf(ctx context.Context, a Actor, id string) (MailboxSetup, error) {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return MailboxSetup{}, err

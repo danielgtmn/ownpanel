@@ -8,40 +8,43 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danielgtmn/sesam"
+	"github.com/danielgtmn/sesam/v2"
 
 	"github.com/danielgtmn/ownpanel/internal/store"
 )
 
 // oldUser writes a user and a session the way the panel stored them before
 // sesam: password hash and sessions in its own tables, no auth user.
-func oldUser(t *testing.T, st *store.Store, name, password string, sessionSecret string, now time.Time) int64 {
+func oldUser(t *testing.T, st *store.Store, name, password string, sessionSecret string, now time.Time) string {
 	t.Helper()
 	hash, err := hashPassword(password) // same argon2id format as before
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := st.DB().Exec(`INSERT INTO users (name, password_hash, role, created_at) VALUES (?, ?, 'admin', ?)`, name, hash, now.Unix())
+	u, err := st.AddUnmovedUser(context.Background(), name, hash, store.RoleAdmin)
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, _ := res.LastInsertId()
 	if sessionSecret != "" {
-		if _, err := st.DB().Exec(`INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
-			sha256Hex(sessionSecret), id, now.Add(-time.Hour).Unix(), now.Add(SessionIdleTimeout).Unix()); err != nil {
+		if err := st.AddOldSession(context.Background(), u.ID, store.OldSession{
+			ID: sha256Hex(sessionSecret), CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(SessionIdleTimeout)}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	return id
+	return u.ID
 }
 
 func TestMoveUsersToAuth(t *testing.T) {
-	svc, _, _ := newEmptyService(t)
+	eachStore(t, testMoveUsersToAuth)
+}
+
+func testMoveUsersToAuth(t *testing.T, open openStore) {
+	svc, _, _ := newEmptyServiceOn(t, open)
 	clk := withClock(svc)
 	ctx := context.Background()
 	st := svc.store
 	rootID := oldUser(t, st, "root", "root-password-1", "root-cookie", clk.t)
-	oldUser(t, st, "anna", "anna-password-1", "", clk.t)
+	annaID := oldUser(t, st, "anna", "anna-password-1", "", clk.t)
 	tok, err := svc.CreateToken(ctx, Actor{UserID: rootID, Name: "root", Admin: true, Via: ViaSession}, "ci", "write", nil, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -83,11 +86,10 @@ func TestMoveUsersToAuth(t *testing.T) {
 	if un, _ := st.UnmovedUsers(ctx); len(un) != 0 {
 		t.Fatalf("unmoved: %+v", un)
 	}
-	var hashes, oldSessions int
-	st.DB().QueryRow(`SELECT count(*) FROM users WHERE password_hash != ''`).Scan(&hashes)
-	st.DB().QueryRow(`SELECT count(*) FROM sessions`).Scan(&oldSessions)
-	if hashes != 0 || oldSessions != 0 {
-		t.Fatalf("%d hashes and %d sessions left in the old tables", hashes, oldSessions)
+	for _, id := range []string{rootID, annaID} {
+		if old, err := st.OldSessions(ctx, id, time.Time{}); err != nil || len(old) != 0 {
+			t.Fatalf("sessions left in the old table: %+v %v", old, err)
+		}
 	}
 	if _, err := svc.auth.User(ctx, stray.ID); !errors.Is(err, sesam.ErrNotFound) {
 		t.Fatalf("leftover sesam user kept: %v", err)
@@ -112,7 +114,7 @@ func TestMoveUsersToAuth(t *testing.T) {
 func TestMoveUserWithUnusableHash(t *testing.T) {
 	svc, _, _ := newEmptyService(t)
 	ctx := context.Background()
-	if _, err := svc.store.DB().Exec(`INSERT INTO users (name, password_hash, role, created_at) VALUES ('root', 'not-a-hash', 'admin', 1)`); err != nil {
+	if _, err := svc.store.AddUnmovedUser(ctx, "root", "not-a-hash", store.RoleAdmin); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.moveUsersToAuth(ctx); err != nil {
@@ -122,7 +124,7 @@ func TestMoveUserWithUnusableHash(t *testing.T) {
 		t.Fatalf("unmoved: %+v", un)
 	}
 	pw := "a-new-password"
-	if _, err := svc.UpdateUser(ctx, admin, 1, UserUpdate{Password: &pw}); err != nil {
+	if _, err := svc.UpdateUser(ctx, admin, "1", UserUpdate{Password: &pw}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := svc.Login(ctx, Credentials{Name: "root", Password: pw}); err != nil {
@@ -159,7 +161,15 @@ func TestUserEmail(t *testing.T) {
 	// The person changes it on their own account; tokens cannot.
 	_, secret, _ := svc.Login(ctx, Credentials{Name: "alice", Password: "alice-password-1", ClientIP: "1.2.3.4"})
 	a, _ := svc.SessionActor(ctx, secret)
-	me, err := svc.SetOwnEmail(ctx, a, "a@example.net")
+	// It needs the current password; a wrong one changes nothing.
+	_, err = svc.SetOwnEmail(ctx, a, "", "a@example.net")
+	wantKind(t, err, Invalid)
+	_, err = svc.SetOwnEmail(ctx, a, "wrong-password-1", "a@example.net")
+	wantKind(t, err, Invalid)
+	if got, _ := svc.Me(ctx, a); got.Email != "alice@example.org" {
+		t.Fatalf("changed with a wrong password: %+v", got)
+	}
+	me, err := svc.SetOwnEmail(ctx, a, "alice-password-1", "a@example.net")
 	if err != nil || me.Email != "a@example.net" {
 		t.Fatalf("%+v %v", me, err)
 	}
@@ -168,7 +178,7 @@ func TestUserEmail(t *testing.T) {
 	}
 	nt, _ := svc.CreateToken(ctx, a, "ci", "write", nil, 0)
 	tokActor, _ := svc.TokenActor(ctx, nt.Secret)
-	_, err = svc.SetOwnEmail(ctx, tokActor, "x@example.net")
+	_, err = svc.SetOwnEmail(ctx, tokActor, "alice-password-1", "x@example.net")
 	wantKind(t, err, Forbidden)
 
 	// Admins change and remove it.
@@ -271,6 +281,10 @@ func TestPasswordReset(t *testing.T) {
 	if err := svc.ResetPassword(ctx, token, "alice-password-2"); err != nil {
 		t.Fatal(err)
 	}
+	// The activity log names the person, like a sign-in.
+	if acts, _ := svc.Activities(ctx, admin, 1); acts[0].Action != "account.password_reset" || acts[0].Actor != "alice" || acts[0].Target != "alice" {
+		t.Fatalf("%+v", acts[0])
+	}
 	// The link works once; old sessions and the old password end.
 	err := svc.ResetPassword(ctx, token, "alice-password-3")
 	wantKind(t, err, Invalid)
@@ -341,5 +355,38 @@ func TestPasswordResetUnavailable(t *testing.T) {
 	wantKind(t, w.svc.RequestPasswordReset(ctx, "alice@example.net", "1.2.3.4"), NotFound)
 	if len(w.mail.sent) != 0 {
 		t.Fatal("mail sent")
+	}
+}
+
+func TestOwnEmailNeedsThePassword(t *testing.T) {
+	svc, _, _ := newService(t)
+	withClock(svc)
+	ctx := context.Background()
+	if _, err := svc.CreateUser(ctx, admin, NewUser{Name: "alice", Password: "alice-password-1", Role: "member"}); err != nil {
+		t.Fatal(err)
+	}
+	_, secret, _ := svc.Login(ctx, Credentials{Name: "alice", Password: "alice-password-1", ClientIP: "1.2.3.4"})
+	a, _ := svc.SessionActor(ctx, secret)
+
+	// Wrong guesses count per person, like changing the password.
+	for i := 0; i < loginMaxPerName; i++ {
+		_, err := svc.SetOwnEmail(ctx, a, "wrong-password-1", "a@example.net")
+		wantKind(t, err, Invalid)
+	}
+	_, err := svc.SetOwnEmail(ctx, a, "alice-password-1", "a@example.net")
+	wantKind(t, err, Throttled)
+	wantKind(t, svc.ChangePassword(ctx, a, "alice-password-1", "alice-password-2"), Throttled)
+
+	// An invalid address is reported before the password is checked.
+	_, err = svc.SetOwnEmail(ctx, a, "", "not an address")
+	wantKind(t, err, Invalid)
+	if !strings.Contains(err.Error(), "valid e-mail address") {
+		t.Fatalf("message %q", err)
+	}
+
+	// Admins change other people's addresses without a password.
+	e := "alice@example.org"
+	if _, err := svc.UpdateUser(ctx, admin, a.UserID, UserUpdate{Email: &e}); err != nil {
+		t.Fatal(err)
 	}
 }

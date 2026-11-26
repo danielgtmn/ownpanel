@@ -35,8 +35,8 @@ describe('buildFamilies', () => {
   it('collects sites, zones and redirects per registrable domain', () => {
     const families = buildFamilies({
       sites: [{ name: 'blog', domains: ['blog.example.com', 'www.example.com'], live: true }],
-      zones: [{ connectionId: 1, connectionName: 'Hetzner', name: 'example.com' }],
-      redirects: [{ id: 7, source: 'Go.Example.com', target: 'https://example.org' }],
+      zones: [{ connectionId: '1', connectionName: 'Hetzner', name: 'example.com' }],
+      redirects: [{ id: '7', source: 'Go.Example.com', target: 'https://example.org' }],
     })
     expect(families).toHaveLength(1)
     const [family] = families
@@ -45,7 +45,7 @@ describe('buildFamilies', () => {
       { name: 'blog', live: true, domains: ['blog.example.com', 'www.example.com'], otherFamilies: [] },
     ])
     expect(family.zones).toHaveLength(1)
-    expect(family.redirects).toEqual([{ id: 7, source: 'go.example.com', target: 'https://example.org' }])
+    expect(family.redirects).toEqual([{ id: '7', source: 'go.example.com', target: 'https://example.org' }])
     expect(family).not.toHaveProperty('panelDomain')
     expect(family.servedDomains).toEqual(['blog.example.com', 'go.example.com', 'www.example.com'])
   })
@@ -66,9 +66,25 @@ describe('buildFamilies', () => {
   })
 
   it('makes a family of a DNS domain nothing runs on yet', () => {
-    const [family] = buildFamilies({ ...empty, zones: [{ connectionId: 2, connectionName: 'Work', name: 'idle.net' }] })
+    const [family] = buildFamilies({ ...empty, zones: [{ connectionId: '2', connectionName: 'Work', name: 'idle.net' }] })
     expect(family.domain).toBe('idle.net')
     expect(family.servedDomains).toEqual([])
+  })
+
+  it('makes a family of a domain added by hand, whose DNS is managed elsewhere', () => {
+    const families = buildFamilies({
+      ...empty,
+      sites: [{ name: 'blog', domains: ['blog.example.com'], live: true }],
+      domains: ['Elsewhere.ORG.', 'example.com', 'elsewhere.org'],
+    })
+    expect(families.map((family) => [family.domain, family.added])).toEqual([
+      ['elsewhere.org', ['elsewhere.org']],
+      ['example.com', ['example.com']],
+    ])
+    const [alone] = families
+    expect(familyStatus(alone, {})).toBe('idle')
+    expect(familySummary(alone)).toBe('DNS managed elsewhere')
+    expect(families[1].sites.map((site) => site.name)).toEqual(['blog'])
   })
 
   it('never makes a family of the panel address', () => {
@@ -86,7 +102,7 @@ describe('familyStatus', () => {
   const [family] = buildFamilies({
     ...empty,
     sites: [{ name: 'blog', domains: ['example.com', 'www.example.com'], live: true }],
-    redirects: [{ id: 1, source: 'go.example.com', target: 'https://x.org' }],
+    redirects: [{ id: '1', source: 'go.example.com', target: 'https://x.org' }],
   })
 
   it('is ok when every domain points here and every site is live', () => {
@@ -127,7 +143,7 @@ describe('familyStatus', () => {
   })
 
   it('is idle when nothing runs on the family', () => {
-    const [zoneOnly] = buildFamilies({ ...empty, zones: [{ connectionId: 1, connectionName: 'H', name: 'idle.net' }] })
+    const [zoneOnly] = buildFamilies({ ...empty, zones: [{ connectionId: '1', connectionName: 'H', name: 'idle.net' }] })
     expect(familyStatus(zoneOnly, {})).toBe('idle')
   })
 })
@@ -138,10 +154,10 @@ describe('labels', () => {
       ...empty,
       sites: [{ name: 'blog', domains: ['example.com'], live: true }],
       redirects: [
-        { id: 1, source: 'a.example.com', target: 'https://x.org' },
-        { id: 2, source: 'b.example.com', target: 'https://x.org' },
+        { id: '1', source: 'a.example.com', target: 'https://x.org' },
+        { id: '2', source: 'b.example.com', target: 'https://x.org' },
       ],
-      zones: [{ connectionId: 1, connectionName: 'H', name: 'example.com' }],
+      zones: [{ connectionId: '1', connectionName: 'H', name: 'example.com' }],
     })
     expect(familySummary(family)).toBe('1 site · 2 redirects · DNS managed here')
   })
@@ -198,7 +214,7 @@ describe('families with e-mail', () => {
   })
 
   it('works without mail data', () => {
-    const [family] = buildFamilies({ ...empty, zones: [{ connectionId: 1, connectionName: 'x', name: 'example.org' }] })
+    const [family] = buildFamilies({ ...empty, zones: [{ connectionId: '1', connectionName: 'x', name: 'example.org' }] })
     expect(family.mailDomains).toEqual([])
     expect(familyStatus(family, {})).toBe('idle')
   })

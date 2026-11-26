@@ -12,7 +12,7 @@ import (
 )
 
 type redirectInfo struct {
-	ID           int64  `json:"id" jsonschema:"redirect id; pass it to set_redirect to change the redirect or to delete_redirect"`
+	ID           string `json:"id" jsonschema:"redirect id; pass it to set_redirect to change the redirect or to delete_redirect"`
 	Owner        string `json:"owner" jsonschema:"user the redirect belongs to (for path redirects: the site's owner)"`
 	SourceDomain string `json:"source_domain" jsonschema:"domain the redirect applies to"`
 	SourcePath   string `json:"source_path" jsonschema:"empty for a whole-domain redirect; otherwise an exact path like /old or a prefix like /blog/*"`
@@ -39,7 +39,7 @@ type redirectsOutput struct {
 }
 
 type setRedirectInput struct {
-	ID           int64  `json:"id,omitempty" jsonschema:"id of an existing redirect to replace; leave empty (or 0) to create a new redirect"`
+	ID           string `json:"id,omitempty" jsonschema:"id of an existing redirect to replace; leave empty to create a new redirect"`
 	SourceDomain string `json:"source_domain" jsonschema:"domain to redirect from, e.g. www.example.com"`
 	SourcePath   string `json:"source_path,omitempty" jsonschema:"leave empty to redirect the whole domain (which must not belong to a site); otherwise an exact path like /old.html or a prefix like /blog/* on a domain of one of your sites"`
 	Target       string `json:"target" jsonschema:"where to send visitors: a full address like https://example.com, or for path redirects also a path like /new.html"`
@@ -53,7 +53,7 @@ type redirectOutput struct {
 }
 
 type deleteRedirectInput struct {
-	ID            int64  `json:"id" jsonschema:"id of the redirect to delete, from list_redirects"`
+	ID            string `json:"id" jsonschema:"id of the redirect to delete, from list_redirects"`
 	ConfirmSource string `json:"confirm_source" jsonschema:"the redirect's source_domain followed directly by its source_path, e.g. www.example.com or example.com/old; confirms which redirect is deleted"`
 }
 
@@ -107,7 +107,7 @@ func addRedirectTools(s *sdk.Server, p *panel.Service) {
 		}
 		var r panel.Redirect
 		var err error
-		if in.ID > 0 {
+		if in.ID != "" {
 			r, err = p.UpdateRedirect(ctx, c.actor, in.ID, ri)
 		} else {
 			r, err = p.CreateRedirect(ctx, c.actor, ri)

@@ -72,6 +72,16 @@ type manifest struct {
 	Format  string           `json:"format"`
 	Version int              `json:"version"`
 	Folders []manifestFolder `json:"folders"`
+	// DAV lists the calendars and address books in the zip; the import of
+	// mail skips exactly these entries.
+	DAV []manifestDAV `json:"dav,omitempty"`
+}
+
+// manifestDAV is a calendar (.ics) or address book (.vcf) in the zip.
+type manifestDAV struct {
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+	Path string `json:"path"`
 }
 
 type manifestFolder struct {
@@ -182,10 +192,16 @@ func openZip(f *os.File, size, declared int64) (*fileSource, error) {
 		}
 	}
 	byPath := map[string]manifestFolder{}
+	davPaths := map[string]bool{}
 	src.ownExport = man != nil
 	if man != nil {
 		for _, mf := range man.Folders {
 			byPath[mf.Path] = mf
+		}
+		for _, d := range man.DAV {
+			if _, isFolder := byPath[d.Path]; !isFolder {
+				davPaths[d.Path] = true
+			}
 		}
 	}
 	var total uint64
@@ -198,7 +214,7 @@ func openZip(f *os.File, size, declared int64) (*fileSource, error) {
 		}
 		base := path.Base(name)
 		if strings.HasPrefix(name, "__MACOSX/") || strings.HasPrefix(base, "._") || base == ".DS_Store" ||
-			man != nil && name == "manifest.json" {
+			man != nil && (name == "manifest.json" || davPaths[zf.Name]) {
 			continue
 		}
 		if !safeName(name) {

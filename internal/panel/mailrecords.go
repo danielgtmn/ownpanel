@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/danielgtmn/ownpanel/internal/dns"
+	"github.com/danielgtmn/ownpanel/internal/mailsetup"
 	"github.com/danielgtmn/ownpanel/internal/store"
 )
 
@@ -27,6 +28,14 @@ import (
 //	SRV   _imaps._tcp            0 1 993 <mail_host>.   replaced
 //	CNAME autoconfig             <mail_host>.           optional; replaced only if a CNAME
 //	CNAME autodiscover           <mail_host>.           optional; replaced only if a CNAME
+//	SRV   _caldavs._tcp          0 1 443 <mail_host>.   optional; replaced (calendars)
+//	TXT   _caldavs._tcp          path=/dav/             optional; replaced
+//	SRV   _carddavs._tcp         0 1 443 <mail_host>.   optional; replaced (contacts)
+//	TXT   _carddavs._tcp         path=/dav/             optional; replaced
+//
+// The last four only when the mail host serves calendars and contacts
+// (mailWeb, wiki/Groupware-Architecture.md G4a): calendar and contacts
+// programs look them up at the address's domain (RFC 6764).
 //
 // Other TXT values at @ are always kept. An SPF record that cannot be
 // merged safely (several SPF records, +all/?all, more than 10 lookups) is
@@ -51,6 +60,11 @@ const (
 	MailRecordSRVIMAPS       = "srv-imaps"
 	MailRecordAutoconfig     = "autoconfig"
 	MailRecordAutodiscover   = "autodiscover"
+	// Discovery of calendars and contacts (RFC 6764).
+	MailRecordSRVCalDAV  = "srv-caldav"
+	MailRecordTXTCalDAV  = "txt-caldav"
+	MailRecordSRVCardDAV = "srv-carddav"
+	MailRecordTXTCardDAV = "txt-carddav"
 	// MailRecordHostSPF is the SPF record of the mail host itself.
 	MailRecordHostSPF = "mail-host-spf"
 )
@@ -112,7 +126,7 @@ type MailRecords struct {
 	MailHost     string       `json:"mail_host"`
 	Records      []MailRecord `json:"records"`
 	CanApply     bool         `json:"can_apply"`
-	ConnectionID int64        `json:"connection_id"`
+	ConnectionID string       `json:"connection_id"`
 	Zone         string       `json:"zone"`
 	// ApplyNote says why the records cannot be applied here; empty when
 	// they can.
@@ -169,14 +183,27 @@ func (s *Service) mailRecordSpecs(ctx context.Context, domain, host string) ([]m
 			break
 		}
 	}
-	return append(specs,
+	specs = append(specs,
 		mailRecordSpec{kind: MailRecordDMARC, typ: "TXT", sub: "_dmarc", want: defaultDMARC},
 		mailRecordSpec{kind: MailRecordSRVSubmissions, typ: "SRV", sub: "_submissions._tcp", want: "0 1 465 " + host + "."},
 		mailRecordSpec{kind: MailRecordSRVIMAPS, typ: "SRV", sub: "_imaps._tcp", want: "0 1 993 " + host + "."},
 		mailRecordSpec{kind: MailRecordAutoconfig, typ: "CNAME", sub: "autoconfig", want: host + ".", optional: true},
 		mailRecordSpec{kind: MailRecordAutodiscover, typ: "CNAME", sub: "autodiscover", want: host + ".", optional: true},
-	), nil
+	)
+	if s.selfServiceProblem() == "" {
+		specs = append(specs,
+			mailRecordSpec{kind: MailRecordSRVCalDAV, typ: "SRV", sub: "_caldavs._tcp", want: "0 1 443 " + host + ".", optional: true},
+			mailRecordSpec{kind: MailRecordTXTCalDAV, typ: "TXT", sub: "_caldavs._tcp", want: davPathTXT, optional: true},
+			mailRecordSpec{kind: MailRecordSRVCardDAV, typ: "SRV", sub: "_carddavs._tcp", want: "0 1 443 " + host + ".", optional: true},
+			mailRecordSpec{kind: MailRecordTXTCardDAV, typ: "TXT", sub: "_carddavs._tcp", want: davPathTXT, optional: true},
+		)
+	}
+	return specs, nil
 }
+
+// davPathTXT tells calendar and contacts programs where to start on the
+// mail host (RFC 6764 section 4).
+const davPathTXT = "path=" + mailsetup.DAVPath
 
 // hostSPFSpec is the SPF record of the mail host (relative to the mail
 // host itself).
@@ -432,18 +459,33 @@ func judge(spec mailRecordSpec, host string, found []string) judgement {
 			j.want = ""
 			j.status, j.note = RecordConflict, "There are several DMARC records; receivers then ignore all of them. Keep only one by hand."
 		}
-	case MailRecordSRVSubmissions, MailRecordSRVIMAPS:
-		port := "465"
-		if spec.kind == MailRecordSRVIMAPS {
+	case MailRecordSRVSubmissions, MailRecordSRVIMAPS, MailRecordSRVCalDAV, MailRecordSRVCardDAV:
+		port, who := "465", "Mail programs"
+		switch spec.kind {
+		case MailRecordSRVIMAPS:
 			port = "993"
+		case MailRecordSRVCalDAV, MailRecordSRVCardDAV:
+			port, who = "443", "Calendar and contacts programs"
 		}
 		switch {
 		case srvPointsHere(found, host, port):
 			j.status = RecordOK
 		case len(found) == 0:
-			j.status, j.note = RecordMissing, "Mail programs use this record to find the server by themselves."
+			j.status, j.note = RecordMissing, who+" use this record to find the server by themselves."
 		default:
-			j.status, j.note = RecordDifferent, "This record points mail programs to another server; it is replaced."
+			j.status, j.note = RecordDifferent, "This record points "+strings.ToLower(who[:1])+who[1:]+" to another server; it is replaced."
+		}
+		if j.status != RecordOK {
+			j.values = []string{spec.want}
+		}
+	case MailRecordTXTCalDAV, MailRecordTXTCardDAV:
+		switch {
+		case len(found) == 1 && strings.TrimSpace(found[0]) == spec.want:
+			j.status = RecordOK
+		case len(found) == 0:
+			j.status, j.note = RecordMissing, "Calendar and contacts programs read here where on the server to start."
+		default:
+			j.status, j.note = RecordDifferent, "This record sends calendar and contacts programs elsewhere on the server; it is replaced."
 		}
 		if j.status != RecordOK {
 			j.values = []string{spec.want}
@@ -736,6 +778,7 @@ func planMailRecords(specs []mailRecordSpec, host, domain, zone string, sets []d
 			write = &dns.RecordSet{Name: name, Type: spec.typ, Values: append(slices.Clone(others), j.values...)}
 		default:
 			c.Old, c.New = nonNil(old), j.values
+			c.Optional = spec.optional
 			c.Action = ChangeCreate
 			if existing != nil {
 				c.Action = ChangeReplace
@@ -861,7 +904,7 @@ func (s *Service) SetUpMailRecords(ctx context.Context, a Actor, domain string, 
 	if err != nil {
 		return MailRecordChanges{}, err
 	}
-	if note != "" && m.conn.ID == 0 {
+	if note != "" && m.conn.ID == "" {
 		return MailRecordChanges{}, errorf(Conflict, "%s", strings.TrimSuffix(note, "."))
 	}
 	specs, err := s.mailRecordSpecs(ctx, md.Domain, host)
@@ -903,7 +946,7 @@ func (s *Service) SetUpMailHostSPF(ctx context.Context, a Actor) (MailRecordChan
 	if err != nil {
 		return MailRecordChanges{}, err
 	}
-	if note != "" && m.conn.ID == 0 {
+	if note != "" && m.conn.ID == "" {
 		return MailRecordChanges{}, errorf(Conflict, "%s", strings.TrimSuffix(strings.Replace(note, "The domain's zone", "The zone of the mail server's name", 1), "."))
 	}
 	res, _, err := s.writeMailRecords(ctx, a, m, []mailRecordSpec{hostSPFSpec}, host, host, true, "mail.host-spf.set", host)

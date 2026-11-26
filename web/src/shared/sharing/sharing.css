@@ -1,0 +1,94 @@
+/* Rights of a shared mailbox (RightsChoice) and the lists of who has access. */
+
+.rights-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.rights-choice legend {
+  margin-bottom: 0.5rem;
+  padding: 0;
+  font-weight: 500;
+}
+
+.rights-choice-item[data-slot='field'] {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.rights-choice-item > [data-slot='checkbox'] {
+  flex: none;
+  margin-top: 0.125rem;
+}
+
+.rights-choice .form-error {
+  margin: 0;
+}
+
+/* A bordered list of people or mailboxes with access, one per row. */
+.access-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  list-style: none;
+}
+
+.access-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem;
+  min-width: 0;
+}
+
+.access-item + .access-item {
+  border-top: 1px solid var(--ui-border);
+}
+
+.access-item-main {
+  display: flex;
+  flex: 1 1 14rem;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.access-item-main > strong {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+}
+
+.access-item .record-actions {
+  flex: none;
+}
+
+.access-off {
+  margin: 0;
+  color: light-dark(oklch(0.45 0.1 70), oklch(0.88 0.12 85));
+  font-size: 0.875rem;
+}
+
+.access-empty {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+@media (max-width: 480px) {
+  .access-item .record-actions {
+    width: 100%;
+  }
+}

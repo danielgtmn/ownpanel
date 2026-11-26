@@ -89,6 +89,43 @@ function describeImport(detail: string): string {
   return parts.join(' · ')
 }
 
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+// "stands alone" or "into Acme with a.org, b.org (domains of different owners)" from the panel.
+function describeDomainOrganisation(detail: string): string {
+  if (detail === 'stands alone') return 'Stands alone'
+  const match = /^into (.+?)(?: with (.+?))?( \(domains of different owners\))?$/.exec(detail)
+  if (!match) return capitalize(detail)
+  const parts = [`Now part of ${match[1]}`]
+  if (match[2]) parts.push(`Together with ${match[2]}`)
+  if (match[3]) parts.push('Domains of different owners')
+  return parts.join(' · ')
+}
+
+// A change the mailbox reported may end with "(not taken: <why>)": the
+// panel changed the same thing at the same time and its change won.
+function describeMailboxReport(detail: string, describe: (main: string) => string): string {
+  const match = /^(.*?)\s*\(not taken: (.+)\)$/.exec(detail)
+  const main = describe(match ? match[1] : detail)
+  if (!match) return main
+  const why = match[2] === 'changed in the panel at the same time' ? 'it was changed in the panel at the same time' : match[2]
+  return main ? `${main} · Not taken: ${why}` : `Not taken: ${why}`
+}
+
+// "now Anna Muster" or "removed".
+function describeDisplayName(main: string): string {
+  if (main === 'removed') return 'Removed'
+  return main.replace(/^now /, 'Now ')
+}
+
+function describeAppPasswordsOnly(main: string): string {
+  if (main === 'on') return 'Only app passwords work in mail programs'
+  if (main === 'off') return 'The mailbox password works in mail programs again'
+  return main
+}
+
 export function describeDetail({ action, detail }: Pick<Activity, 'action' | 'detail'>): string {
   if (!detail) return ''
   switch (action) {
@@ -161,9 +198,28 @@ export function describeDetail({ action, detail }: Pick<Activity, 'action' | 'de
         .replace(/^was (\S+); /, 'Was $1 · ')
         .replace(/(^|· )to /, (_, start: string) => `${start}To `)
         .replace(/\*@/g, 'all other addresses @')
+    case 'mail.organisation.rename':
+    case 'mail.organisation.delete':
+      return capitalize(detail)
+    case 'mail.domain.organisation':
+      return describeDomainOrganisation(detail)
+    case 'mail.mailbox.display-name':
+    case 'mail.mailbox.display-name-changed':
+      return describeMailboxReport(detail, describeDisplayName)
+    case 'mail.mailbox.app-passwords-only':
+      return describeMailboxReport(detail, describeAppPasswordsOnly)
+    case 'mail.mailbox.password-changed':
+    case 'mail.mailbox.app-password-created':
+    case 'mail.mailbox.app-password-revoked':
+      return describeMailboxReport(detail, (main) => main)
     default:
       return detail
   }
+}
+
+// A change the mailbox made itself has the mailbox's address as actor and target.
+function bySelf(actor: string, target: string): boolean {
+  return actor !== '' && actor === target
 }
 
 // "*@example.com" is the forwarding of every other address.
@@ -207,7 +263,9 @@ export function describeActivity({ actor, action, target }: Entry): string {
     case 'account.email':
       return `${who} changed their e-mail address`
     case 'account.password_reset':
-      return 'Someone chose a new password with a link sent by e-mail'
+      // Entries from before the person was named have the actor "reset link".
+      if (actor === 'reset link') return 'Someone chose a new password with a link sent by e-mail'
+      return `${who} chose a new password with a link sent by e-mail`
     case 'account.password_reset_failed':
       return 'A link to choose a new password could not be sent'
     case 'setup':
@@ -306,6 +364,40 @@ export function describeActivity({ actor, action, target }: Entry): string {
       )
     case 'mail.delivery.not-forwarded':
       return about(target, (t) => `Mail to ${mailAddress(t)} was not forwarded`, 'Mail was not forwarded')
+    case 'mail.organisation.create':
+      return about(target, (t) => `${who} created the organisation ${t}`, `${who} created an organisation`)
+    case 'mail.organisation.rename':
+      return about(target, (t) => `${who} renamed an organisation to ${t}`, `${who} renamed an organisation`)
+    case 'mail.organisation.delete':
+      return about(target, (t) => `${who} deleted the organisation ${t}`, `${who} deleted an organisation`)
+    case 'mail.domain.organisation':
+      return about(target, (t) => `${who} changed the organisation of ${t}`, `${who} changed the organisation of a domain`)
+    case 'mail.mailbox.display-name':
+      return about(target, (t) => `${who} changed the display name of ${t}`, `${who} changed the display name of a mailbox`)
+    case 'mail.mailbox.app-password-create':
+      return about(target, (t) => `${who} created an app password for ${t}`, `${who} created an app password`)
+    case 'mail.mailbox.app-password-revoke':
+      return about(target, (t) => `${who} revoked an app password of ${t}`, `${who} revoked an app password`)
+    case 'mail.mailbox.app-passwords-only':
+      if (bySelf(actor, target)) return `${target} changed how mail programs sign in to it`
+      return about(
+        target,
+        (t) => `${who} changed how mail programs sign in to ${t}`,
+        `${who} changed how mail programs sign in to a mailbox`,
+      )
+    // Reported later by the mailbox itself; the actor is its address.
+    case 'mail.mailbox.password-changed':
+      if (bySelf(actor, target)) return `${target} changed its password`
+      return about(target, (t) => `The password of ${t} was changed`, 'The password of a mailbox was changed')
+    case 'mail.mailbox.display-name-changed':
+      if (bySelf(actor, target)) return `${target} changed its display name`
+      return about(target, (t) => `The display name of ${t} was changed`, 'The display name of a mailbox was changed')
+    case 'mail.mailbox.app-password-created':
+      if (bySelf(actor, target)) return `${target} created an app password`
+      return about(target, (t) => `An app password was created for ${t}`, 'An app password was created')
+    case 'mail.mailbox.app-password-revoked':
+      if (bySelf(actor, target)) return `${target} revoked an app password`
+      return about(target, (t) => `An app password of ${t} was revoked`, 'An app password was revoked')
     default:
       return about(target, (t) => `${who} made a change to ${t}`, `${who} made a change`)
   }

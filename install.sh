@@ -52,7 +52,11 @@ BACKUP_DIR=$UPDATE_ROOT/backups
 CADDY_DATA=/var/lib/ownpanel-caddy
 MAIL_DATA=/var/lib/ownpanel-mail
 MAIL_ADMIN_ARG="-mail-admin unix:///run/ownpanel-mail/admin.sock"
-DEFAULT_ARGS="-tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock $MAIL_ADMIN_ARG"
+# The mail service's web socket, which Caddy passes the mail host's account
+# pages to (see ownpanel-mail.service).
+MAIL_WEB_ARG="-mail-web unix:///run/ownpanel-mail-web/web.sock"
+MAIL_WEB_GROUP=ownpanel-mail-web
+DEFAULT_ARGS="-tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock $MAIL_ADMIN_ARG $MAIL_WEB_ARG"
 SERVICES=(ownpanel-caddy ownpanel-mail ownpaneld)
 UPDATE_UNITS=(ownpanel-update.service ownpanel-update.path ownpanel-update.timer)
 # Files of a release, relative to its directory.
@@ -79,8 +83,8 @@ Options:
   -y, --yes                 do not ask for confirmation (only --purge asks)
   --uninstall               stop and remove services and binaries; keeps data and settings
   --purge                   with --uninstall: also delete /var/lib/ownpanel, /var/lib/ownpanel-mail
-                            (all stored mail), /etc/ownpanel and the users ownpanel,
-                            ownpanel-mail and caddy
+                            (all stored mail), /etc/ownpanel, the users ownpanel,
+                            ownpanel-mail and caddy and the group ownpanel-mail-web
   -h, --help                show this help
 
 Options given on an upgrade replace the stored ones; everything else in
@@ -228,7 +232,7 @@ check_system() {
   esac
 
   local cmd
-  for cmd in tar sha256sum install useradd usermod systemctl setpriv; do
+  for cmd in tar sha256sum install useradd usermod groupadd getent systemctl setpriv; do
     command -v "$cmd" >/dev/null || die "the command '$cmd' is missing"
   done
   if [ -z "$opt_from_dir" ]; then
@@ -555,6 +559,10 @@ choose_settings() {
   if [ -z "$(flag_values "$new_args" mail-admin)" ]; then
     new_args="$new_args $MAIL_ADMIN_ARG"
   fi
+  # Nor those from before the mail host's account pages its web socket.
+  if [ -z "$(flag_values "$new_args" mail-web)" ]; then
+    new_args="$new_args $MAIL_WEB_ARG"
+  fi
   if [ ${#ips[@]} -gt 0 ]; then
     new_args="$(without_flag "$new_args" server-ip) -server-ip $(IFS=,; echo "${ips[*]}")"
   fi
@@ -597,9 +605,9 @@ check_ports() {
     warn "another program listens on port 80 or 443; Caddy cannot serve your sites until it is stopped:"
     printf '%s\n' "$busy" >&2
   fi
-  busy=$(ss -Hltnp '( sport = :25 or sport = :465 or sport = :587 or sport = :993 )' 2>/dev/null | grep -v '"ownpaneld"' || true)
+  busy=$(ss -Hltnp '( sport = :25 or sport = :465 or sport = :587 or sport = :993 or sport = :4190 )' 2>/dev/null | grep -v '"ownpaneld"' || true)
   if [ -n "$busy" ]; then
-    warn "another program listens on a mail port (25, 465, 587 or 993); ownpanel's e-mail cannot use it until that program is stopped (e.g. systemctl disable --now exim4 or postfix):"
+    warn "another program listens on a mail port (25, 465, 587, 993 or 4190); ownpanel's e-mail cannot use it until that program is stopped (e.g. systemctl disable --now exim4 or postfix):"
     printf '%s\n' "$busy" >&2
   fi
   if [ "$installed" = 0 ] && [ -e "$BIN/caddy" ]; then
@@ -648,6 +656,10 @@ install_files() {
   # in $MAIL_DATA stays 0700, so the membership grants nothing else.
   id -u ownpanel-mail >/dev/null 2>&1 || useradd --system --user-group --home "$MAIL_DATA" --shell /usr/sbin/nologin ownpanel-mail
   usermod -a -G ownpanel-mail ownpanel
+  # Caddy reaches the mail service's web socket (not its admin socket)
+  # through the group ownpanel-mail-web.
+  getent group "$MAIL_WEB_GROUP" >/dev/null || groupadd --system "$MAIL_WEB_GROUP"
+  usermod -a -G "$MAIL_WEB_GROUP" caddy
 
   [ "$installed" = 1 ] && systemctl stop ownpaneld ownpanel-mail ownpanel-caddy 2>/dev/null || true
 
@@ -750,10 +762,10 @@ migrate_dir() {
 open_firewall() {
   if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; then
     local p
-    for p in 80 443 25 465 587 993; do ufw allow "$p/tcp" >/dev/null; done
-    say "Firewall (ufw): allowed 80, 443 (web) and 25, 465, 587, 993 (e-mail) over TCP."
+    for p in 80 443 25 465 587 993 4190; do ufw allow "$p/tcp" >/dev/null; done
+    say "Firewall (ufw): allowed 80, 443 (web) and 25, 465, 587, 993, 4190 (e-mail) over TCP."
   else
-    say "Firewall: make sure 80, 443 (web) and 25, 465, 587, 993 (e-mail) are open over TCP"
+    say "Firewall: make sure 80, 443 (web) and 25, 465, 587, 993, 4190 (e-mail) are open over TCP"
     say "to the Internet (no ufw active here). Many hosting providers block port 25 until"
     say "you ask them to unblock it; see the E-Mail page of the ownpanel wiki."
   fi
@@ -933,6 +945,7 @@ do_uninstall() {
     say "Deleted $DATA, $MAIL_DATA, $CADDY_DATA, $UPDATE_ROOT and $ETC"
     if id -u ownpanel >/dev/null 2>&1; then userdel ownpanel && say "Removed user ownpanel"; fi
     if id -u ownpanel-mail >/dev/null 2>&1; then userdel ownpanel-mail && say "Removed user ownpanel-mail"; fi
+    if getent group "$MAIL_WEB_GROUP" >/dev/null; then groupdel "$MAIL_WEB_GROUP" && say "Removed group $MAIL_WEB_GROUP"; fi
     # The caddy user may belong to a Caddy package; only remove ours.
     case $(getent passwd caddy | cut -d: -f6) in
       "$DATA/caddy-home" | "$CADDY_DATA/home") userdel caddy && say "Removed user caddy" ;;

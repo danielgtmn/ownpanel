@@ -141,14 +141,14 @@ func (d *dnsEnv) checkNoTokenLeaked() {
 	}
 }
 
-func (d *dnsEnv) connect(as func(string, string, string) *httptest.ResponseRecorder, name, token string) int64 {
+func (d *dnsEnv) connect(as func(string, string, string) *httptest.ResponseRecorder, name, token string) string {
 	d.t.Helper()
 	rec := as("POST", "/api/dns/connections", `{"provider":"hetzner","name":"`+name+`","token":"`+token+`"}`)
 	if rec.Code != 201 {
 		d.t.Fatalf("connect: %d %s", rec.Code, rec.Body)
 	}
 	return decode[struct {
-		ID int64 `json:"id"`
+		ID string `json:"id"`
 	}](d.t, rec).ID
 }
 
@@ -205,7 +205,7 @@ func TestDNSRoutesJSONShapes(t *testing.T) {
 	conn := json.RawMessage(rec.Body.Bytes())
 	wantKeys(t, conn, "id", "provider", "name", "owner", "created_at", "last_checked_at", "last_error", "can_write", "zone_count")
 	var c struct {
-		ID            int64   `json:"id"`
+		ID            string  `json:"id"`
 		Provider      string  `json:"provider"`
 		Name          string  `json:"name"`
 		Owner         string  `json:"owner"`
@@ -242,7 +242,7 @@ func TestDNSRoutesJSONShapes(t *testing.T) {
 		t.Fatalf("zones before choosing: %d %s", rec.Code, rec.Body)
 	}
 	zoneJSON := func(adopted bool) string {
-		return `{"connection_id":` + id + `,"connection_name":"main","name":"example.com","read_only":false,` +
+		return `{"connection_id":"` + id + `","connection_name":"main","name":"example.com","read_only":false,` +
 			`"nameservers":["hydrogen.ns.hetzner.com","oxygen.ns.hetzner.com","helium.ns.hetzner.de"],"adopted":` + fmt.Sprint(adopted) + `,"used_by":[]}`
 	}
 	rec = d.root("GET", "/api/dns/zones/available", "")
@@ -292,7 +292,7 @@ func TestDNSRoutesJSONShapes(t *testing.T) {
 	wantStatus(t, d.root("PUT", "/api/sites/blog", `{"domains":["blog.example.com","shop.example.org"]}`), 200, "")
 	rec = d.root("GET", "/api/sites/blog/domains/status", "")
 	want := `[{"domain":"blog.example.com","state":"points_elsewhere","found":["198.51.100.1"],` +
-		`"zone":{"connection_id":` + id + `,"connection_name":"main","zone":"example.com","record_name":"blog"}},` +
+		`"zone":{"connection_id":"` + id + `","connection_name":"main","zone":"example.com","record_name":"blog"}},` +
 		`{"domain":"shop.example.org","state":"no_record","found":[],"zone":null}]` + "\n"
 	if rec.Code != 200 || rec.Body.String() != want {
 		t.Fatalf("status: %d\n got %s\nwant %s", rec.Code, rec.Body, want)

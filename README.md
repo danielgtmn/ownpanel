@@ -22,7 +22,7 @@ DNS records at Hetzner, and e-mail with its own mail server.
 ```
 cmd/ownpaneld        daemon entry point (serve and backup commands, flags, wiring)
 internal/panel     the panel's operations and all permission checks; every front door calls these
-internal/store     SQLite database and its migrations (internal/store/migrations)
+internal/store     the panel's data (ablage repositories on SQLite)
 internal/caddy     Caddy config builder and admin API client
 internal/deploy    releases, activation, rollback
 internal/dns       DNS provider interface, zone lookup, "does the domain point here?"; dns/hetzner is the Hetzner Cloud client
@@ -78,9 +78,10 @@ locked in the panel).
   and can expire after 30, 90 or 365 days, or never.
 - A sign-in ends after 3 days without use and at the latest after 30 days;
   "sign out everywhere" ends all of a person's sign-ins. After 5 failed
-  sign-ins for an account (from any address), or 20 sign-ins from one address
-  for any names, within 15 minutes, further attempts are refused until the
-  window passes, also across restarts.
+  sign-ins for an account (from any address), or 20 failed sign-ins from one
+  address for any names, within 15 minutes, further attempts are refused until
+  the window passes, also across restarts. Successful sign-ins do not count.
+- Changing your own e-mail address needs your current password.
 - Every change is recorded in the activity log, with the token's name when a
   token was used.
 
@@ -106,7 +107,7 @@ made with the cookie must send `X-Ownpanel-Request: 1`.
 | `POST` | `/api/password-reset` | `{"email"}`: send a link to choose a new password (always `204`; `404` when the panel cannot send e-mail) |
 | `POST` | `/api/password-reset/confirm` | `{"token", "password"}`: set the new password and end all sessions of that person |
 | `PUT` | `/api/account/password` | body `{"current", "new"}`; ends your other sessions |
-| `PUT` | `/api/account/email` | body `{"email"}` (`""` removes it) |
+| `PUT` | `/api/account/email` | body `{"email", "current"}` (`""` removes it; `current` is your current password) |
 | `GET` `POST` | `/api/tokens` | your access tokens; create with `{"name", "access": "read"\|"write", "sites": [..] \| null}` |
 | `DELETE` | `/api/tokens/{id}` | revoke a token |
 | `GET` | `/api/sites` | list sites |
@@ -133,6 +134,8 @@ made with the cookie must send `X-Ownpanel-Request: 1`.
 | `GET` | `/api/dns/zones` | `{"zones": [..], "problems": [..]}`: zones of your connections that are in the panel (chosen or in use) |
 | `GET` | `/api/dns/zones/available` | the other zones of your connections, to choose from |
 | `PUT` `DELETE` | `/api/dns/connections/{id}/zones/{zone}/managed` | manage a zone in the panel, or stop (nothing changes at the provider) |
+| `GET` `POST` | `/api/domains` | your domains whose DNS is managed elsewhere; add with `{"name": "example.com"}` |
+| `DELETE` | `/api/domains/{domain}` | remove such a domain from the panel; `used_by` says what of yours still keeps it there |
 | `GET` | `/api/dns/connections/{id}/zones/{zone}/records` | record sets of a zone (`ttl` null = zone default) |
 | `PUT` `DELETE` | `/api/dns/connections/{id}/zones/{zone}/records/{name}/{type}` | set with `{"ttl": 3600 \| null, "values": [..]}`, or delete; `name` is `@` for the zone itself |
 | `GET` | `/api/sites/{name}/domains/status` | per domain: `points_here`, `points_elsewhere`, `no_record` or `lookup_failed`, and the zone "point here" would use |
@@ -230,7 +233,10 @@ created new at Hetzner), plus every zone that one of your sites, redirects
 or mail domains uses (for administrators also the panel's own domain).
 **Stop managing here** takes a chosen zone out of the panel without touching
 it at Hetzner; deleting it at Hetzner is a separate action. After upgrading, zones in use stay visible and the others
-wait under **Add domain**; nothing is deleted.
+wait under **Add domain**; nothing is deleted. A domain whose DNS is managed
+elsewhere (another provider, the registrar) can be added too, **Add domain →
+Use a domain whose DNS is managed elsewhere**: it shows up in the sidebar on
+its own, ready for a site, a redirect or e-mail, without anything at a provider.
 
 - Connections belong to the person who added them. Admins see everyone's
   connections (name and owner, never the token) and can remove them, but can
@@ -286,6 +292,12 @@ keeps the data (`--purge` deletes it too). `--channel nightly` follows the
 build of `main` made after every merged pull request instead of the stable
 releases, which come from the `release` branch. Releases are built by the
 Publish workflow (`.github/workflows/release.yml`) with `scripts/package.sh`.
+
+The update that moves the panel's data to ablage converts `ownpanel.db` once
+at start and keeps the database as it was in
+`ownpanel.db.pre-ablage-<UTC time>`; older versions cannot read the converted
+database, so going back past it needs that copy (see the wiki page
+Installation, "Updating").
 
 Manual install: download `ownpanel_<version>_linux_<arch>.tar.gz` and
 `checksums.txt` from the releases, check and unpack the archive and run

@@ -6,11 +6,14 @@ const noticeBuild = createBuildWatch()
 
 export class ApiError extends Error {
   status: number
+  /** Machine-readable reason the server gave, if any (e.g. "hand_written_filters"). */
+  code: string
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code = '') {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.code = code
   }
 }
 
@@ -51,15 +54,19 @@ export function fallbackMessage(status: number): string {
 
 async function readError(response: Response): Promise<ApiError> {
   let message = ''
+  let code = ''
   try {
     const data: unknown = await response.json()
     if (data && typeof data === 'object' && 'error' in data && typeof data.error === 'string') {
       message = data.error.trim()
     }
+    if (data && typeof data === 'object' && 'code' in data && typeof data.code === 'string') {
+      code = data.code
+    }
   } catch {
     // Body was empty or not JSON; fall back to a generic message.
   }
-  return new ApiError(response.status, message || fallbackMessage(response.status))
+  return new ApiError(response.status, message || fallbackMessage(response.status), code)
 }
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {

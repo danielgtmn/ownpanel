@@ -25,6 +25,15 @@ type Directory struct {
 	// firstMailbox is the domain's first mailbox in config order (the panel
 	// sends them ordered by creation, so this is the oldest one).
 	firstMailbox map[string]*config.Mailbox
+	// groups are the aliases by address (sender policies).
+	groups map[string]*config.Alias
+
+	// Grants (sharing.go): rights by (owner, grantee), the mailboxes each
+	// grantee may use, those using each owner, and grants not counted.
+	rights   map[grantKey]config.Rights
+	access   map[string][]Access
+	grantees map[string][]Grantee
+	ignored  []string
 }
 
 // New builds a Directory from a validated configuration. cfg must not be
@@ -38,6 +47,7 @@ func New(cfg *config.Config) *Directory {
 		byStorage:    map[string]*config.Mailbox{},
 		aliases:      map[string][]string{},
 		firstMailbox: map[string]*config.Mailbox{},
+		groups:       map[string]*config.Alias{},
 	}
 	for i := range cfg.Domains {
 		d.domains[cfg.Domains[i].Name] = &cfg.Domains[i]
@@ -51,9 +61,11 @@ func New(cfg *config.Config) *Directory {
 			d.firstMailbox[dom] = m
 		}
 	}
-	for _, a := range cfg.Aliases {
+	for i, a := range cfg.Aliases {
 		d.aliases[a.Address] = a.Targets
+		d.groups[a.Address] = &cfg.Aliases[i]
 	}
+	d.buildGrants()
 	return d
 }
 
@@ -66,6 +78,30 @@ func (d *Directory) Hostname() string { return d.cfg.Hostname }
 
 // Limits are the service limits with defaults applied.
 func (d *Directory) Limits() config.Limits { return d.limits }
+
+// OrganisationOf returns the organisation of the mailbox with storage id
+// id (its domain's Organisation, or StandaloneOrganisation), and false for
+// an unknown mailbox. Mailboxes may share only within one organisation.
+func (d *Directory) OrganisationOf(id string) (string, bool) {
+	m, ok := d.byStorage[id]
+	if !ok {
+		return "", false
+	}
+	_, dom, _ := config.SplitAddress(m.Address)
+	return d.Organisation(dom)
+}
+
+// Organisation returns the organisation of a configured domain.
+func (d *Directory) Organisation(domain string) (string, bool) {
+	dom, ok := d.domains[domain]
+	if !ok {
+		return "", false
+	}
+	if dom.Organisation == "" {
+		return config.StandaloneOrganisation(dom.Name), true
+	}
+	return dom.Organisation, true
+}
 
 // Domain returns a configured domain.
 func (d *Directory) Domain(name string) (*config.Domain, bool) {

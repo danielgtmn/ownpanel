@@ -14,7 +14,7 @@ import {
 
 const pair = { bare: 'example.com', www: 'www.example.com' }
 
-function redirect(id: number, from: string, target: string, overrides: Partial<Redirect> = {}): Redirect {
+function redirect(id: string, from: string, target: string, overrides: Partial<Redirect> = {}): Redirect {
   return {
     id,
     owner: 'anna',
@@ -56,15 +56,15 @@ describe('currentSetup', () => {
   it('recognises each starting point', () => {
     expect(currentSetup(state(['example.com', 'www.example.com']))).toEqual({ kind: 'both' })
     expect(currentSetup(state(['example.com']))).toMatchObject({ kind: 'choice', choice: 'none', main: 'example.com' })
-    expect(currentSetup(state(['example.com'], [redirect(1, 'www.example.com', 'https://example.com')]))).toMatchObject({
+    expect(currentSetup(state(['example.com'], [redirect('1', 'www.example.com', 'https://example.com')]))).toMatchObject({
       kind: 'choice',
       choice: 'bare',
       other: 'www.example.com',
     })
-    expect(currentSetup(state(['www.example.com'], [redirect(1, 'example.com', 'https://www.example.com/')]))).toMatchObject(
+    expect(currentSetup(state(['www.example.com'], [redirect('1', 'example.com', 'https://www.example.com/')]))).toMatchObject(
       { kind: 'choice', choice: 'www', other: 'example.com' },
     )
-    expect(currentSetup(state(['example.com'], [redirect(1, 'www.example.com', 'https://other.org')]))).toEqual({
+    expect(currentSetup(state(['example.com'], [redirect('1', 'www.example.com', 'https://other.org')]))).toEqual({
       kind: 'elsewhere',
       main: 'example.com',
       other: 'www.example.com',
@@ -96,9 +96,9 @@ describe('planMainAddress', () => {
   })
 
   it('removes the old redirect first when switching sides', () => {
-    const now = state(['www.example.com'], [redirect(7, 'example.com', 'https://www.example.com')])
+    const now = state(['www.example.com'], [redirect('7', 'example.com', 'https://www.example.com')])
     expect(planMainAddress(now, 'bare')).toEqual([
-      { kind: 'delete-redirect', id: 7, domain: 'example.com' },
+      { kind: 'delete-redirect', id: '7', domain: 'example.com' },
       { kind: 'set-domains', domains: ['example.com'], added: ['example.com'], removed: ['www.example.com'] },
       { kind: 'create-redirect', input: mainRedirect('www.example.com', 'example.com') },
     ])
@@ -111,33 +111,33 @@ describe('planMainAddress', () => {
   })
 
   it('changes a redirect that leads elsewhere instead of adding a second one', () => {
-    const now = state(['example.com'], [redirect(3, 'www.example.com', 'https://other.org', { code: 302 })])
+    const now = state(['example.com'], [redirect('3', 'www.example.com', 'https://other.org', { code: 302 })])
     expect(planMainAddress(now, 'bare')).toEqual([
-      { kind: 'update-redirect', id: 3, input: mainRedirect('www.example.com', 'example.com') },
+      { kind: 'update-redirect', id: '3', input: mainRedirect('www.example.com', 'example.com') },
     ])
   })
 
   it('changes nothing when the choice is already in place', () => {
-    const now = state(['example.com'], [redirect(1, 'www.example.com', 'https://example.com/')])
+    const now = state(['example.com'], [redirect('1', 'www.example.com', 'https://example.com/')])
     expect(planMainAddress(now, 'bare')).toEqual([])
     expect(planMainAddress(state(['example.com']), 'none')).toEqual([])
-    expect(planMainAddress(state(['www.example.com'], [redirect(2, 'example.com', 'https://www.example.com')]), 'www')).toEqual(
+    expect(planMainAddress(state(['www.example.com'], [redirect('2', 'example.com', 'https://www.example.com')]), 'www')).toEqual(
       [],
     )
   })
 
   it('fixes a redirect that keeps too little', () => {
-    const now = state(['example.com'], [redirect(1, 'www.example.com', 'https://example.com', { keep_query: false })])
+    const now = state(['example.com'], [redirect('1', 'www.example.com', 'https://example.com', { keep_query: false })])
     expect(planMainAddress(now, 'bare')).toEqual([
-      { kind: 'update-redirect', id: 1, input: mainRedirect('www.example.com', 'example.com') },
+      { kind: 'update-redirect', id: '1', input: mainRedirect('www.example.com', 'example.com') },
     ])
   })
 
   it('stops using the other address', () => {
-    const redirected = state(['example.com'], [redirect(4, 'www.example.com', 'https://example.com')])
-    expect(planMainAddress(redirected, 'none')).toEqual([{ kind: 'delete-redirect', id: 4, domain: 'www.example.com' }])
-    const wwwMain = state(['www.example.com'], [redirect(5, 'example.com', 'https://www.example.com')])
-    expect(planMainAddress(wwwMain, 'none')).toEqual([{ kind: 'delete-redirect', id: 5, domain: 'example.com' }])
+    const redirected = state(['example.com'], [redirect('4', 'www.example.com', 'https://example.com')])
+    expect(planMainAddress(redirected, 'none')).toEqual([{ kind: 'delete-redirect', id: '4', domain: 'www.example.com' }])
+    const wwwMain = state(['www.example.com'], [redirect('5', 'example.com', 'https://www.example.com')])
+    expect(planMainAddress(wwwMain, 'none')).toEqual([{ kind: 'delete-redirect', id: '5', domain: 'example.com' }])
     expect(planMainAddress(state(['example.com', 'www.example.com']), 'none')).toEqual([
       { kind: 'set-domains', domains: ['example.com'], added: [], removed: ['www.example.com'] },
     ])
@@ -156,7 +156,7 @@ describe('planMainAddress', () => {
 })
 
 describe('describeStep and lost path redirects', () => {
-  const steps = planMainAddress(state(['www.example.com'], [redirect(7, 'example.com', 'https://www.example.com')]), 'bare')
+  const steps = planMainAddress(state(['www.example.com'], [redirect('7', 'example.com', 'https://www.example.com')]), 'bare')
 
   it('describes every step in plain words', () => {
     expect(steps.map((step) => describeStep(step, 'blog'))).toEqual([
@@ -164,7 +164,7 @@ describe('describeStep and lost path redirects', () => {
       'Add example.com to blog and remove www.example.com from blog',
       'Redirect www.example.com to example.com',
     ])
-    const update: Step = { kind: 'update-redirect', id: 1, input: mainRedirect('www.example.com', 'example.com') }
+    const update: Step = { kind: 'update-redirect', id: '1', input: mainRedirect('www.example.com', 'example.com') }
     expect(describeStep(update, 'blog')).toBe('Change the redirect of www.example.com to lead to example.com')
   })
 
@@ -176,13 +176,13 @@ describe('describeStep and lost path redirects', () => {
 })
 
 describe('runPlan', () => {
-  const steps = planMainAddress(state(['www.example.com'], [redirect(7, 'example.com', 'https://www.example.com')]), 'bare')
+  const steps = planMainAddress(state(['www.example.com'], [redirect('7', 'example.com', 'https://www.example.com')]), 'bare')
 
   it('runs the steps in order', async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (init?.method === 'DELETE') return new Response(null, { status: 204 })
       if (url.startsWith('/api/sites/')) return json({ name: 'blog', domains: ['example.com'] })
-      return json(redirect(8, 'www.example.com', 'https://example.com'), 201)
+      return json(redirect('8', 'www.example.com', 'https://example.com'), 201)
     })
     vi.stubGlobal('fetch', fetchMock)
     const result = await runPlan('blog', steps)

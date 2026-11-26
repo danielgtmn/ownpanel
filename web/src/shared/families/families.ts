@@ -3,8 +3,8 @@ import { normalizeHost, registrableDomain } from './suffix.ts'
 
 // release is the live version's id, when known.
 export type SourceSite = { name: string; domains: string[]; live: boolean; release?: string }
-export type SourceZone = { connectionId: number; connectionName: string; name: string }
-export type SourceRedirect = { id: number; source: string; target: string }
+export type SourceZone = { connectionId: string; connectionName: string; name: string }
+export type SourceRedirect = { id: string; source: string; target: string }
 // A domain with e-mail turned on. active: its mail records point to this server, so it receives mail.
 export type SourceMailDomain = { domain: string; active: boolean }
 
@@ -16,6 +16,8 @@ export type DomainSources = {
   pathRedirectHosts?: string[]
   // Missing when the signed-in person may not see e-mail (for example a token limited to sites).
   mailDomains?: SourceMailDomain[]
+  // Domains the person added by hand because their DNS is managed elsewhere. Missing when they may not be seen.
+  domains?: string[]
 }
 
 export type FamilySite = {
@@ -33,6 +35,8 @@ export type Family = {
   redirects: SourceRedirect[]
   servedDomains: string[]
   mailDomains: SourceMailDomain[]
+  // The domains in this family the person added by hand; each keeps the family in the panel on its own.
+  added: string[]
 }
 
 export type FamilyStatus = 'ok' | 'attention' | 'pending' | 'idle'
@@ -44,7 +48,7 @@ function familyOf(families: Map<string, Family>, host: string): Family | null {
   if (!domain) return null
   let family = families.get(domain)
   if (!family) {
-    family = { domain, sites: [], zones: [], redirects: [], servedDomains: [], mailDomains: [] }
+    family = { domain, sites: [], zones: [], redirects: [], servedDomains: [], mailDomains: [], added: [] }
     families.set(domain, family)
   }
   return family
@@ -92,6 +96,12 @@ export function buildFamilies(sources: DomainSources): Family[] {
     familyOf(families, domain)?.mailDomains.push({ ...mail, domain })
   }
 
+  for (const added of sources.domains ?? []) {
+    const domain = normalizeHost(added)
+    const family = familyOf(families, domain)
+    if (family && !family.added.includes(domain)) family.added.push(domain)
+  }
+
   return [...families.values()]
     .map((family) => ({
       ...family,
@@ -100,6 +110,7 @@ export function buildFamilies(sources: DomainSources): Family[] {
       redirects: [...family.redirects].sort((a, b) => a.source.localeCompare(b.source)),
       servedDomains: [...family.servedDomains].sort(),
       mailDomains: [...family.mailDomains].sort((a, b) => a.domain.localeCompare(b.domain)),
+      added: [...family.added].sort(),
     }))
     .sort((a, b) => a.domain.localeCompare(b.domain))
 }

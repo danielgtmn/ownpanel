@@ -3,8 +3,8 @@ import type { User } from '../shared/session/index.ts'
 import { parseRoute } from '../shared/routing/index.ts'
 import { resetTokenFrom, screenFor, showsForgotForm } from './screen.ts'
 
-const admin: User = { id: 1, name: 'anna', email: '', role: 'admin', created_at: '2026-01-01T00:00:00Z' }
-const member: User = { id: 2, name: 'max', email: '', role: 'member', created_at: '2026-01-01T00:00:00Z' }
+const admin: User = { id: '1', name: 'anna', email: '', role: 'admin', created_at: '2026-01-01T00:00:00Z' }
+const member: User = { id: '2', name: 'max', email: '', role: 'member', created_at: '2026-01-01T00:00:00Z' }
 
 describe('screenFor', () => {
   it('shows the wizard to an administrator until the setup is finished', () => {

@@ -127,9 +127,9 @@ func newMailEnvWith(t *testing.T, mail panel.MailService) *env {
 }
 
 var (
-	mailDomainKeys = []string{"domain", "owner", "active", "activated_at", "checked_at", "problem", "mailboxes", "aliases", "dkim_selector", "dkim_record", "created_at"}
-	mailboxKeys    = []string{"id", "address", "domain", "local_part", "owner", "quota_bytes", "send_per_hour", "send_per_day", "created_at", "usage"}
-	aliasKeys      = []string{"id", "address", "domain", "local_part", "catch_all", "targets", "owner", "created_at"}
+	mailDomainKeys = []string{"domain", "owner", "active", "activated_at", "checked_at", "problem", "mailboxes", "aliases", "dkim_selector", "dkim_record", "created_at", "organisation"}
+	mailboxKeys    = []string{"id", "address", "domain", "local_part", "owner", "quota_bytes", "send_per_hour", "send_per_day", "created_at", "usage", "display_name", "app_passwords_only", "kind", "keep_sent_copy", "shared_with", "access_to"}
+	aliasKeys      = []string{"id", "address", "domain", "local_part", "catch_all", "targets", "owner", "created_at", "sender_policy", "hide_from_directory"}
 )
 
 func TestMailRoutes(t *testing.T) {
@@ -171,7 +171,7 @@ func TestMailRoutes(t *testing.T) {
 	if box.Address != "info@example.com" || box.SendPerDay != 300 || box.QuotaBytes != panel.DefaultQuotaBytes {
 		t.Fatalf("mailbox %s", rec.Body)
 	}
-	if strings.Contains(rec.Body.String(), "argon2") || strings.Contains(rec.Body.String(), "password") {
+	if strings.Contains(rec.Body.String(), "argon2") || strings.Contains(rec.Body.String(), "mailbox-password") || strings.Contains(rec.Body.String(), "\"password\"") {
 		t.Fatalf("mailbox answer contains a secret: %s", rec.Body)
 	}
 	wantStatus(t, e.as("POST", "/api/mail/domains/example.com/mailboxes", `{"local_part":"x","password":"short"}`), 400, "password")
@@ -203,15 +203,15 @@ func TestMailRoutes(t *testing.T) {
 	wantKeys(t, rec.Body.Bytes(), aliasKeys...)
 	al := decode[panel.MailAlias](t, rec)
 	wantStatus(t, e.as("POST", "/api/mail/domains/example.com/aliases", `{"local_part":"info","targets":["a@example.org"]}`), 409, "mailbox")
-	rec = e.as("PUT", fmt.Sprintf("/api/mail/aliases/%d", al.ID), `{"local_part":"*","targets":["info@example.com","boss@example.org"]}`)
+	rec = e.as("PUT", fmt.Sprintf("/api/mail/aliases/%s", al.ID), `{"local_part":"*","targets":["info@example.com","boss@example.org"]}`)
 	wantStatus(t, rec, 200, "")
 	if a := decode[panel.MailAlias](t, rec); !a.CatchAll || len(a.Targets) != 2 {
 		t.Fatalf("alias %s", rec.Body)
 	}
-	for _, path := range []string{"/api/mail/aliases", "/api/mail/domains/example.com/aliases", fmt.Sprintf("/api/mail/aliases/%d", al.ID)} {
+	for _, path := range []string{"/api/mail/aliases", "/api/mail/domains/example.com/aliases", fmt.Sprintf("/api/mail/aliases/%s", al.ID)} {
 		wantStatus(t, e.as("GET", path, ""), 200, "")
 	}
-	wantStatus(t, e.as("DELETE", fmt.Sprintf("/api/mail/aliases/%d", al.ID), ""), 204, "")
+	wantStatus(t, e.as("DELETE", fmt.Sprintf("/api/mail/aliases/%s", al.ID), ""), 204, "")
 
 	// Read-only tokens read, but change nothing; tokens limited to sites see nothing.
 	_, read := e.createToken("read", "null")
@@ -263,7 +263,7 @@ func TestMailRecordsAndHealthRoutes(t *testing.T) {
 	wantStatus(t, rec, 200, "")
 	wantKeys(t, rec.Body.Bytes(), "mail_host", "checks")
 	h := decode[panel.MailHealth](t, rec)
-	if len(h.Checks) != 9 || h.Checks[0].ID != "service" || h.Checks[0].State != "warning" && h.Checks[0].State != "ok" {
+	if len(h.Checks) != 10 || h.Checks[0].ID != "service" || h.Checks[0].State != "warning" && h.Checks[0].State != "ok" {
 		t.Fatalf("health %s", rec.Body)
 	}
 	var rawH struct {

@@ -59,6 +59,7 @@ const TOPIC: Record<string, string> = {
   listeners: 'whether the mail server accepts connections',
   postmaster: 'where reports about mail problems go',
   blocklists: 'the lists of known spam senders',
+  self_service: 'where mailbox users sign in',
 }
 
 function sentence(check: HealthCheck, host: string): { title: string; hint?: string; ownDetail?: boolean } {
@@ -154,6 +155,10 @@ function sentence(check: HealthCheck, host: string): { title: string; hint?: str
         ownDetail: true,
       }
     }
+    case 'self_service':
+      // The server's detail says what is missing (a name of its own, an update or the certificate).
+      if (ok) return { title: `Mailbox users sign in at ${name}.` }
+      return { title: "Mailbox users don't have their own sign-in page yet." }
     default:
       return { title: ok ? 'Fine.' : 'Something about the mail server needs a look.' }
   }

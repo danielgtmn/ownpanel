@@ -80,7 +80,7 @@ mode 0750, socket 0660; the user `ownpanel` is a member of the group
 | Endpoint | Purpose |
 |---|---|
 | `POST /load` | Replace the configuration. Refused if invalid, or if a `storage_id` is already bound to another address. |
-| `GET /status` | Config hash, listeners, certificate expiry, queue size, per-mailbox usage and block state. |
+| `GET /status` | Config hash, listeners, the web socket (`web`, when set up), certificate expiry, queue size, per-mailbox usage and block state. |
 | `GET /events?after=<id>` | Events since a cursor: mailbox blocked, sign-in failures from many addresses, delivery problems. |
 | `POST /mailboxes/{storage_id}/unblock` | Lift a sending block. |
 | `DELETE /mailboxes/{storage_id}` | Delete a mailbox's data. |
@@ -109,12 +109,29 @@ mode 0750, socket 0660; the user `ownpanel` is a member of the group
 **Mail service data** `/var/lib/ownpanel-mail` (`StateDirectory`, owner
 `ownpanel-mail`, 0700): `config.json` (0600, rewritten only when it changed),
 `mail.db` (SQLite WAL, one writer, `synchronous=FULL`), `messages/<storage_id>/…`,
+`dav/<storage_id>/<collection>/…` (calendars and contacts, G4a),
 `queue/…`, `srs.key` (32 random bytes, 0600, created on first start; the
 backup copies it with the rest, so SRS addresses stay valid after a
 restore). Data is keyed by `storage_id`, so a reused row id or a restored
 older panel database can never expose another mailbox's mail. Data of a
 mailbox missing from the configuration is kept and reported, never deleted by
 a config load.
+
+**The index** `mail.db` is kept with [ablage](https://github.com/danielgtmn/ablage)
+repositories (`internal/mail/storage/records.go`): one writer connection
+(writes are serialized, as before) and a pool of read-only connections that
+read the last commit without waiting for a write. Row ids are strings; IMAP
+UIDs and UIDVALIDITY, the DAV sequence numbers and epoch, and the event
+cursor the panel reads are integer fields of their own. An index written by
+a version before ablage is converted once at start: the service first
+copies it to `mail.db.pre-ablage-<UTC time>` (0600) next to it, then
+converts every table in one transaction (rows keep their ids as text, the
+flags of a message become one field per system flag plus a list of
+keywords, times stay to the second). UIDs, UIDVALIDITY, DAV ETags and sync
+tokens and the event cursor do not change, so mail and calendar programs
+keep their caches. If the conversion fails, the index stays as it was and
+the service does not start; the backup stays either way and can be deleted
+once the service runs.
 
 **Block state** lives in the mail service (`mail.db`), not in the pushed
 configuration, so a full config push can never undo a block. The panel shows
@@ -135,7 +152,8 @@ the copy has its file. Restoring is the manual tar step of
 `chown -R ownpanel-mail: /var/lib/ownpanel-mail`. A restored index is older
 than the clients' caches, so the service changes `UIDVALIDITY` of every
 folder when its start-up check finds a difference or the restore marker
-file `restored` exists.
+file `restored` exists; calendars and contacts get a new sync epoch the
+same way (every ETag, ctag and sync token changes).
 
 ## Sync
 
@@ -159,9 +177,23 @@ Caddy's certificates are private to Caddy, so the panel obtains one for
 - The challenge route (`host = mail_host`, path
   `/.well-known/acme-challenge/*` → panel) goes into Caddy's single `:80`
   server: merged into the existing HTTP server, or a new one when none
-  exists. `mail_host` never appears in a host matcher on `:443`, so Caddy does
-  not request its own certificate for it. A `-tags caddy` test proves the
-  challenge reaches the panel.
+  exists. A `-tags caddy` test proves the challenge reaches the panel.
+- `mail_host` is also a site on `:443` for the people who read mail
+  ([[Groupware architecture|Groupware-Architecture]], G0), once the panel
+  has its certificate, the mail service has its web socket (`-mail-web`) and
+  `mail_host` differs from the panel domain. Caddy does not request a
+  certificate for it: the panel pushes its own certificates for `mail_host`
+  in the config (`tls.certificates.load_pem`), and the server lists the name
+  in `automatic_https.skip_certificates` (Caddy also skips names with a
+  loaded certificate on its own). After a renewal the panel loads Caddy's
+  config again with the new certificate. The key travels only over Caddy's
+  admin socket and ends up in Caddy's saved config (`autosave.json` in its
+  0700 home), next to Caddy's own keys. Routes: `/dav*`,
+  `/.well-known/caldav`, `/.well-known/carddav`, `/account/api/*` → the
+  mail service's web socket (16 MB request limit); `/api*`, `/mcp*` → 404;
+  everything else → the panel, which serves only the web app there (64 KB
+  request limit). A `-tags caddy` test covers the routes, the certificate
+  and that Caddy never manages the name.
 - autocert obtains an ECDSA and an RSA certificate (old servers without
   ECDSA). Both are pushed; the service presents them whatever the SNI, so
   clients without SNI work.
@@ -170,10 +202,11 @@ Caddy's certificates are private to Caddy, so the panel obtains one for
   server's addresses, and backs off exponentially after failures (the CA
   allows only a few failed validations per hour).
 - If `mail_host` equals the panel domain, Caddy has a `:443` route for it
-  anyway; that is fine, because Caddy answers only the challenge tokens it
-  issued itself and passes others through. The `-tags caddy` test covers
-  both cases.
-- With `-tls internal` or `off` the panel makes a self-signed certificate.
+  anyway (the panel's, with Caddy's own certificate; no mailbox site); that
+  is fine, because Caddy answers only the challenge tokens it issued itself
+  and passes others through. The `-tags caddy` test covers both cases.
+- With `-tls internal` or `off` the panel makes a self-signed certificate;
+  with `internal` Caddy serves `mail_host` with it too.
 - The ACME library always tries the TLS-ALPN challenge first; it fails
   because Caddy holds port 443, so every issuance costs one failed
   validation before HTTP-01 succeeds. Within the CA's limits, but a reason to
@@ -290,6 +323,9 @@ have no panel account and cannot change their own password yet (*later*).
   left to it.
 - IMAP (implicit TLS on 993 only, RFC 8314): `INBOX`, `Sent`, `Drafts`,
   `Junk`, `Trash`, `Archive` with special-use flags; IDLE, MOVE, UIDPLUS.
+  Folders of mailboxes shared with the signed-in mailbox appear under
+  `Shared/<address>/…`, and COPY/MOVE work across mailboxes; see
+  [[Groupware architecture|Groupware-Architecture]], G3.
   Envelope and body structure are read from the message file on FETCH
   (storing them at delivery is *later*). LITERAL+ is not offered, so an
   oversized APPEND is refused before the client sends it. Quota is enforced on delivery and APPEND (`NO [OVERQUOTA]`) and
@@ -351,13 +387,19 @@ How it is built (phase 1c):
   message for good, the queue sends a delivery status notification (from
   the null sender) to the original sender decoded from the SRS address.
 - **Submission:** external targets of a local alias go into the outbound
-  queue with the rest of the message; the sender is the signed-in mailbox,
-  so there is no SRS, and the message counts once like any other.
+  queue with the rest of the message; the sender is the signed-in mailbox
+  (or a shared mailbox it sends for), so there is no SRS, and the message
+  counts once like any other.
+- **Distribution groups:** an alias may accept mail only from its members
+  or its organisation (`SenderPolicy`); see G3 in
+  [[Groupware architecture|Groupware-Architecture]].
 
 ## Sending — [#26](https://github.com/danielgtmn/ownpanel/issues/26)
 
 - A mailbox may send as its own address or an alias that delivers to it
-  (catch-all does not count), checked for the envelope and the header `From`.
+  (catch-all does not count), and as or on behalf of a shared mailbox it has
+  the right for (G3 in [[Groupware architecture|Groupware-Architecture]]),
+  checked for the envelope and the header `From`.
   The message needs exactly one `From` field; several addresses in it need a
   `Sender` with one address, which the mailbox must also be allowed to send
   as. A header section over 1 MB is refused with `552 5.3.4`.
@@ -788,6 +830,11 @@ GET    /mailboxes/{sid}/imports/{id}      → ImportJob with failures
 DELETE /mailboxes/{sid}/imports/{id}      cancel (a finished job: remove) → 204
 GET    /mailboxes/{sid}/export            → application/zip stream
 ```
+
+`{id}` is the job's id, an opaque string of 1 to 32 lowercase letters and
+digits (jobs from before keep their number as text, new ones have 26
+characters). The service names spool files after it, so an id of any
+other form is refused as an unknown job (`404`) before it reaches a path.
 
 The panel mirrors these under `/api/mail/domains/{domain}/mailboxes/
 {local_part}/…` with the permission rules above. Activity:

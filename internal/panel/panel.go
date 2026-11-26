@@ -18,12 +18,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/danielgtmn/sesam"
-	"github.com/danielgtmn/sesam/plugins/password"
+	"github.com/danielgtmn/sesam/v2"
+	"github.com/danielgtmn/sesam/v2/plugins/password"
 
 	"github.com/danielgtmn/ownpanel/internal/caddy"
 	"github.com/danielgtmn/ownpanel/internal/deploy"
 	"github.com/danielgtmn/ownpanel/internal/dns"
+	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/store"
 	"github.com/danielgtmn/panzerschrank"
 )
@@ -140,6 +141,16 @@ type Service struct {
 	certs        *mailCerts
 	// mailSyncMu serializes mailSync, independent of syncMu.
 	mailSyncMu sync.Mutex
+	// mailEventsMu serializes recordMailEvents (the background loop and
+	// an admin's change that catches up first).
+	mailEventsMu sync.Mutex
+	// failAccountEvent, when set (tests), makes recording an account event
+	// fail.
+	failAccountEvent func(config.Event) error
+	// mailLeftOut is what buildMailConfig last left out, so it is logged
+	// once (mailsync.go).
+	mailLeftOutMu sync.Mutex
+	mailLeftOut   string
 	// mailHealth caches the outbound port check of MailHealth.
 	mailHealth mailHealthState
 	// setupHosts knows which names for setting up mail programs point
@@ -150,6 +161,10 @@ type Service struct {
 	// previewSecret derives the addresses and keys of previews
 	// (previews.go). Set once in New.
 	previewSecret []byte
+	// appKeyMu guards appKey, the app password key once read or made
+	// (mailaccounts.go).
+	appKeyMu sync.Mutex
+	appKey   string
 }
 
 // New returns a Service. It rejects invalid web server options up front, and
@@ -398,7 +413,7 @@ func (s *Service) SaveSite(ctx context.Context, a Actor, name string, domains []
 // the same name (a removal that failed) are removed first, so they never
 // become the new site's releases. syncMu keeps removeOrphanSites from
 // deciding about the name meanwhile.
-func (s *Service) createSite(ctx context.Context, name string, domains []string, owner int64) (store.Site, error) {
+func (s *Service) createSite(ctx context.Context, name string, domains []string, owner string) (store.Site, error) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
 	if err := s.deploys.Remove(name); err != nil {

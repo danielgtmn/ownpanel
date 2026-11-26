@@ -38,6 +38,7 @@ type env struct {
 	t      *testing.T
 	h      http.Handler
 	svc    *panel.Service
+	st     *store.Store
 	code   string // path of the setup code file
 	cookie string
 }
@@ -70,7 +71,7 @@ func newEmptyEnv(t *testing.T) *env {
 	if _, err := svc.EnsureSetupCode(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	return &env{t: t, h: (&Server{Panel: svc}).Handler(), svc: svc, code: filepath.Join(dir, "setup-code")}
+	return &env{t: t, h: (&Server{Panel: svc}).Handler(), svc: svc, st: st, code: filepath.Join(dir, "setup-code")}
 }
 
 func (e *env) setupCode() string {
@@ -157,14 +158,14 @@ func decode[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
 	return v
 }
 
-func (e *env) createToken(access string, sites string) (int64, string) {
+func (e *env) createToken(access string, sites string) (string, string) {
 	e.t.Helper()
 	rec := e.as("POST", "/api/tokens", `{"name":"t","access":"`+access+`","sites":`+sites+`}`)
 	if rec.Code != 201 {
 		e.t.Fatalf("token: %d %s", rec.Code, rec.Body)
 	}
 	tok := decode[struct {
-		ID    int64  `json:"id"`
+		ID    string `json:"id"`
 		Token string `json:"token"`
 	}](e.t, rec)
 	return tok.ID, tok.Token
@@ -299,6 +300,19 @@ func TestSessionLifecycleOverHTTP(t *testing.T) {
 		t.Fatalf("secure cookie over https: %d", rec.Code)
 	}
 
+	rec = e.as("PUT", "/api/account/email", `{"email":"root@example.org"}`)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "current password") {
+		t.Fatalf("e-mail without password: %d %s", rec.Code, rec.Body)
+	}
+	rec = e.as("PUT", "/api/account/email", `{"email":"root@example.org","current":"wrong-password-1"}`)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "current password is wrong") {
+		t.Fatalf("e-mail with a wrong password: %d %s", rec.Code, rec.Body)
+	}
+	rec = e.as("PUT", "/api/account/email", `{"email":"root@example.org","current":"root-password-1"}`)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"email":"root@example.org"`) {
+		t.Fatalf("e-mail: %d %s", rec.Code, rec.Body)
+	}
+
 	rec = e.as("PUT", "/api/account/password", `{"current":"root-password-1","new":"root-password-2"}`)
 	if rec.Code != 204 {
 		t.Fatalf("password: %d %s", rec.Code, rec.Body)
@@ -399,16 +413,16 @@ func TestUserAndTokenRoutes(t *testing.T) {
 	if rec := e.as("GET", "/api/users", ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"name":"alice"`) {
 		t.Fatalf("list users: %d %s", rec.Code, rec.Body)
 	}
-	if rec := e.as("PUT", "/api/users/2", `{"role":"admin"}`); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"role":"admin"`) {
+	if rec := e.as("PUT", "/api/users/"+alice.ID, `{"role":"admin"}`); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"role":"admin"`) {
 		t.Fatalf("promote: %d %s", rec.Code, rec.Body)
 	}
 	if rec := e.as("PUT", "/api/users/abc", `{}`); rec.Code != 404 {
 		t.Fatalf("bad id: %d", rec.Code)
 	}
-	if rec := e.as("DELETE", "/api/users/2", ""); rec.Code != 204 {
+	if rec := e.as("DELETE", "/api/users/"+alice.ID, ""); rec.Code != 204 {
 		t.Fatalf("delete: %d %s", rec.Code, rec.Body)
 	}
-	if rec := e.as("DELETE", "/api/users/1", ""); rec.Code != 409 {
+	if rec := e.as("DELETE", "/api/users/"+rootID(t, e), ""); rec.Code != 409 {
 		t.Fatalf("delete last admin: %d %s", rec.Code, rec.Body)
 	}
 
@@ -451,10 +465,10 @@ func TestTokenRoutes(t *testing.T) {
 	if rec := e.do(req{method: "GET", path: "/api/sites/blog", token: created["token"].(string)}); rec.Code != 200 {
 		t.Fatalf("use token: %d", rec.Code)
 	}
-	if rec := e.as("DELETE", "/api/tokens/1", ""); rec.Code != 204 {
+	if rec := e.as("DELETE", "/api/tokens/"+created["id"].(string), ""); rec.Code != 204 {
 		t.Fatalf("delete: %d %s", rec.Code, rec.Body)
 	}
-	if rec := e.as("DELETE", "/api/tokens/1", ""); rec.Code != 404 {
+	if rec := e.as("DELETE", "/api/tokens/"+created["id"].(string), ""); rec.Code != 404 {
 		t.Fatalf("delete twice: %d", rec.Code)
 	}
 	if rec := e.do(req{method: "GET", path: "/api/sites", token: created["token"].(string)}); rec.Code != 401 {
@@ -625,4 +639,14 @@ func TestAPIAnswersCarryARestrictivePolicy(t *testing.T) {
 			t.Errorf("%s %s: X-Content-Type-Options %q", r.method, r.path, got)
 		}
 	}
+}
+
+// rootID is the id of the first user, made by the setup.
+func rootID(t *testing.T, e *env) string {
+	t.Helper()
+	u, err := e.st.UserByName(context.Background(), "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.ID
 }

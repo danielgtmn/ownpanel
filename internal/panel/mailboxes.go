@@ -16,7 +16,7 @@ import (
 
 // Mailbox is what callers see of a mailbox; never its password hash.
 type Mailbox struct {
-	ID          int64     `json:"id"`
+	ID          string    `json:"id"`
 	Address     string    `json:"address"`
 	Domain      string    `json:"domain"`
 	LocalPart   string    `json:"local_part"`
@@ -25,9 +25,21 @@ type Mailbox struct {
 	SendPerHour int       `json:"send_per_hour"`
 	SendPerDay  int       `json:"send_per_day"`
 	CreatedAt   time.Time `json:"created_at"`
+	// DisplayName is shown as the sender's name; may be empty.
+	DisplayName string `json:"display_name"`
+	// AppPasswordsOnly: mail programs sign in only with app passwords.
+	AppPasswordsOnly bool `json:"app_passwords_only"`
 	// Usage is what the mail service reports; nil when it could not be
 	// asked (or is not set up).
 	Usage *MailboxUsage `json:"usage"`
+	// Kind is "personal" or "shared". KeepSentCopy: a shared mailbox keeps
+	// a copy of the mail sent for it.
+	Kind         string `json:"kind"`
+	KeepSentCopy bool   `json:"keep_sent_copy"`
+	// SharedWith are the mailboxes that have access to this one; AccessTo
+	// those this one has access to.
+	SharedWith []MailboxGrant  `json:"shared_with"`
+	AccessTo   []MailboxAccess `json:"access_to"`
 }
 
 // MailboxUsage is the stored mail and the sending block of a mailbox, as
@@ -38,15 +50,21 @@ type MailboxUsage struct {
 	Blocked       bool       `json:"blocked"`
 	BlockedReason string     `json:"blocked_reason"`
 	BlockedAt     *time.Time `json:"blocked_at"`
+	// OutOfOffice: an out-of-office reply is on now (not its text).
+	OutOfOffice bool `json:"out_of_office"`
 }
 
-// MailboxInput is a mailbox to create. Nil limits mean the defaults.
+// MailboxInput is a mailbox to create. Nil limits mean the defaults. A
+// shared mailbox (Kind) has no password.
 type MailboxInput struct {
-	LocalPart   string
-	Password    string
-	QuotaBytes  *int64
-	SendPerHour *int
-	SendPerDay  *int
+	LocalPart    string
+	Kind         string
+	KeepSentCopy bool
+	Password     string
+	DisplayName  string
+	QuotaBytes   *int64
+	SendPerHour  *int
+	SendPerDay   *int
 }
 
 // MailboxLimits changes a mailbox's quota and send limits; nil fields stay.
@@ -58,7 +76,7 @@ type MailboxLimits struct {
 
 // MailAlias is what callers see of an alias.
 type MailAlias struct {
-	ID        int64     `json:"id"`
+	ID        string    `json:"id"`
 	Address   string    `json:"address"`
 	Domain    string    `json:"domain"`
 	LocalPart string    `json:"local_part"`
@@ -66,17 +84,27 @@ type MailAlias struct {
 	Targets   []string  `json:"targets"`
 	Owner     string    `json:"owner"`
 	CreatedAt time.Time `json:"created_at"`
+	// SenderPolicy says who may write to the address: "anyone",
+	// "organisation" or "members". HideFromDirectory leaves it out of the
+	// organisation's address book.
+	SenderPolicy      string `json:"sender_policy"`
+	HideFromDirectory bool   `json:"hide_from_directory"`
 }
 
 func mailboxView(m store.Mailbox, usage map[string]config.MailboxStatus) Mailbox {
 	v := Mailbox{
 		ID: m.ID, Address: m.LocalPart + "@" + m.Domain, Domain: m.Domain, LocalPart: m.LocalPart, Owner: m.Owner,
 		QuotaBytes: m.QuotaBytes, SendPerHour: m.SendPerHour, SendPerDay: m.SendPerDay, CreatedAt: m.CreatedAt,
+		DisplayName: m.DisplayName, AppPasswordsOnly: m.AppPasswordsOnly,
+		Kind: m.Kind, KeepSentCopy: m.KeepSentCopy, SharedWith: []MailboxGrant{}, AccessTo: []MailboxAccess{},
+	}
+	if v.Kind == "" {
+		v.Kind = config.KindPersonal
 	}
 	if usage != nil {
 		u := MailboxUsage{}
 		if st, ok := usage[m.StorageID]; ok {
-			u = MailboxUsage{UsedBytes: st.UsedBytes, Messages: st.Messages, Blocked: st.Blocked, BlockedReason: st.BlockedReason}
+			u = MailboxUsage{UsedBytes: st.UsedBytes, Messages: st.Messages, Blocked: st.Blocked, BlockedReason: st.BlockedReason, OutOfOffice: st.OutOfOffice}
 			if !st.BlockedAt.IsZero() {
 				t := st.BlockedAt
 				u.BlockedAt = &t
@@ -91,6 +119,7 @@ func aliasView(a store.MailAlias) MailAlias {
 	return MailAlias{
 		ID: a.ID, Address: a.LocalPart + "@" + a.Domain, Domain: a.Domain, LocalPart: a.LocalPart, CatchAll: a.LocalPart == "*",
 		Targets: slices.Clone(a.Targets), Owner: a.Owner, CreatedAt: a.CreatedAt,
+		SenderPolicy: a.SenderPolicy, HideFromDirectory: a.HideFromDirectory,
 	}
 }
 
@@ -115,10 +144,11 @@ func (s *Service) mailUsage(ctx context.Context) map[string]config.MailboxStatus
 
 // visibleMailbox returns a mailbox the actor may see; others answer
 // NotFound like missing ones.
-func (s *Service) visibleMailbox(ctx context.Context, a Actor, id int64) (store.Mailbox, error) {
+func (s *Service) visibleMailbox(ctx context.Context, a Actor, mailboxID string) (store.Mailbox, error) {
 	if err := needMailRead(a); err != nil {
 		return store.Mailbox{}, err
 	}
+	id := mailboxID
 	m, err := s.store.Mailbox(ctx, id)
 	if err != nil {
 		return store.Mailbox{}, storeError(err)
@@ -172,16 +202,16 @@ func (s *Service) Mailboxes(ctx context.Context, a Actor, domain string) ([]Mail
 			out = append(out, mailboxView(m, usage))
 		}
 	}
-	return out, nil
+	return s.addSharing(ctx, out)
 }
 
 // MailboxOf returns one mailbox.
-func (s *Service) MailboxOf(ctx context.Context, a Actor, id int64) (Mailbox, error) {
+func (s *Service) MailboxOf(ctx context.Context, a Actor, id string) (Mailbox, error) {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return Mailbox{}, err
 	}
-	return mailboxView(m, s.mailUsage(ctx)), nil
+	return s.mailboxWithSharing(ctx, m, s.mailUsage(ctx))
 }
 
 // newStorageID is 128 random bits in hex.
@@ -266,7 +296,23 @@ func (s *Service) CreateMailbox(ctx context.Context, a Actor, domain string, in 
 	if err != nil {
 		return Mailbox{}, err
 	}
-	if err := validatePassword(in.Password); err != nil {
+	kind, err := mailboxKind(in.Kind)
+	if err != nil {
+		return Mailbox{}, err
+	}
+	shared := kind == config.KindShared
+	switch {
+	case shared && in.Password != "":
+		return Mailbox{}, errorf(Invalid, "a shared mailbox has no password: people use it with their own mailbox")
+	case !shared && in.KeepSentCopy:
+		return Mailbox{}, errorf(Invalid, "only shared mailboxes keep copies of the mail sent for them")
+	case !shared:
+		if err := validatePassword(in.Password); err != nil {
+			return Mailbox{}, err
+		}
+	}
+	dn, err := displayName(in.DisplayName)
+	if err != nil {
 		return Mailbox{}, err
 	}
 	m, err := checkLimits(a, store.Mailbox{
@@ -275,10 +321,13 @@ func (s *Service) CreateMailbox(ctx context.Context, a Actor, domain string, in 
 	if err != nil {
 		return Mailbox{}, err
 	}
-	if m.PasswordHash, err = hashPassword(in.Password); err != nil {
-		return Mailbox{}, newError(Internal, err)
+	if !shared {
+		if m.PasswordHash, err = hashPassword(in.Password); err != nil {
+			return Mailbox{}, newError(Internal, err)
+		}
 	}
-	m.StorageID, m.Domain, m.LocalPart = newStorageID(), md.Domain, l
+	m.StorageID, m.Domain, m.LocalPart, m.DisplayName = newStorageID(), md.Domain, l, dn
+	m.Kind, m.KeepSentCopy = kind, in.KeepSentCopy
 	limit := MaxMailboxesPerUser
 	if a.Admin {
 		limit = 0
@@ -287,19 +336,26 @@ func (s *Service) CreateMailbox(ctx context.Context, a Actor, domain string, in 
 	if err != nil {
 		return Mailbox{}, storeError(err)
 	}
-	s.record(ctx, a, "mail.mailbox.create", l+"@"+md.Domain, limitsDetail(saved))
+	detail := limitsDetail(saved)
+	if shared {
+		detail = "shared; " + detail
+	}
+	s.record(ctx, a, "mail.mailbox.create", l+"@"+md.Domain, detail)
 	return mailboxView(saved, nil), s.mailChanged(ctx, md.Domain)
 }
 
 // SetMailboxPassword replaces a mailbox's password. Mail clients signed in
 // with the old one have to sign in again.
-func (s *Service) SetMailboxPassword(ctx context.Context, a Actor, id int64, password string) error {
+func (s *Service) SetMailboxPassword(ctx context.Context, a Actor, id string, password string) error {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return err
 	}
 	if err := needMailWrite(a); err != nil {
 		return err
+	}
+	if m.Kind == config.KindShared {
+		return errorf(Invalid, "a shared mailbox has no password; make it personal to give it one")
 	}
 	if err := validatePassword(password); err != nil {
 		return err
@@ -308,7 +364,10 @@ func (s *Service) SetMailboxPassword(ctx context.Context, a Actor, id int64, pas
 	if err != nil {
 		return newError(Internal, err)
 	}
-	if err := s.store.SetMailboxPassword(ctx, id, hash); err != nil {
+	// What the mailbox changed itself is recorded first, so the push below
+	// includes it and the reset takes effect at once (catchUpMailEvents).
+	s.catchUpMailEvents(ctx)
+	if err := s.store.SetMailboxPassword(ctx, m.ID, hash); err != nil {
 		return storeError(err)
 	}
 	s.record(ctx, a, "mail.mailbox.password", m.LocalPart+"@"+m.Domain, "")
@@ -317,7 +376,7 @@ func (s *Service) SetMailboxPassword(ctx context.Context, a Actor, id int64, pas
 
 // SetMailboxLimits changes a mailbox's quota and send limits. Only admins
 // may raise them.
-func (s *Service) SetMailboxLimits(ctx context.Context, a Actor, id int64, in MailboxLimits) (Mailbox, error) {
+func (s *Service) SetMailboxLimits(ctx context.Context, a Actor, id string, in MailboxLimits) (Mailbox, error) {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return Mailbox{}, err
@@ -332,7 +391,7 @@ func (s *Service) SetMailboxLimits(ctx context.Context, a Actor, id int64, in Ma
 	if next == m {
 		return mailboxView(m, nil), nil
 	}
-	if err := s.store.SetMailboxLimits(ctx, id, next.QuotaBytes, next.SendPerHour, next.SendPerDay); err != nil {
+	if err := s.store.SetMailboxLimits(ctx, m.ID, next.QuotaBytes, next.SendPerHour, next.SendPerDay); err != nil {
 		return Mailbox{}, storeError(err)
 	}
 	s.record(ctx, a, "mail.mailbox.limits", m.LocalPart+"@"+m.Domain, limitsDetail(next))
@@ -341,7 +400,7 @@ func (s *Service) SetMailboxLimits(ctx context.Context, a Actor, id int64, in Ma
 
 // DeleteMailbox removes a mailbox; the mail service deletes its stored
 // mail (retried later if it cannot be reached now).
-func (s *Service) DeleteMailbox(ctx context.Context, a Actor, id int64) error {
+func (s *Service) DeleteMailbox(ctx context.Context, a Actor, id string) error {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return err
@@ -349,7 +408,7 @@ func (s *Service) DeleteMailbox(ctx context.Context, a Actor, id int64) error {
 	if err := needMailWrite(a); err != nil {
 		return err
 	}
-	if _, err := s.store.DeleteMailbox(ctx, id); err != nil {
+	if _, err := s.store.DeleteMailbox(ctx, m.ID); err != nil {
 		return storeError(err)
 	}
 	s.record(ctx, a, "mail.mailbox.delete", m.LocalPart+"@"+m.Domain, "")
@@ -358,7 +417,7 @@ func (s *Service) DeleteMailbox(ctx context.Context, a Actor, id int64) error {
 
 // UnblockMailbox lets a mailbox the mail service blocked send again
 // (admins only).
-func (s *Service) UnblockMailbox(ctx context.Context, a Actor, id int64) error {
+func (s *Service) UnblockMailbox(ctx context.Context, a Actor, id string) error {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return err
@@ -390,10 +449,11 @@ func mailServiceError(err error) error {
 // ---- aliases ----
 
 // visibleAlias returns an alias the actor may see.
-func (s *Service) visibleAlias(ctx context.Context, a Actor, id int64) (store.MailAlias, error) {
+func (s *Service) visibleAlias(ctx context.Context, a Actor, aliasID string) (store.MailAlias, error) {
 	if err := needMailRead(a); err != nil {
 		return store.MailAlias{}, err
 	}
+	id := aliasID
 	al, err := s.store.MailAlias(ctx, id)
 	if err != nil {
 		return store.MailAlias{}, storeError(err)
@@ -456,7 +516,7 @@ func (s *Service) MailAliases(ctx context.Context, a Actor, domain string) ([]Ma
 }
 
 // MailAliasOf returns one alias.
-func (s *Service) MailAliasOf(ctx context.Context, a Actor, id int64) (MailAlias, error) {
+func (s *Service) MailAliasOf(ctx context.Context, a Actor, id string) (MailAlias, error) {
 	al, err := s.visibleAlias(ctx, a, id)
 	if err != nil {
 		return MailAlias{}, err
@@ -466,7 +526,10 @@ func (s *Service) MailAliasOf(ctx context.Context, a Actor, id int64) (MailAlias
 
 // CreateMailAlias adds an alias ("*" local part: the catch-all) to a mail
 // domain the actor may change.
-func (s *Service) CreateMailAlias(ctx context.Context, a Actor, domain, local string, targets []string) (MailAlias, error) {
+//
+// group sets who may write to it and whether it is in the address book
+// (distribution groups); without it, anyone may.
+func (s *Service) CreateMailAlias(ctx context.Context, a Actor, domain, local string, targets []string, group ...AliasGroup) (MailAlias, error) {
 	md, err := s.visibleMailDomain(ctx, a, domain)
 	if err != nil {
 		return MailAlias{}, err
@@ -482,16 +545,29 @@ func (s *Service) CreateMailAlias(ctx context.Context, a Actor, domain, local st
 	if err != nil {
 		return MailAlias{}, err
 	}
-	saved, err := s.store.CreateMailAlias(ctx, store.MailAlias{Domain: md.Domain, LocalPart: l, Targets: t})
+	g := AliasGroup{}
+	if len(group) > 0 {
+		g = group[0]
+	}
+	if g.SenderPolicy, err = aliasGroupPolicy(l, g.SenderPolicy); err != nil {
+		return MailAlias{}, err
+	}
+	saved, err := s.store.CreateMailAlias(ctx, store.MailAlias{Domain: md.Domain, LocalPart: l, Targets: t,
+		SenderPolicy: g.SenderPolicy, HideFromDirectory: g.HideFromDirectory})
 	if err != nil {
 		return MailAlias{}, storeError(err)
 	}
-	s.record(ctx, a, "mail.alias.create", l+"@"+md.Domain, aliasDetail(t))
+	detail := aliasDetail(t)
+	if gd := groupDetail(g.SenderPolicy, g.HideFromDirectory); gd != "" {
+		detail += "; " + gd
+	}
+	s.record(ctx, a, "mail.alias.create", l+"@"+md.Domain, detail)
 	return aliasView(saved), s.mailChanged(ctx, md.Domain)
 }
 
-// UpdateMailAlias replaces an alias's local part and targets.
-func (s *Service) UpdateMailAlias(ctx context.Context, a Actor, id int64, local string, targets []string) (MailAlias, error) {
+// UpdateMailAlias replaces an alias's local part and targets, and with
+// group its distribution group settings (without, they stay).
+func (s *Service) UpdateMailAlias(ctx context.Context, a Actor, id string, local string, targets []string, group ...AliasGroup) (MailAlias, error) {
 	cur, err := s.visibleAlias(ctx, a, id)
 	if err != nil {
 		return MailAlias{}, err
@@ -507,7 +583,15 @@ func (s *Service) UpdateMailAlias(ctx context.Context, a Actor, id int64, local 
 	if err != nil {
 		return MailAlias{}, err
 	}
-	saved, err := s.store.UpdateMailAlias(ctx, store.MailAlias{ID: id, LocalPart: l, Targets: t})
+	g := AliasGroup{SenderPolicy: cur.SenderPolicy, HideFromDirectory: cur.HideFromDirectory}
+	if len(group) > 0 {
+		g = group[0]
+	}
+	if g.SenderPolicy, err = aliasGroupPolicy(l, g.SenderPolicy); err != nil {
+		return MailAlias{}, err
+	}
+	saved, err := s.store.UpdateMailAlias(ctx, store.MailAlias{ID: cur.ID, LocalPart: l, Targets: t,
+		SenderPolicy: g.SenderPolicy, HideFromDirectory: g.HideFromDirectory})
 	if err != nil {
 		return MailAlias{}, storeError(err)
 	}
@@ -515,12 +599,15 @@ func (s *Service) UpdateMailAlias(ctx context.Context, a Actor, id int64, local 
 	if cur.LocalPart != l {
 		detail = "was " + cur.LocalPart + "@" + cur.Domain + "; " + detail
 	}
+	if gd := groupDetail(g.SenderPolicy, g.HideFromDirectory); gd != "" {
+		detail += "; " + gd
+	}
 	s.record(ctx, a, "mail.alias.update", l+"@"+cur.Domain, detail)
 	return aliasView(saved), s.mailChanged(ctx, cur.Domain)
 }
 
 // DeleteMailAlias removes an alias.
-func (s *Service) DeleteMailAlias(ctx context.Context, a Actor, id int64) error {
+func (s *Service) DeleteMailAlias(ctx context.Context, a Actor, id string) error {
 	cur, err := s.visibleAlias(ctx, a, id)
 	if err != nil {
 		return err
@@ -528,11 +615,24 @@ func (s *Service) DeleteMailAlias(ctx context.Context, a Actor, id int64) error 
 	if err := needMailWrite(a); err != nil {
 		return err
 	}
-	if err := s.store.DeleteMailAlias(ctx, id); err != nil {
+	if err := s.store.DeleteMailAlias(ctx, cur.ID); err != nil {
 		return storeError(err)
 	}
 	s.record(ctx, a, "mail.alias.delete", cur.LocalPart+"@"+cur.Domain, aliasDetail(cur.Targets))
 	return s.mailChanged(ctx, cur.Domain)
+}
+
+// aliasGroupPolicy checks the sender policy of an alias with local part l:
+// the catch-all takes everyone's mail.
+func aliasGroupPolicy(l, policy string) (string, error) {
+	p, err := senderPolicy(policy)
+	if err != nil {
+		return "", err
+	}
+	if l == "*" && p != config.SenderAnyone {
+		return "", errorf(Invalid, "the catch-all takes mail from anyone; limit who may write to a named address instead")
+	}
+	return p, nil
 }
 
 func aliasDetail(targets []string) string {

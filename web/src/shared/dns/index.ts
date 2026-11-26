@@ -1,4 +1,5 @@
 export {
+  addDomain,
   adoptZone,
   checkConnection,
   connectionPath,
@@ -6,10 +7,12 @@ export {
   createZone,
   deleteConnection,
   deleteZone,
+  listAddedDomains,
   listAvailableZones,
   listConnections,
   listZones,
   releaseZone,
+  removeAddedDomain,
 } from './api.ts'
 export {
   connectionHealth,
@@ -20,5 +23,5 @@ export {
   zoneCountLabel,
   type ConnectionHealth,
 } from './connections.ts'
-export type { Connection, NewConnection, Zone, ZoneList, ZoneProblem } from './types.ts'
+export type { AddedDomain, Connection, NewConnection, RemovedDomain, Zone, ZoneList, ZoneProblem } from './types.ts'
 export { groupByAccount, staysBecause, zoneKey, zonesNamed, type AccountGroup } from './zones.ts'

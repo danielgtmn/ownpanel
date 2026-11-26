@@ -16,7 +16,7 @@ const (
 // Actor is who performs an operation. Front doors get one from
 // SessionActor or TokenActor; the zero Actor may do nothing.
 type Actor struct {
-	UserID   int64
+	UserID   string
 	Name     string
 	Admin    bool
 	ReadOnly bool     // token with access "read"
@@ -35,7 +35,7 @@ var System = Actor{Name: "system", Admin: true, Via: ViaSystem}
 func (a Actor) authenticated() bool {
 	switch a.Via {
 	case ViaSession, ViaToken:
-		return a.UserID != 0
+		return a.UserID != ""
 	case ViaSystem:
 		return true
 	}

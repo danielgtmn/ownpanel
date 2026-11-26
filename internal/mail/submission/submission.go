@@ -24,6 +24,7 @@ import (
 	"github.com/emersion/go-smtp"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/auth"
+	"github.com/danielgtmn/ownpanel/internal/mail/deliver"
 	"github.com/danielgtmn/ownpanel/internal/mail/directory"
 	"github.com/danielgtmn/ownpanel/internal/mail/queue"
 	"github.com/danielgtmn/ownpanel/internal/mail/signin"
@@ -55,6 +56,9 @@ type Options struct {
 	MinFreeBytes int64
 	// Now is the clock (tests); nil means time.Now.
 	Now func() time.Time
+	// Deliver stores mail for mailboxes of this server and runs their
+	// filters; nil means one with Store, Queue and Signer.
+	Deliver *deliver.Deliverer
 }
 
 // Server is one submission port.
@@ -80,6 +84,9 @@ func New(opts Options) *Server {
 	}
 	if opts.Signer == nil {
 		opts.Signer = auth.NewSigner()
+	}
+	if opts.Deliver == nil {
+		opts.Deliver = deliver.New(deliver.Options{Store: opts.Store, Queue: opts.Queue, Signer: opts.Signer, Logger: opts.Logger, Now: opts.Now})
 	}
 	tc := opts.TLSConfig.Clone()
 	tc.MinVersion = tls.VersionTLS12

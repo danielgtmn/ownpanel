@@ -1,5 +1,16 @@
 import type { RowStatus } from '../../shared/families/index.ts'
-import type { MailAlias, MailClientSettings, MailDomain, Mailbox, MailRecord, RecordChange } from './types.ts'
+import { addressList } from '../../shared/sharing/rights.ts'
+import type {
+  MailAlias,
+  MailboxForwarding,
+  MailboxOutOfOffice,
+  MailClientSettings,
+  MailDomain,
+  Mailbox,
+  MailRecord,
+  RecordChange,
+  SenderPolicy,
+} from './types.ts'
 
 export type Tone = 'positive' | 'neutral' | 'warning'
 
@@ -141,7 +152,7 @@ export function sortAliases<T extends Pick<MailAlias, 'catch_all' | 'address'>>(
 export type ClientRow = { label: string; value: string; copy?: boolean }
 
 export function clientRows(client: MailClientSettings): ClientRow[] {
-  return [
+  const rows: ClientRow[] = [
     { label: 'Server (incoming and outgoing)', value: client.server, copy: true },
     { label: 'User name', value: client.user_name_is_address ? 'The full e-mail address' : 'The mailbox name' },
     { label: 'Password', value: 'The password of the mailbox' },
@@ -151,6 +162,8 @@ export function clientRows(client: MailClientSettings): ClientRow[] {
       value: `Port ${client.smtp_port}, SSL/TLS, or port ${client.smtp_starttls_port}, STARTTLS`,
     },
   ]
+  if (client.dav_url) rows.push({ label: 'Calendars and contacts', value: client.dav_url, copy: true })
+  return rows
 }
 
 // ---- DNS records ----
@@ -164,6 +177,10 @@ const KIND_LABEL: Record<string, string> = {
   'srv-imaps': 'Lets mail programs find the server for receiving',
   autoconfig: 'Lets mail programs set themselves up',
   autodiscover: 'Lets Outlook set itself up',
+  'srv-caldav': 'Lets calendar programs find the server',
+  'txt-caldav': 'Tells calendar programs where calendars start',
+  'srv-carddav': 'Lets contacts programs find the server',
+  'txt-carddav': 'Tells contacts programs where address books start',
 }
 
 export function recordPurpose(kind: string): string {
@@ -231,4 +248,127 @@ export function validateMailDomain(value: string): string | null {
   if (domain.includes('@')) return 'Enter only the domain, the part after the @.'
   if (!HOST.test(domain)) return 'Enter a domain name like example.com.'
   return null
+}
+
+// ---- sender name, app passwords and organisations ----
+
+export const DISPLAY_NAME_MAX = 64
+export const APP_PASSWORD_NAME_MAX = 64
+export const ORGANISATION_NAME_MAX = 64
+
+// The sender's name as the server accepts it: one line, at most 64
+// characters, none of < > " ; (they would break the sender line). Empty removes it.
+export function validateDisplayName(value: string): string | null {
+  const name = value.trim()
+  if (/[\r\n]/.test(name)) return 'Use a single line.'
+  if ([...name].length > DISPLAY_NAME_MAX) return `Use at most ${DISPLAY_NAME_MAX} characters.`
+  if (/[<>";]/.test(name)) return 'Leave out < > " and ;.'
+  return null
+}
+
+export function validateAppPasswordName(value: string): string | null {
+  const name = value.trim()
+  if (!name) return 'Enter the device or program, for example "Phone".'
+  if ([...name].length > APP_PASSWORD_NAME_MAX) return `Use at most ${APP_PASSWORD_NAME_MAX} characters.`
+  return null
+}
+
+export function validateOrganisationName(value: string): string | null {
+  const name = value.trim()
+  if (!name) return 'Enter a name, for example the name of the company.'
+  if ([...name].length > ORGANISATION_NAME_MAX) return `Use at most ${ORGANISATION_NAME_MAX} characters.`
+  return null
+}
+
+// "Not used yet" or "Last used 25 Nov 2026, 10:00 from 203.0.113.0/24".
+export function appPasswordUse(
+  app: { last_used_at: string | null; last_used_network: string },
+  formatDateTime: (value: string) => string,
+): string {
+  if (!app.last_used_at) return 'Not used yet'
+  const where = app.last_used_network ? ` from ${app.last_used_network}` : ''
+  return `Last used ${formatDateTime(app.last_used_at)}${where}`
+}
+
+// The sentence about a domain's organisation on its page.
+export function organisationSentence(organisation: MailDomain['organisation']): string {
+  if (!organisation) return 'This domain stands alone.'
+  return `Part of ${organisation.name}.`
+}
+
+export function organisationDomainsText(organisation: MailDomain['organisation']): string {
+  if (!organisation) return ''
+  if (organisation.domains.length === 0) return 'No other domains you can see belong to it.'
+  return `Together with ${organisation.domains.join(', ')}.`
+}
+
+// ---- shared mailboxes and who may write to an address ----
+
+export const NOT_IN_EFFECT = 'Not in effect: the two mailboxes belong to different organisations now.'
+
+// Short facts for a mailbox's row: who uses a shared one, what a personal one can use and who it is shared with.
+export function accessFacts(mailbox: Pick<Mailbox, 'kind' | 'shared_with' | 'access_to'>): string[] {
+  const names = (list: { address: string }[]) => addressList(list.map((entry) => entry.address))
+  if (mailbox.kind === 'shared') {
+    return [mailbox.shared_with.length === 0 ? 'Nobody has access yet' : `Used by ${names(mailbox.shared_with)}`]
+  }
+  const facts: string[] = []
+  if (mailbox.access_to.length > 0) facts.push(`Has access to ${names(mailbox.access_to)}`)
+  if (mailbox.shared_with.length > 0) facts.push(`Shared with ${names(mailbox.shared_with)}`)
+  return facts
+}
+
+export const SENDER_POLICIES: { value: SenderPolicy; label: string; hint: string }[] = [
+  { value: 'anyone', label: 'Anyone', hint: 'Also people outside the organisation, for example customers.' },
+  {
+    value: 'organisation',
+    label: 'Only addresses of this organisation',
+    hint: 'Mail from anywhere else is turned away.',
+  },
+  {
+    value: 'members',
+    label: 'Only its members',
+    hint: 'Only the addresses it delivers to. Mail from anyone else is turned away.',
+  },
+]
+
+// The fact in the list of forwarding; empty for "anyone".
+export function senderPolicyText(policy: string): string {
+  if (policy === 'organisation') return 'Only the organisation may write to it'
+  if (policy === 'members') return 'Only its members may write to it'
+  return ''
+}
+
+// ---- out-of-office and forwarding ----
+
+// What the panel can say about a mailbox's out-of-office reply. Its text shows only when it was set from the
+// panel; what the person wrote stays private.
+export function outOfOfficeStatus(
+  reply: Pick<MailboxOutOfOffice, 'enabled' | 'on' | 'start' | 'end' | 'set_by' | 'set_at'>,
+  formatDay: (day: string) => string,
+  formatDateTime: (value: string) => string,
+): string {
+  if (!reply.enabled) return 'Off.'
+  const state = reply.on ? 'On' : 'Turned on, but not answering today'
+  const dates = reply.start || reply.end ? ` (${outOfOfficeDates(reply, formatDay)})` : ''
+  const who = reply.set_by
+    ? ` Set by ${reply.set_by}${reply.set_at ? ` on ${formatDateTime(reply.set_at)}` : ''}.`
+    : ' Set by the person; its text is private.'
+  return `${state}${dates}.${who}`
+}
+
+function outOfOfficeDates(reply: Pick<MailboxOutOfOffice, 'start' | 'end'>, formatDay: (day: string) => string) {
+  if (reply.start && reply.end) return `${formatDay(reply.start)} to ${formatDay(reply.end)}`
+  if (reply.start) return `from ${formatDay(reply.start)}`
+  return `until ${formatDay(reply.end)}`
+}
+
+export function forwardingStatus(
+  forwarding: Pick<MailboxForwarding, 'enabled' | 'to' | 'set_by' | 'set_at'>,
+  formatDateTime: (value: string) => string,
+): string {
+  if (!forwarding.enabled) return 'Off.'
+  if (!forwarding.set_by) return 'On. Set by the person; the address is private.'
+  const when = forwarding.set_at ? ` on ${formatDateTime(forwarding.set_at)}` : ''
+  return `On, to ${forwarding.to}. Set by ${forwarding.set_by}${when}.`
 }

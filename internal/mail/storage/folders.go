@@ -2,11 +2,12 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/danielgtmn/ablage"
 )
 
 // Separator is the hierarchy delimiter of folder names.
@@ -79,16 +80,16 @@ func NormalizeFolderName(name string) (string, error) {
 
 // ensureMailbox creates the mailbox row and its default folders if they do
 // not exist yet.
-func (s *Store) ensureMailbox(tx *sql.Tx, id string) error {
-	res, err := tx.Exec(`INSERT INTO mailboxes (storage_id, created) VALUES (?, ?) ON CONFLICT DO NOTHING`, id, s.now().Unix())
+func (s *Store) ensureMailbox(ctx context.Context, tx *repos, id string) error {
+	err := tx.mailboxes.Create(ctx, &mailboxRow{ID: id, Created: sec(s.now())})
+	if errors.Is(err, ablage.ErrDuplicate) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return nil
-	}
 	for _, f := range defaultFolders {
-		if _, err := s.createFolder(tx, id, f.name, f.use, true); err != nil {
+		if _, err := s.createFolder(ctx, tx, id, f.name, f.use, true); err != nil {
 			return err
 		}
 	}
@@ -101,76 +102,78 @@ func (s *Store) ensure(ctx context.Context, id string) error {
 	if err := checkID(id); err != nil {
 		return err
 	}
-	var n int
-	if err := s.rdb.QueryRowContext(ctx, `SELECT count(*) FROM mailboxes WHERE storage_id = ?`, id).Scan(&n); err != nil {
+	ok, err := s.r.mailboxes.Exists(ctx, id)
+	if err != nil || ok {
 		return err
 	}
-	if n > 0 {
-		return nil
-	}
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error { return s.ensureMailbox(tx, id) })
+	return s.write(ctx, func(tx *repos, _ *changes) error { return s.ensureMailbox(ctx, tx, id) })
 }
 
 // EnsureMailbox creates the mailbox's default folders if it has none yet.
 // Every other method does this itself; IMAP may call it at sign-in.
 func (s *Store) EnsureMailbox(ctx context.Context, id string) error { return s.ensure(ctx, id) }
 
-func (s *Store) createFolder(tx *sql.Tx, id, name, use string, subscribed bool) (int64, error) {
-	v, err := s.nextUIDValidity(tx)
+func (s *Store) createFolder(ctx context.Context, tx *repos, id, name, use string, subscribed bool) (folderRec, error) {
+	f := folderRec{StorageID: id, Name: name, SpecialUse: use, UIDNext: 1, Subscribed: subscribed}
+	if ok, err := tx.folders.Count(ctx, ablage.And(ablage.Eq("storage_id", id), ablage.Eq("name", name))); err != nil {
+		return f, err
+	} else if ok > 0 {
+		return f, ErrFolderExists
+	}
+	v, err := s.nextUIDValidity(ctx, tx)
 	if err != nil {
-		return 0, err
+		return f, err
 	}
-	res, err := tx.Exec(`INSERT INTO folders (storage_id, name, special_use, uid_validity, subscribed) VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT DO NOTHING`, id, name, use, v, subscribed)
-	if err != nil {
-		return 0, err
+	f.UIDValidity = int64(v)
+	err = tx.folders.Create(ctx, &f)
+	if errors.Is(err, ablage.ErrDuplicate) {
+		return f, ErrFolderExists
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return 0, ErrFolderExists
-	}
-	return res.LastInsertId()
+	return f, err
 }
 
-type folderRow struct {
-	id          int64
-	uidValidity uint32
-	uidNext     uint32
-}
-
-func folderByName(tx *sql.Tx, id, name string) (folderRow, error) {
-	var f folderRow
-	err := tx.QueryRow(`SELECT id, uid_validity, uid_next FROM folders WHERE storage_id = ? AND name = ?`, id, name).
-		Scan(&f.id, &f.uidValidity, &f.uidNext)
-	if errors.Is(err, sql.ErrNoRows) {
+// folderByName returns a folder of a mailbox; ErrNoFolder if there is none.
+func folderByName(ctx context.Context, tx *repos, id, name string) (folderRec, error) {
+	f, err := tx.folders.First(ctx, ablage.Query{Where: ablage.And(ablage.Eq("storage_id", id), ablage.Eq("name", name))})
+	if errors.Is(err, ablage.ErrNotFound) {
 		return f, ErrNoFolder
 	}
 	return f, err
 }
 
-// ListFolders returns all folders of a mailbox, sorted by name.
+func (f folderRec) folder() Folder {
+	return Folder{Name: f.Name, SpecialUse: f.SpecialUse, UIDValidity: uint32(f.UIDValidity), UIDNext: uint32(f.UIDNext), Subscribed: f.Subscribed}
+}
+
+// ListFolders returns all folders of a mailbox, sorted by name, INBOX
+// first.
 func (s *Store) ListFolders(ctx context.Context, id string) ([]Folder, error) {
 	if err := s.ensure(ctx, id); err != nil {
 		return nil, err
 	}
-	rows, err := s.rdb.QueryContext(ctx, `SELECT name, special_use, uid_validity, uid_next, subscribed
-		FROM folders WHERE storage_id = ? ORDER BY name = 'INBOX' DESC, name`, id)
+	list, err := s.r.folders.Find(ctx, ablage.Query{Where: ablage.Eq("storage_id", id), OrderBy: []ablage.Order{ablage.Asc("name")}})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []Folder
-	for rows.Next() {
-		var f Folder
-		if err := rows.Scan(&f.Name, &f.SpecialUse, &f.UIDValidity, &f.UIDNext, &f.Subscribed); err != nil {
-			return nil, err
+	for _, f := range list {
+		if f.Name == Inbox {
+			out = append([]Folder{f.folder()}, out...)
+		} else {
+			out = append(out, f.folder())
 		}
-		out = append(out, f)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // FolderStatus returns a folder with its counts.
 func (s *Store) FolderStatus(ctx context.Context, id, name string) (FolderStatus, error) {
+	return s.FolderStatusAs(ctx, id, name, "")
+}
+
+// FolderStatusAs is FolderStatus for a reader of a shared mailbox: Unseen
+// counts what that reader has not seen. "" is FolderStatus.
+func (s *Store) FolderStatusAs(ctx context.Context, id, name, reader string) (FolderStatus, error) {
 	var st FolderStatus
 	name, err := NormalizeFolderName(name)
 	if err != nil {
@@ -179,22 +182,61 @@ func (s *Store) FolderStatus(ctx context.Context, id, name string) (FolderStatus
 	if err := s.ensure(ctx, id); err != nil {
 		return st, err
 	}
-	var fid int64
-	err = s.rdb.QueryRowContext(ctx, `SELECT id, name, special_use, uid_validity, uid_next, subscribed
-		FROM folders WHERE storage_id = ? AND name = ?`, id, name).
-		Scan(&fid, &st.Name, &st.SpecialUse, &st.UIDValidity, &st.UIDNext, &st.Subscribed)
-	if errors.Is(err, sql.ErrNoRows) {
-		return st, ErrNoFolder
-	}
-	if err != nil {
-		return st, err
-	}
-	err = s.rdb.QueryRowContext(ctx, `SELECT count(*),
-		coalesce(sum(instr(' ' || flags || ' ', ' \Seen ') = 0), 0),
-		coalesce(sum(instr(' ' || flags || ' ', ' \Deleted ') > 0), 0),
-		coalesce(sum(size), 0)
-		FROM messages WHERE folder_id = ?`, fid).Scan(&st.Messages, &st.Unseen, &st.Deleted, &st.Size)
+	err = s.read(ctx, func(tx *repos) error {
+		f, err := folderByName(ctx, tx, id, name)
+		if err != nil {
+			return err
+		}
+		st.Folder = f.folder()
+		// One row per combination of \Seen and \Deleted.
+		rows, err := tx.messages.Aggregate(ctx, ablage.Aggregation{
+			Where:   ablage.Eq("folder_id", f.ID),
+			GroupBy: []string{"seen", "deleted"},
+			Values:  []ablage.Agg{ablage.CountAll("n"), ablage.Sum("size", "bytes")},
+		})
+		if err != nil {
+			return err
+		}
+		for _, r := range rows {
+			n := int(r["n"].(int64))
+			st.Messages += n
+			st.Size += r["bytes"].(int64)
+			if r["seen"] == false {
+				st.Unseen += n
+			}
+			if r["deleted"] == true {
+				st.Deleted += n
+			}
+		}
+		if reader == "" {
+			return nil
+		}
+		// The reader's own read state: everything but what they have seen.
+		ids, err := messageIDs(ctx, tx, f.ID)
+		if err != nil {
+			return err
+		}
+		seen, err := tx.sharedSeen.Count(ctx, ablage.And(ablage.Eq("reader", reader), ablage.In("message_id", ids...)))
+		if err != nil {
+			return err
+		}
+		st.Unseen = st.Messages - int(seen)
+		return nil
+	})
 	return st, err
+}
+
+// messageIDs returns the row ids of a folder's messages.
+func messageIDs(ctx context.Context, tx *repos, folderID string) ([]string, error) {
+	list, err := tx.messages.Find(ctx, ablage.Query{Where: ablage.Eq("folder_id", folderID)})
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(list))
+	for i, m := range list {
+		ids[i] = m.ID
+	}
+	return ids, nil
 }
 
 // CreateFolder creates a folder. Parents are not created: the hierarchy is
@@ -207,8 +249,8 @@ func (s *Store) CreateFolder(ctx context.Context, id, name string) error {
 	if err := s.ensure(ctx, id); err != nil {
 		return err
 	}
-	return s.write(ctx, func(tx *sql.Tx, ch *changes) error {
-		if _, err := s.createFolder(tx, id, name, "", false); err != nil {
+	return s.write(ctx, func(tx *repos, ch *changes) error {
+		if _, err := s.createFolder(ctx, tx, id, name, "", false); err != nil {
 			return err
 		}
 		ch.add(id, Change{Kind: FoldersChanged, Folder: name})
@@ -225,12 +267,12 @@ func (s *Store) SetSubscribed(ctx context.Context, id, name string, subscribed b
 	if err := s.ensure(ctx, id); err != nil {
 		return err
 	}
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		res, err := tx.Exec(`UPDATE folders SET subscribed = ? WHERE storage_id = ? AND name = ?`, subscribed, id, name)
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		n, err := tx.folders.UpdateWhere(ctx, ablage.And(ablage.Eq("storage_id", id), ablage.Eq("name", name)), ablage.Row{"subscribed": subscribed})
 		if err != nil {
 			return err
 		}
-		if n, _ := res.RowsAffected(); n == 0 {
+		if n == 0 {
 			return ErrNoFolder
 		}
 		return nil
@@ -254,26 +296,26 @@ func (s *Store) RenameFolder(ctx context.Context, id, from, to string) error {
 	if err := s.ensure(ctx, id); err != nil {
 		return err
 	}
-	return s.write(ctx, func(tx *sql.Tx, ch *changes) error {
-		src, err := folderByName(tx, id, from)
+	return s.write(ctx, func(tx *repos, ch *changes) error {
+		src, err := folderByName(ctx, tx, id, from)
 		if err != nil {
 			return err
 		}
-		if _, err := folderByName(tx, id, to); err == nil {
+		if _, err := folderByName(ctx, tx, id, to); err == nil {
 			return ErrFolderExists
 		} else if !errors.Is(err, ErrNoFolder) {
 			return err
 		}
 		if from == Inbox {
-			dst, err := s.createFolder(tx, id, to, "", false)
+			dst, err := s.createFolder(ctx, tx, id, to, "", false)
 			if err != nil {
 				return err
 			}
-			uids, err := uidsOf(tx, src.id)
+			uids, err := uidsOf(ctx, tx, src.ID)
 			if err != nil {
 				return err
 			}
-			if _, err := moveRows(tx, src.id, dst, uids); err != nil {
+			if _, err := moveRows(ctx, tx, src.ID, dst.ID, uids); err != nil {
 				return err
 			}
 			ch.add(id, Change{Kind: Expunged, Folder: Inbox, UIDs: uids})
@@ -282,33 +324,23 @@ func (s *Store) RenameFolder(ctx context.Context, id, from, to string) error {
 		}
 		// Folders below "to" may exist even though "to" does not (parents
 		// are not required), so every single rename checks for a collision.
-		rows, err := tx.Query(`SELECT name FROM folders WHERE storage_id = ? AND (name = ? OR substr(name, 1, ?) = ?)`,
-			id, from, len(from)+1, from+Separator)
+		list, err := tx.folders.Find(ctx, ablage.Query{Where: ablage.And(ablage.Eq("storage_id", id),
+			ablage.Or(ablage.Eq("name", from), ablage.Prefix("name", from+Separator)))})
 		if err != nil {
 			return err
 		}
-		var names []string
-		for rows.Next() {
-			var n string
-			if err := rows.Scan(&n); err != nil {
-				rows.Close()
-				return err
-			}
-			names = append(names, n)
-		}
-		rows.Close()
-		for _, n := range names {
-			nn := to + strings.TrimPrefix(n, from)
+		for _, f := range list {
+			nn := to + strings.TrimPrefix(f.Name, from)
 			if len(nn) > 255 {
 				return ErrInvalidName
 			}
-			res, err := tx.Exec(`UPDATE folders SET name = ? WHERE storage_id = ? AND name = ?
-				AND NOT EXISTS (SELECT 1 FROM folders WHERE storage_id = ? AND name = ?)`, nn, id, n, id, nn)
-			if err != nil {
+			if n, err := tx.folders.Count(ctx, ablage.And(ablage.Eq("storage_id", id), ablage.Eq("name", nn))); err != nil {
 				return err
-			}
-			if c, _ := res.RowsAffected(); c == 0 {
+			} else if n > 0 {
 				return ErrFolderExists
+			}
+			if err := tx.folders.Patch(ctx, f.ID, ablage.Row{"name": nn}); err != nil {
+				return err
 			}
 		}
 		ch.add(id, Change{Kind: FoldersChanged, Folder: from})
@@ -328,19 +360,19 @@ func (s *Store) DeleteFolder(ctx context.Context, id, name string) error {
 	if err := s.ensure(ctx, id); err != nil {
 		return err
 	}
-	return s.write(ctx, func(tx *sql.Tx, ch *changes) error {
-		f, err := folderByName(tx, id, name)
+	return s.write(ctx, func(tx *repos, ch *changes) error {
+		f, err := folderByName(ctx, tx, id, name)
 		if err != nil {
 			return err
 		}
-		uids, err := uidsOf(tx, f.id)
+		uids, err := uidsOf(ctx, tx, f.ID)
 		if err != nil {
 			return err
 		}
-		if _, err := s.removeMessages(tx, ch, id, f.id, uids); err != nil {
+		if _, err := s.removeMessages(ctx, tx, ch, id, f.ID, uids); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`DELETE FROM folders WHERE id = ?`, f.id); err != nil {
+		if err := tx.folders.Delete(ctx, f.ID); err != nil {
 			return err
 		}
 		ch.add(id, Change{Kind: FoldersChanged, Folder: name})
@@ -348,19 +380,15 @@ func (s *Store) DeleteFolder(ctx context.Context, id, name string) error {
 	})
 }
 
-func uidsOf(tx *sql.Tx, folderID int64) ([]uint32, error) {
-	rows, err := tx.Query(`SELECT uid FROM messages WHERE folder_id = ? ORDER BY uid`, folderID)
+// uidsOf returns the UIDs of a folder, ascending.
+func uidsOf(ctx context.Context, tx *repos, folderID string) ([]uint32, error) {
+	list, err := tx.messages.Find(ctx, ablage.Query{Where: ablage.Eq("folder_id", folderID), OrderBy: []ablage.Order{ablage.Asc("uid")}})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []uint32
-	for rows.Next() {
-		var u uint32
-		if err := rows.Scan(&u); err != nil {
-			return nil, err
-		}
-		out = append(out, u)
+	out := make([]uint32, len(list))
+	for i, m := range list {
+		out[i] = uint32(m.UID)
 	}
-	return out, rows.Err()
+	return out, nil
 }

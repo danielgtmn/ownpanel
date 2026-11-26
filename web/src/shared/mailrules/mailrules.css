@@ -1,0 +1,72 @@
+/* Out-of-office and forwarding fields, shared by the account area and the panel (src/shared/mailrules). */
+
+.mailrules-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.mailrules-choice[data-slot='field'] {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.mailrules-choice > [data-slot='switch'],
+.mailrules-choice > [data-slot='checkbox'] {
+  flex: none;
+  margin-top: 0.125rem;
+}
+
+.mailrules-dates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.mailrules-days {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mailrules-days [data-slot='number-input'] {
+  width: 9rem;
+}
+
+.mailrules-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.mailrules-fieldset:disabled {
+  opacity: 0.6;
+}
+
+.mailrules-set-by {
+  margin: 0;
+  color: var(--ui-muted-foreground);
+  font-size: 0.875rem;
+}
+
+.mailrules-script {
+  max-height: 20rem;
+  margin: 0.5rem 0 0;
+  padding: 0.75rem;
+  overflow: auto;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  background: var(--ui-muted);
+  font-family: var(--ui-font-mono, ui-monospace, monospace);
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+  .mailrules-dates {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
