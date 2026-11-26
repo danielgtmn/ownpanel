@@ -81,9 +81,22 @@ Updating replaces binaries and restarts services, which needs root; the panel ru
 
 ### Stored secrets
 
-- DNS API tokens are stored encrypted (AES-256-GCM) with a key in `secret.key` (mode 0600), never in the database. The API never returns them, and they are scrubbed from error messages and left out of the activity log. See [[DNS|DNS]].
+- DNS API tokens and the secrets of GitHub connections are stored encrypted (AES-256-GCM) with a key in `secret.key` (mode 0600), never in the database. The API never returns them, and they are scrubbed from error messages and left out of the activity log. See [[DNS|DNS]].
 - Passwords, session secrets and access tokens are never written to the log.
 - A [[backup|Backup-and-Restore]] contains the database and the key together, so it must be protected like the server.
+
+### GitHub
+
+Administrators connect GitHub accounts and organisations through an app the panel creates on GitHub ([[GitHub|GitHub]]).
+
+- **What is stored:** per connected account, the app's id, name, owner and address, and three secrets: its **private key** (signs the panel's requests as the app), its **secret for signing GitHub's notices** and its **client secret** (unused so far). The three are encrypted with `secret.key` before they reach the database, like DNS tokens, are never returned by the API or MCP, and never appear in the log, the activity log or error messages. Also stored: where the app is installed and how many repositories each installation sees, as GitHub last reported.
+- **Not stored:** the short-lived tokens the panel asks GitHub for (at most an hour, narrowed to one use: listing repositories may only read metadata, fetching code may only read the contents of one repository), and the signed requests (JWT, at most 10 minutes) it makes as the app. They are printed as `[redacted]` if code ever tries to log them.
+- **What the app may do on GitHub:** read the contents and metadata of the repositories you chose, write commit statuses and pull requests (comments). It cannot push code or change settings. It is a **private** app: only the account that owns it can install it, so no stranger can install it and push their repositories into your panel.
+- **A copy of the database without `secret.key`** reveals which GitHub accounts are connected, the apps' names and ids, and where they are installed. It does not reveal the keys: without `secret.key` nobody can act as the app. A copy of the database **with** `secret.key` (for example a [[backup|Backup-and-Restore]]) lets someone act as the app until you delete it on GitHub or create a new private key there: read the chosen repositories, write commit statuses and comment on pull requests.
+- **The way back from GitHub:** GitHub sends the browser back to the panel with a one-time code (valid for an hour) and the panel's `state`. That request comes from another site, so the browser leaves out the session cookie (`SameSite=Strict`). The panel therefore changes nothing on it: it only checks the shape of the values and redirects to a fixed address of its own web app, the values in the address' fragment (which reaches neither a server log nor another site; the app removes them at once). The app then sends them in an ordinary request with the session and the `X-Ownpanel-Request` header, and the panel checks that the `state` was made for **this very sign-in**, is unused and at most 20 minutes old before it exchanges the code. A forged or replayed return, one started by another person or in another browser, or one with a used `state` is refused, and there is no open redirect.
+- **Installations:** the `installation_id` GitHub puts into the address proves nothing. The panel only records it with a valid `state`, and only after GitHub, asked as the very app of that `state`, confirms the installation is its own. Changes made on GitHub without coming from the panel only lead to asking GitHub afresh.
+- **The page that sends you to GitHub** is the one page of the panel that posts a form elsewhere. It has its own content security policy: one script by hash, forms only to GitHub, nothing else. The rest of the panel keeps `form-action 'self'`.
+- **Members** cannot see the connections or list or use their repositories; to them such a repository looks like one that does not exist.
 
 ### E-mail
 
@@ -121,6 +134,8 @@ One-time links are valid for 15 minutes, for one site, and work once. They are r
 - **Access tokens may be created without expiry.** Revoke those when they are no longer needed.
 - **Not tested on a real server yet:** the installer, the updater and the hardening of the systemd units have not been verified in production ([[Roadmap|Roadmap]]).
 - **E-mail has not been tested on a public server,** and there is no virus scanning. See [[E-Mail|E-Mail]].
+- **Removing a GitHub connection leaves the app on GitHub** until it is deleted there (the panel links to it). Its key is gone from the panel, but a backup made earlier still contains it.
+- **GitHub's notices are not received yet** ([#109](https://github.com/danielgtmn/ownpanel/issues/109)); the app already sends them to `/api/github/webhook`, which answers `404` until then.
 - **A rollback does not restore the database.** If a new version migrated it and the old one cannot read it, restore the backup made before the update.
 
 To report a problem, open an issue at <https://github.com/danielgtmn/ownpanel>.

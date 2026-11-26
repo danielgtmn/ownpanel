@@ -31,7 +31,7 @@ Not included: `setup-code` (only exists before the first admin), Caddy's home di
 
 ### The backup contains secrets
 
-With `secret.key` next to the database, anyone who has the archive can decrypt the stored DNS API tokens, and can use the private keys of the certificates. Keep the archive as safe as the server itself, and do not store it unencrypted somewhere less protected.
+With `secret.key` next to the database, anyone who has the archive can decrypt the stored DNS API tokens and the keys of GitHub connections (and so act as the panel's GitHub apps until they are deleted on GitHub or get a new key there), and can use the private keys of the certificates. Keep the archive as safe as the server itself, and do not store it unencrypted somewhere less protected.
 
 ## Restore
 

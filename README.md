@@ -12,8 +12,8 @@ DNS records at Hetzner, and e-mail with its own mail server.
   own with its own user; ownpaneld pushes its configuration over a local
   socket. See the wiki pages E-Mail and E-Mail architecture.
 - **ownpaneld** (Go) keeps the panel's data in SQLite (`ownpanel.db`: users,
-  sessions, access tokens, sites and their domains, DNS connections, activity
-  log), builds a
+  sessions, access tokens, sites and their domains, DNS and GitHub
+  connections, activity log), builds a
   complete Caddy config from it and loads it through Caddy's admin API. It
   re-syncs in the background, so a restarted Caddy gets its sites back.
 - A deployment is a `.zip` or `tar.gz` extracted into an immutable release directory;
@@ -26,6 +26,7 @@ internal/store     SQLite database and its migrations (internal/store/migrations
 internal/caddy     Caddy config builder and admin API client
 internal/deploy    releases, activation, rollback
 internal/dns       DNS provider interface, zone lookup, "does the domain point here?"; dns/hetzner is the Hetzner Cloud client
+internal/github    GitHub App client (manifest, JWT, installations, short-lived tokens); githubtest is a stand-in
 internal/api       HTTP API: authentication, then a thin adapter over internal/panel
 internal/mcp       MCP server (/mcp): the same operations as tools for AI assistants
 internal/backup    backup archives
@@ -140,6 +141,8 @@ made with the cookie must send `X-Ownpanel-Request: 1`.
 | `PUT` `DELETE` | `/api/dns/connections/{id}/zones/{zone}/records/{name}/{type}` | set with `{"ttl": 3600 \| null, "values": [..]}`, or delete; `name` is `@` for the zone itself |
 | `GET` | `/api/sites/{name}/domains/status` | per domain: `points_here`, `points_elsewhere`, `no_record` or `lookup_failed`, and the zone "point here" would use |
 | `POST` | `/api/sites/{name}/domains/{domain}/point` | write A/AAAA records for the domain; `{"changed": [..]}` |
+| `GET` | `/api/github` | admins: the GitHub connections and where their apps are installed; connecting is a browser flow (see the wiki page GitHub) |
+| `GET` | `/api/github/installations/{id}/repositories` | admins: the repositories an installation may see |
 
 Tokens and passwords can only be managed when signed in with a password.
 
@@ -165,6 +168,15 @@ repository, using a write token limited to the one site (stored as a secret):
 It packs `path`, uploads it, and sets the outputs `version` and `url`. See
 the wiki page [GitHub Action](https://github.com/danielgtmn/ownpanel/wiki/GitHub-Action)
 for examples (Vite, Astro, Hugo, Jekyll, plain HTML) and error messages.
+
+## Connect GitHub
+
+Administrators can also connect a GitHub account or organisation under
+Settings → GitHub: the panel creates its own GitHub App (one per account,
+private, with read access to code), you confirm it on GitHub and choose the
+repositories. The panel needs its own domain with HTTPS for that. Linking
+sites to repositories and building on push come next. See the wiki page
+[GitHub](https://github.com/danielgtmn/ownpanel/wiki/GitHub).
 
 ## MCP
 
@@ -309,7 +321,8 @@ releases, Caddy's certificates and `secret.key`. It can be made while
 everything runs; run it as root so the certificates are readable.
 
 **The backup contains secrets**: with `secret.key` next to the database,
-anyone who has the archive can decrypt the stored DNS API tokens (and use
+anyone who has the archive can decrypt the stored DNS API tokens and the
+keys of GitHub connections (and use
 the certificates' private keys). Keep it as safe as the server itself.
 
 To restore, stop both services, remove the old database files, unpack and

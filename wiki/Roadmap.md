@@ -15,6 +15,7 @@ ownpanel is early. This page separates what exists from what is only planned. Pl
 - **Installer** for Debian and Ubuntu with upgrade and uninstall, stable releases from the `release` branch and a nightly build of every change to `main` ([[Installation|Installation]]).
 - **E-mail** with its own mail server: receiving, mailboxes for mail programs, sending with signatures, forwarding, spam checks, DNS records, limits and mail health ([[E-Mail|E-Mail]], [[E-Mail architecture|E-Mail-Architecture]]).
 - **Navigation by domain:** a sidebar with one entry per domain that bundles its site, DNS and redirects.
+- **GitHub connection:** administrators connect accounts and organisations through an app the panel creates on GitHub, and see their repositories ([[GitHub|GitHub]], [#107](https://github.com/danielgtmn/ownpanel/issues/107)). Linking a site to a repository, publishing on push and builds on the server follow ([#108](https://github.com/danielgtmn/ownpanel/issues/108), [#109](https://github.com/danielgtmn/ownpanel/issues/109), [#113](https://github.com/danielgtmn/ownpanel/issues/113)).
 - **Updates** from the panel (Settings → Updates, optionally automatic) or with `update.sh`, with a backup first and an automatic rollback ([[Installation|Installation#updating]]).
 
 ## Next

@@ -11,7 +11,8 @@ ownpanel is a self-hosted hosting panel: `ownpaneld` (Go) keeps the desired
 state in SQLite and drives Caddy through its admin socket; a React app
 (embedded into the binary with the `webui` build tag) is the interface; an
 MCP server exposes the same operations to AI agents. Static sites, DNS via
-the Hetzner Cloud API, redirects, users and access tokens exist today;
+the Hetzner Cloud API, redirects, users, access tokens and the GitHub
+connection exist today;
 e-mail and apps are planned (see the issues).
 
 ## Layout
@@ -25,6 +26,7 @@ internal/store/       SQLite; migrations in store/migrations/NNNN_name.sql
 internal/caddy/       builds the full Caddy config and loads it
 internal/deploy/      releases of a site (unpack, versions, make live)
 internal/dns/         provider-neutral DNS + hetzner/ (Cloud API only)
+internal/github/      GitHub App client (manifest, JWT, installations) + githubtest/
 internal/backup/      the backup command
 internal/webui/       serves the embedded web app
 internal/timeouts/    time limits of the HTTP server (Caddy has its own in caddy/)
