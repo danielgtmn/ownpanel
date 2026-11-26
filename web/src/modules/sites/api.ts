@@ -1,5 +1,5 @@
 import { request } from '../../shared/api/index.ts'
-import type { Site } from './types.ts'
+import type { Publication, Site } from './types.ts'
 
 const sitePath = (name: string) => `/sites/${encodeURIComponent(name)}`
 
@@ -19,8 +19,9 @@ export function deleteSite(name: string): Promise<void> {
   return request<void>(sitePath(name), { method: 'DELETE' })
 }
 
-export function publishArchive(name: string, file: Blob): Promise<Site> {
-  return request<Site>(`${sitePath(name)}/deployments`, { method: 'POST', rawBody: file })
+export function publishArchive(name: string, file: Blob, live = true): Promise<Publication> {
+  const query = live ? '' : '?live=false'
+  return request<Publication>(`${sitePath(name)}/deployments${query}`, { method: 'POST', rawBody: file })
 }
 
 export function makeLive(name: string, release: string): Promise<Site> {

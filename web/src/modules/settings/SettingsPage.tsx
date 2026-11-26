@@ -23,6 +23,7 @@ import { useSession } from '../../shared/session/index.ts'
 import { ConnectedAccountsSection } from './ConnectedAccountsSection.tsx'
 import { ipAccessNotice } from './rules.ts'
 import { MailSection } from './MailSection.tsx'
+import { PreviewsSection } from './PreviewsSection.tsx'
 import { UpdatesSection } from './UpdatesSection.tsx'
 
 type Saved = (next: PanelSettings) => void
@@ -227,6 +228,7 @@ function Loaded({ initial }: { initial: PanelSettings }) {
       <AddressesSection settings={settings} onSaved={setSettings} />
       <PanelAddressSection settings={settings} onSaved={setSettings} open={panelOpen} onOpenChange={setPanelOpen} />
       <CertificateSection settings={settings} onSaved={setSettings} />
+      <PreviewsSection settings={settings} onSaved={setSettings} />
       <MailSection settings={settings} onSaved={setSettings} />
       <UpdatesSection />
     </>
