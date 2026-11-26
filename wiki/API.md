@@ -61,7 +61,9 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 
 **GitHub repository:** `{"id", "installation_id", "owner", "name", "full_name", "private", "archived", "default_branch", "html_url"}`.
 
-**Site source:** `{"site", "source", "publishing_available"}`. `source` is `null` when the site is not linked, else `{"kind", "repository", "repository_id", "installation_id", "account", "url", "branch", "publish_on_push", "status", "problem", "linked_by", "linked_at"}`: `kind` is `"github"`; `repository` is `owner/name` as last seen; `installation_id` is left out once the connection was removed; `status` is `linked`, `connection_missing`, `suspended`, `repository_missing` or `unchecked` (then `problem` says why). `publishing_available` is `false` while pushes are not built and published yet. See [[Sites and Publishing|Sites-and-Publishing#source-repository-and-branch]].
+**Site source:** `{"site", "source", "publishing_available", "last_run"}`. `source` is `null` when the site is not linked, else `{"kind", "repository", "repository_id", "installation_id", "account", "url", "branch", "publish_on_push", "status", "problem", "linked_by", "linked_at"}`: `kind` is `"github"`; `repository` is `owner/name` as last seen; `installation_id` is left out once the connection was removed; `status` is `linked`, `connection_missing`, `suspended`, `repository_missing` or `unchecked` (then `problem` says why). `publishing_available` is `false` while pushes are not built and published yet. `last_run` is the site's newest run or `null`. See [[Sites and Publishing|Sites-and-Publishing#source-repository-and-branch]].
+
+**Run:** `{"id", "site", "trigger", "status", "repository", "repository_id", "ref", "branch", "commit", "short_commit", "message", "author_name", "author_login", "pusher", "detail", "waiting", "created_at", "started_at", "finished_at"}`. `trigger` is `"push"`; `status` is `queued`, `running`, `succeeded`, `failed`, `cancelled` or `skipped` (replaced by a newer push before it started); `commit` is the full commit id; `message` (first line, at most 200 characters), `author_name` and `pusher` come from the repository and are plain text, not markup; `waiting` is set on a queued run while the server cannot build yet; `detail` says why a run was skipped, failed or cancelled. See [[GitHub|GitHub#what-happens-on-a-push]].
 
 **Redirect:** `{"id", "owner", "source_domain", "source_path", "target", "code", "keep_path", "keep_query", "created_at"}`. `source_path` is `""` for a whole-domain redirect, otherwise `/exact` or a prefix `/path/*`; `code` is `301`, `302`, `307` or `308`. See [[Redirects|Redirects]].
 
@@ -137,6 +139,7 @@ Domains whose DNS is managed elsewhere: kept in your panel as domains of their o
 | `DELETE` | `/api/sites/{name}/source` | write, own site | | `204`; `404` if the site is not linked |
 | `GET` | `/api/sites/{name}/source/repositories` | anyone, own site | | `{"connected", "repositories": [GitHub repository with "account", …], "problems": [..], "truncated"}`: the repositories you may link the site to. Empty (and `connected` false) for anyone but administrators. `problems` lists accounts that could not be listed |
 | `GET` | `/api/sites/{name}/source/branches?installation_id=…&repository_id=…` | own site, repository usable by you | | `{"branches": [..], "default_branch", "truncated"}` |
+| `GET` | `/api/sites/{name}/runs` | anyone, own site | | `{"site", "runs": [Run, …], "kept", "publishing_available"}`: the newest runs, newest first; `kept` is how many the panel keeps per site (30) |
 | `POST` | `/api/uploads/{id}` | open (upload link) | raw archive body | `201` Site; `404` for unknown, used or expired links |
 
 ### Users and activity
@@ -201,7 +204,7 @@ Connecting an account is a browser flow with a stop at GitHub ([[GitHub|GitHub]]
 | `GET` | `/api/github/installations/{id}/repositories` | admin read | | `{"repositories": [GitHub repository, …], "truncated"}` (at most 3000; kept for a minute) |
 | `POST` | `/api/github/refresh` | admin | | the same as `GET /api/github`, after asking GitHub afresh where each app is installed; problems go into `last_error` |
 | `DELETE` | `/api/github/apps/{id}` | admin | | `{"name", "settings_url"}`: the stored key and secrets are gone; `settings_url` is where the app is deleted on GitHub |
-| `POST` | `/api/github/webhook` | | | reserved for GitHub's notices ([#109](https://github.com/danielgtmn/ownpanel/issues/109)); answers `404` for now |
+| `POST` | `/api/github/webhook` | GitHub (signed with the app's secret; no session or token) | a GitHub delivery, `application/json`, at most 5 MB | `{"result", "runs"}`: `result` is `handled`, `ignored` (nothing to do) or `duplicate` (this delivery id was seen before), `runs` how many runs it created. Anything that is not a valid, signed delivery of a connected app gets the same `400` `{"error": "The delivery was not accepted"}`; `413` too large; `429` too many deliveries. See [[GitHub|GitHub#what-happens-on-a-push]] and [[Security|Security#github]] |
 
 ### E-mail
 
