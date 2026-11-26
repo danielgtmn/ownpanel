@@ -40,3 +40,17 @@ export type ZoneList = {
   zones: Zone[]
   problems: ZoneProblem[]
 }
+
+// A domain the person added by hand: its DNS is managed elsewhere (another provider, the registrar).
+export type AddedDomain = {
+  name: string
+  created_at: string
+  /** What of the person uses a name in the domain; that keeps it in the panel even without the entry. */
+  used_by: string[]
+}
+
+export type RemovedDomain = {
+  name: string
+  /** What of the person still uses a name in the domain, so it stays in the panel. */
+  used_by: string[]
+}

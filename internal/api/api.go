@@ -61,6 +61,7 @@ var routeGroups = []func(*Server, *http.ServeMux){
 	(*Server).activityRoutes,
 	(*Server).uploadRoutes,
 	(*Server).dnsRoutes,
+	(*Server).domainRoutes,
 	(*Server).settingsRoutes,
 	(*Server).redirectRoutes,
 	(*Server).updateRoutes,
