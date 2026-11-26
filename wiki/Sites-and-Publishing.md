@@ -24,6 +24,8 @@ Changing domains replaces the whole list: domains not listed stop being served.
 | Site has no version yet | `503` with "This site has no content yet." |
 | Site has no domains | not served |
 | Host that no site claims | `404` with "Unknown site." over plain HTTP. Over HTTPS there is no certificate for such a name, so the connection fails before any answer. |
+| Site whose only versions were published without making them live | `503` with "This site has no content yet.", like a site without a version |
+| Preview address of a kept version, opened with its link | that version's files, with `X-Robots-Tag: noindex, nofollow` (see [Previews](#previews)) |
 
 For HTTPS the domain must point at the server so a certificate can be issued. With `-tls acme` certificates are requested automatically; HTTP requests are redirected to HTTPS. See [[DNS|DNS]] for checking and fixing where a domain points.
 
@@ -64,11 +66,32 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
   https://panel.example.com/api/sites/demo/deployments
 ```
 
-Publishing needs write access to the site. The files are unpacked into a new, immutable version and made live in one step.
+Publishing needs write access to the site. The files are unpacked into a new, immutable version and made live in one step, unless you publish without making it live.
+
+### Publishing without making it live
+
+A new version can also be added while the live one stays: visitors keep seeing the current version, and the new one waits in the version list (marked "Not live yet") until someone makes it live. If previews have addresses, it can be checked there first.
+
+| Way | How |
+|---|---|
+| Web interface | turn off **Make it live right away** before uploading |
+| API | `POST /api/sites/{name}/deployments?live=false` |
+| GitHub Actions | input `live: "false"`; the output `preview-url` is the version's preview address |
+| Upload link | MCP `create_upload_link` with `live: false` |
+| MCP | `publish_files` with `live: false` |
+
+A site whose first version is published this way keeps answering "no content yet" on its domains until a version is made live. Who may publish this way is the same as for publishing: write access to the site.
 
 ## Versions
 
-Every publish creates a version. Its id starts with a UTC timestamp, for example `20260131T120000.000Z-ab12cd`, so ids sort by time. The panel keeps the newest five versions of a site; older ones are removed when a new one is published. The live version is never removed.
+Every publish creates a version. Its id starts with a UTC timestamp, for example `20260131T120000.000Z-ab12cd`, so ids sort by time.
+
+The panel keeps the newest five versions of a site. Besides them it always keeps two more, however many versions were published after them without being made live:
+
+- the **live version**, and
+- the version **going back** would return to: the newest version older than the live one that was live itself.
+
+Older versions are removed when a new one is published. So a burst of previews (for example one per pull request) can push out older previews, but never what is live or the version you would roll back to.
 
 Making a version live is an atomic switch of a symlink (`current`), so visitors never see a half-written site, and no web server reload is needed.
 
@@ -78,7 +101,19 @@ Making a version live is an atomic switch of a symlink (`current`), so visitors 
 - API: `POST /api/sites/{name}/rollback` with `{"release": "<id>"}`, or with no body to go back to the version before the live one.
 - MCP: `make_version_live` with an optional `version`.
 
-Going back with no id fails with a conflict if there is no earlier version. Making an older version live does not delete newer ones; they remain until pruned.
+Going back with no id returns to the last version before the live one that was live itself: versions that were published without being made live, and never were live, are skipped. It fails with a conflict if there is no such version. Making an older version live does not delete newer ones; they remain until pruned.
+
+## Previews
+
+Every kept version, live or not, can be opened on an address of its own once an administrator has set a **domain for previews** (Settings → Previews; see [[Configuration|Configuration]]). Without it, versions can still be published without making them live, but they have no address.
+
+- **Address:** `https://<label>.<preview domain>/`. The label is 26 lowercase letters and digits derived with a secret of this panel from the site name and the version id (130 bits); it reveals neither and cannot be guessed. The site's versions list, the API (`versions[].preview_url`), MCP and the GitHub Action give the full link.
+- **The link carries a key** (`?ownpanel-preview=…`, 160 bits). Opening the link stores the key in a cookie for that one address (7 days) and removes it from the address bar; without the key the preview answers `403`. The key is needed because the address alone is not secret: with public certificates, every opened preview's name is published in the certificate logs.
+- **Anyone with the link** can open the version. Share it only with people who should see it.
+- Answers carry `X-Robots-Tag: noindex, nofollow`.
+- A preview disappears when its version is removed (pruned or the site deleted); its address then answers `404` "Unknown preview.". Addresses stay the same across restarts and when the preview domain changes only the domain part changes; a backup restored without its `secret.key` gives every version a new address.
+- **Certificates** are obtained only when a preview is opened for the first time, one per opened version, and only after the web server asked the panel that this exact name is a kept version. Names below the preview domain that are not previews get no certificate. See [[Security|Security]].
+- The preview domain and everything below it are reserved: no site, redirect, panel domain or mail server name may be below it.
 
 ## Source: repository and branch
 

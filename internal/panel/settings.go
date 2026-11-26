@@ -40,6 +40,7 @@ const (
 	keySetupComplete = "setup_complete"
 	keyMailHost      = "mail_host"
 	keyPostmaster    = "postmaster_address"
+	// keyPreviewDomain and keyPreviewSecret: previews.go.
 )
 
 // certCheckTimeout bounds the certificate check of the wizard.
@@ -60,6 +61,8 @@ type settingsState struct {
 	// postmasterAddress receives postmaster@ and abuse@ of the mail host
 	// and of domains without mailboxes.
 	postmasterAddress string
+	// previewDomain: previews are served below it; "" means none.
+	previewDomain string
 	// Spam checks (mailfilter.go): blocklists nil means the default list;
 	// junkScore 0 means the default.
 	blocklists  []blocklistEntry
@@ -115,6 +118,9 @@ type Settings struct {
 	MailHost          string       `json:"mail_host"`
 	MailHostLocked    bool         `json:"mail_host_locked"`
 	PostmasterAddress string       `json:"postmaster_address"`
+	// PreviewDomain: versions of sites can be opened on
+	// <label>.<PreviewDomain>; "" means previews have no addresses.
+	PreviewDomain string `json:"preview_domain"`
 	// MailBlocklists are the blocklist zones in effect (the default list
 	// when MailBlocklistsDefault), access keys masked; empty means off.
 	MailBlocklists        []string `json:"mail_blocklists"`
@@ -131,6 +137,7 @@ type SettingsUpdate struct {
 	ACMEEmail         *string
 	MailHost          *string
 	PostmasterAddress *string
+	PreviewDomain     *string
 	// MailBlocklistsDefault true returns to the default list; false alone
 	// keeps the zones in effect as an own list. MailBlocklists sets an own
 	// list ([] turns blocklists off); a masked zone keeps the stored one.
@@ -154,10 +161,12 @@ type CertificateCheck struct {
 	Detail string `json:"detail"`
 }
 
-// SettingsChecks are the readiness checks of the wizard.
+// SettingsChecks are the readiness checks of the wizard, and whether the
+// names of previews point here.
 type SettingsChecks struct {
 	DNS         DNSCheck         `json:"dns"`
 	Certificate CertificateCheck `json:"certificate"`
+	PreviewDNS  PreviewDNS       `json:"preview_dns"`
 }
 
 // Check states besides the domain states of DomainStatus.
@@ -191,6 +200,7 @@ func (s *Service) loadSettings(ctx context.Context) error {
 		setupComplete:     m[keySetupComplete] == "true",
 		mailHost:          m[keyMailHost],
 		postmasterAddress: m[keyPostmaster],
+		previewDomain:     m[keyPreviewDomain],
 	}
 	loadFilterSettings(&st, m)
 	if v := m[keyServerIPs]; v != "" {
@@ -300,6 +310,12 @@ func (s *Service) caddyOptions() caddy.Options {
 	o := s.opts
 	o.PanelDomain = s.PanelDomain()
 	o.ACMEEmail = s.acmeEmail()
+	if s.previewsServed() {
+		o.PreviewDomain = s.PreviewDomain()
+		if o.PanelUpstream != "" {
+			o.PreviewPermission = "http://" + o.PanelUpstream + PreviewPermissionPath
+		}
+	}
 	if o.PanelUpstream != "" {
 		o.PanelIPs = s.accessIPs()
 		o.IPRedirect = !s.ipAccess()
@@ -337,6 +353,7 @@ func (s *Service) settingsView() Settings {
 		MailHost:          s.MailHost(),
 		MailHostLocked:    s.mailHostFlag != "",
 		PostmasterAddress: st.postmasterAddress,
+		PreviewDomain:     st.previewDomain,
 		MailJunkScore:     effectiveJunkScore(st.junkScore),
 		MailGreylisting:   st.greylisting,
 	}
@@ -383,6 +400,9 @@ func (s *Service) validPanelDomain(ctx context.Context, domain string) (string, 
 	if _, err := strconv.Atoi(labels[len(labels)-1]); err == nil {
 		return "", errorf(Invalid, "the panel needs a domain name like panel.example.com, not an IP address")
 	}
+	if s.underPreviewDomain(d) {
+		return "", errUnderPreviewDomain(d, s.PreviewDomain())
+	}
 	sites, err := s.store.Sites(ctx)
 	if err != nil {
 		return "", storeError(err)
@@ -412,6 +432,9 @@ func (s *Service) validMailHost(ctx context.Context, domain string) (string, err
 	labels := strings.Split(d, ".")
 	if err != nil || strings.Trim(labels[len(labels)-1], "0123456789") == "" {
 		return "", errorf(Invalid, "%q is not a valid name; enter one like mail.example.com", strings.TrimSpace(domain))
+	}
+	if s.underPreviewDomain(d) {
+		return "", errUnderPreviewDomain(d, s.PreviewDomain())
 	}
 	sites, err := s.store.Sites(ctx)
 	if err != nil {
@@ -535,6 +558,19 @@ func (s *Service) UpdateSettings(ctx context.Context, a Actor, u SettingsUpdate)
 			changed = append(changed, "postmaster address "+orRemoved(e))
 		}
 	}
+	if u.PreviewDomain != nil {
+		d := strings.TrimSpace(*u.PreviewDomain)
+		if d != "" {
+			var err error
+			if d, err = s.validPreviewDomain(ctx, d); err != nil {
+				return Settings{}, err
+			}
+		}
+		if d != cur.previewDomain {
+			next.previewDomain, values[keyPreviewDomain] = d, d
+			changed = append(changed, "preview domain "+orRemoved(d))
+		}
+	}
 	if err := s.updateFilterSettings(u, cur, &next, values, &changed); err != nil {
 		return Settings{}, err
 	}
@@ -624,6 +660,7 @@ func (s *Service) SettingsChecks(ctx context.Context, a Actor) (SettingsChecks, 
 	if s.opts.TLSMode != caddy.TLSACME {
 		out.Certificate = CertificateCheck{State: CertNotApplicable, Detail: "This server does not request public certificates (it was started with -tls " + s.opts.TLSMode + ")."}
 	}
+	out.PreviewDNS = s.previewDNS(ctx, a)
 	if domain == "" {
 		return out, nil
 	}

@@ -711,3 +711,62 @@ func TestPanelDomainFromSettings(t *testing.T) {
 		t.Fatalf("the panel domain from the settings must be used: %q", link.URL)
 	}
 }
+
+func TestPublishWithoutMakingLive(t *testing.T) {
+	e := newEnv(t, "")
+	cs := e.connect(t, e.write)
+	var out siteOutput
+	ok(t, call_(t, cs, "create_site", map[string]any{"name": "blog", "domains": []string{"blog.example.com"}}), &out)
+	var v1 publishOutput
+	ok(t, call_(t, cs, "publish_files", with(index("one"), "site", "blog")), &v1)
+	if !v1.Live || v1.Site.LiveVersion != v1.Version || v1.PreviewURL != "" {
+		t.Fatalf("live publish: %+v", v1)
+	}
+
+	// Previews get addresses once an admin sets a domain for them.
+	pd := "preview.example.net"
+	if _, err := e.svc.UpdateSettings(context.Background(), e.admin, panel.SettingsUpdate{PreviewDomain: &pd}); err != nil {
+		t.Fatal(err)
+	}
+	var v2 publishOutput
+	ok(t, call_(t, cs, "publish_files", with(with(index("two"), "site", "blog"), "live", false)), &v2)
+	if v2.Live || v2.Site.LiveVersion != v1.Version || v2.Version == v1.Version || !strings.Contains(v2.PreviewURL, "."+pd) {
+		t.Fatalf("not live: %+v", v2)
+	}
+	if readFile(t, e, "blog", "index.html") != "one" {
+		t.Fatal("the live version changed")
+	}
+	vs := v2.Site.Versions
+	if len(vs) != 2 || vs[0].ID != v2.Version || vs[0].Live || !vs[0].NeverLive || vs[0].PreviewURL != v2.PreviewURL || !vs[1].Live || vs[1].PreviewURL == "" {
+		t.Fatalf("versions: %+v", vs)
+	}
+	ok(t, call_(t, cs, "make_version_live", map[string]any{"site": "blog", "version": v2.Version}), &out)
+	if readFile(t, e, "blog", "index.html") != "two" || out.Site.Versions[0].NeverLive {
+		t.Fatalf("made live: %+v", out.Site)
+	}
+
+	// Upload links can leave the version as it is too.
+	var link uploadLinkOutput
+	ok(t, call_(t, cs, "create_upload_link", map[string]any{"site": "blog", "live": false}), &link)
+	archive, err := buildArchive([]File{{Path: "index.html", Content: "three"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(link.URL, "application/octet-stream", bytes.NewReader(archive))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct {
+		Release    string `json:"published_release"`
+		Live       bool   `json:"published_live"`
+		PreviewURL string `json:"preview_url"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+	resp.Body.Close()
+	if resp.StatusCode != 201 || body.Live || body.Release == "" || !strings.Contains(body.PreviewURL, "."+pd) {
+		t.Fatalf("upload: %d %+v", resp.StatusCode, body)
+	}
+	if readFile(t, e, "blog", "index.html") != "two" {
+		t.Fatal("the upload made its version live")
+	}
+}

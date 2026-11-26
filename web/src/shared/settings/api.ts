@@ -16,6 +16,8 @@ export type PanelSettings = {
   mail_host: string
   mail_host_locked: boolean
   postmaster_address: string
+  /** Versions of sites open on <label>.<preview_domain>; empty means they have no address. */
+  preview_domain: string
   // Lists with a key come back hidden, like "••••.zen.dq.spamhaus.net"; sending them back unchanged keeps the key.
   mail_blocklists: string[]
   mail_blocklists_default: boolean
@@ -29,6 +31,7 @@ export type SettingsChange = {
   acme_email?: string
   mail_host?: string
   postmaster_address?: string
+  preview_domain?: string
   mail_blocklists?: string[]
   mail_blocklists_default?: boolean
   mail_junk_score?: number
@@ -38,9 +41,20 @@ export type SettingsChange = {
 export type DnsCheckState = 'points_here' | 'points_elsewhere' | 'no_record' | 'lookup_failed' | 'not_configured'
 export type CertificateState = 'ready' | 'pending' | 'not_applicable' | 'not_configured'
 
+export type PreviewDnsCheck = {
+  /** The record to create, "*.<preview domain>"; empty without a preview domain. */
+  name: string
+  state: DnsCheckState
+  found: string[]
+  expected: string[]
+  /** The zone of a connected account the record can be written to. */
+  zone?: { connection_id: number; connection_name: string; zone: string; record_name: string }
+}
+
 export type PanelChecks = {
   dns: { state: DnsCheckState; found: string[]; expected: string[] }
   certificate: { state: CertificateState; detail: string }
+  preview_dns?: PreviewDnsCheck
 }
 
 function normalize(settings: PanelSettings): PanelSettings {
@@ -51,6 +65,7 @@ function normalize(settings: PanelSettings): PanelSettings {
     mail_host: settings.mail_host ?? '',
     mail_host_locked: settings.mail_host_locked ?? false,
     postmaster_address: settings.postmaster_address ?? '',
+    preview_domain: settings.preview_domain ?? '',
     mail_blocklists: settings.mail_blocklists ?? [],
     mail_blocklists_default: settings.mail_blocklists_default ?? true,
     mail_junk_score: settings.mail_junk_score ?? 5,
@@ -71,6 +86,9 @@ export async function getPanelChecks(signal?: AbortSignal): Promise<PanelChecks>
   return {
     dns: { ...checks.dns, found: checks.dns.found ?? [], expected: checks.dns.expected ?? [] },
     certificate: checks.certificate,
+    preview_dns: checks.preview_dns
+      ? { ...checks.preview_dns, found: checks.preview_dns.found ?? [], expected: checks.preview_dns.expected ?? [] }
+      : undefined,
   }
 }
 
