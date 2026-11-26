@@ -366,6 +366,11 @@ func serviceError(err error) error {
 func (r *buildRun) run(ctx context.Context, t *lineTicket) (BuildResult, error) {
 	svc := r.s.builds
 	if _, err := svc.Create(ctx, r.spec); err != nil {
+		if ctx.Err() != nil {
+			// It may exist anyway; remove cleans it up.
+			r.created = true
+			return r.end(RunCancelled, "", "cancelled", errorf(Conflict, "the build was cancelled"))
+		}
 		e := serviceError(err)
 		return r.end(RunFailed, "", e.Error(), e)
 	}
@@ -394,6 +399,14 @@ func (r *buildRun) run(ctx context.Context, t *lineTicket) (BuildResult, error) 
 	wctx, cancel := context.WithTimeout(ctx, r.s.build.timeout)
 	defer cancel()
 	if _, err := svc.Start(wctx, r.spec.ID); err != nil {
+		// Cancelled while the service was starting it: it may be running
+		// already, so stop it; remove does the rest.
+		if ctx.Err() != nil {
+			stop, cancelStop := context.WithTimeout(context.Background(), buildCleanupTime)
+			_, _ = svc.Cancel(stop, r.spec.ID)
+			cancelStop()
+			return r.end(RunCancelled, "", "cancelled", errorf(Conflict, "the build was cancelled"))
+		}
 		e := serviceError(err)
 		return r.end(RunFailed, "", e.Error(), e)
 	}
