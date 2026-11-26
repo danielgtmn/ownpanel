@@ -57,6 +57,7 @@ The file `restored` tells the mail service that its data is older than what mail
 
 Notes:
 
+- An archive made by a version from before the mail index used ablage restores the same way: the mail service converts its `mail.db` at the next start and leaves a copy of the unconverted file as `mail.db.pre-ablage-<UTC time>` next to it (delete it once the service runs).
 - Unpacking over an existing `sites/` or Caddy's `storage` directory adds and overwrites files but does not delete files that are not in the archive. For a clean restore, move the old `/var/lib/ownpanel/sites` and `/var/lib/ownpanel-caddy/storage` away first.
 - On a fresh server, run the installer first so users, units and directories exist, then restore, then restore your `ownpaneld.env` flags (`-server-ip` in particular if the address changed).
 - Without `secret.key`, restored DNS connections cannot be used; add them again.

@@ -292,7 +292,7 @@ export type ImportFolderProgress = {
 export type ImportFailure = { folder: string; date?: string; subject?: string; reason: string }
 
 export type MailImport = {
-  id: number
+  id: string
   address: string
   kind: 'imap' | 'file'
   state: ImportState | string

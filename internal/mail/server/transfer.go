@@ -51,11 +51,11 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-func jobID(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	id, err := strconv.ParseInt(r.PathValue("job"), 10, 64)
-	if err != nil || id <= 0 {
+func jobID(w http.ResponseWriter, r *http.Request) (string, bool) {
+	id := r.PathValue("job")
+	if !config.ValidImportID(id) {
 		http.Error(w, "unknown import", http.StatusNotFound)
-		return 0, false
+		return "", false
 	}
 	return id, true
 }

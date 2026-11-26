@@ -63,6 +63,8 @@ func TestCreateWithMail(t *testing.T) {
 	secret := filepath.Join(t.TempDir(), "secret")
 	os.WriteFile(secret, []byte("root only"), 0o600)
 	os.Symlink(secret, filepath.Join(mailDir, "messages", "planted"))
+	// The copy of an index before its conversion to ablage stays out.
+	os.WriteFile(filepath.Join(mailDir, "mail.db.pre-ablage-20260101T000000Z"), []byte("old"), 0o600)
 	if err := CreateWithMail(data, out, func(w io.Writer) error { return WriteMail(w, mailDir) }); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +80,7 @@ func TestCreateWithMail(t *testing.T) {
 		t.Error("a link in the mail data was copied")
 	}
 	for n := range names {
-		if strings.HasPrefix(n, "mail/tmp") || strings.HasPrefix(n, "mail/trash") || strings.HasPrefix(n, "mail/mail.db-") {
+		if strings.HasPrefix(n, "mail/tmp") || strings.HasPrefix(n, "mail/trash") || strings.HasPrefix(n, "mail/mail.db-") || strings.HasPrefix(n, "mail/mail.db.pre-ablage-") {
 			t.Errorf("archive should not contain %s", n)
 		}
 	}

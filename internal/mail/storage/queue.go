@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/danielgtmn/ablage"
 )
 
 // The outbound queue: one row per message in queue, one per recipient in
@@ -37,7 +38,7 @@ const (
 
 // QueuedMessage is a message waiting in the outbound queue.
 type QueuedMessage struct {
-	ID   int64
+	ID   string
 	File string
 	// Sender is the envelope sender used on the wire ("" for the null
 	// sender: never bounced).
@@ -51,7 +52,7 @@ type QueuedMessage struct {
 
 // QueuedRcpt is one recipient of a queued message.
 type QueuedRcpt struct {
-	ID        int64
+	ID        string
 	Address   string
 	Domain    string
 	State     RcptState
@@ -65,26 +66,26 @@ func (s *Store) QueueDir() string { return filepath.Join(s.dir, queueDir) }
 
 // Enqueue stores a message for outbound delivery to m.Rcpts (Address and
 // Domain are used; the rest is set here). It returns the message id.
-func (s *Store) Enqueue(ctx context.Context, r io.Reader, m QueuedMessage) (int64, error) {
+func (s *Store) Enqueue(ctx context.Context, r io.Reader, m QueuedMessage) (string, error) {
 	if len(m.Rcpts) == 0 {
-		return 0, errors.New("no recipients")
+		return "", errors.New("no recipients")
 	}
 	if m.StorageID != "" {
 		if err := checkID(m.StorageID); err != nil {
-			return 0, err
+			return "", err
 		}
 	}
 	tmp, size, err := s.spool(r, 0)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 	defer os.Remove(tmp) // no-op once renamed
 	now := s.now()
 	if m.Created.IsZero() {
 		m.Created = now
 	}
-	var id int64
-	err = s.write(ctx, func(tx *sql.Tx, ch *changes) error {
+	var id string
+	err = s.write(ctx, func(tx *repos, ch *changes) error {
 		name := fmt.Sprintf("%d.%s", now.UnixNano(), randHex(8))
 		dst := filepath.Join(s.QueueDir(), name)
 		if err := os.Rename(tmp, dst); err != nil {
@@ -94,17 +95,13 @@ func (s *Store) Enqueue(ctx context.Context, r io.Reader, m QueuedMessage) (int6
 		if err := syncDir(s.QueueDir()); err != nil {
 			return err
 		}
-		res, err := tx.Exec(`INSERT INTO queue (file, sender, storage_id, created, size) VALUES (?, ?, ?, ?, ?)`,
-			name, m.Sender, m.StorageID, m.Created.Unix(), size)
-		if err != nil {
+		q := queueRec{File: name, Sender: m.Sender, StorageID: m.StorageID, Created: sec(m.Created), Size: size}
+		if err := tx.queue.Create(ctx, &q); err != nil {
 			return err
 		}
-		if id, err = res.LastInsertId(); err != nil {
-			return err
-		}
-		for _, rc := range m.Rcpts {
-			if _, err := tx.Exec(`INSERT INTO queue_rcpts (message_id, address, domain, next_try) VALUES (?, ?, ?, ?)`,
-				id, rc.Address, rc.Domain, now.Unix()); err != nil {
+		id = q.ID
+		for i, rc := range m.Rcpts {
+			if err := tx.queueRcpts.Create(ctx, &queueRcptRec{MessageID: q.ID, Pos: int64(i), Address: rc.Address, Domain: rc.Domain, NextTry: sec(now)}); err != nil {
 				return err
 			}
 		}
@@ -113,73 +110,88 @@ func (s *Store) Enqueue(ctx context.Context, r io.Reader, m QueuedMessage) (int6
 	return id, err
 }
 
-// QueueDue returns up to limit messages with recipients due at now; each
-// carries only its pending recipients that are due.
+// due is the condition of pending recipients due at now.
+func due(now time.Time) ablage.Cond {
+	return ablage.And(ablage.Eq("state", int64(RcptPending)), ablage.Lte("next_try", sec(now)))
+}
+
+// QueueDue returns up to limit messages with recipients due at now (the
+// oldest first); each carries only its pending recipients that are due.
 func (s *Store) QueueDue(ctx context.Context, now time.Time, limit int) ([]QueuedMessage, error) {
-	rows, err := s.rdb.QueryContext(ctx, `SELECT q.id, q.file, q.sender, q.storage_id, q.created, q.size,
-		r.id, r.address, r.domain, r.state, r.attempts, r.next_try, r.last_error
-		FROM queue q JOIN queue_rcpts r ON r.message_id = q.id
-		WHERE r.state = 0 AND r.next_try <= ?
-		AND q.id IN (SELECT DISTINCT message_id FROM queue_rcpts WHERE state = 0 AND next_try <= ? ORDER BY message_id LIMIT ?)
-		ORDER BY q.id, r.id`, now.Unix(), now.Unix(), limit)
-	if err != nil {
-		return nil, err
+	var out []QueuedMessage
+	err := s.read(ctx, func(tx *repos) error {
+		rcpts, err := tx.queueRcpts.Find(ctx, ablage.Query{Where: due(now), OrderBy: []ablage.Order{ablage.Asc("pos")}})
+		if err != nil || len(rcpts) == 0 {
+			return err
+		}
+		ids := make([]string, len(rcpts))
+		for i, r := range rcpts {
+			ids[i] = r.MessageID
+		}
+		msgs, err := tx.queue.Find(ctx, ablage.Query{Where: ablage.In("id", ids...), OrderBy: []ablage.Order{ablage.Asc("created")}, Limit: limit})
+		if err != nil {
+			return err
+		}
+		out = joinRcpts(msgs, rcpts)
+		return nil
+	})
+	return out, err
+}
+
+// joinRcpts gives each message its recipients among rcpts (in their
+// order).
+func joinRcpts(msgs []queueRec, rcpts []queueRcptRec) []QueuedMessage {
+	by := map[string][]QueuedRcpt{}
+	for _, r := range rcpts {
+		by[r.MessageID] = append(by[r.MessageID], QueuedRcpt{ID: r.ID, Address: r.Address, Domain: r.Domain, State: RcptState(r.State),
+			Attempts: int(r.Attempts), NextTry: local(r.NextTry), LastError: r.LastError})
 	}
-	return scanQueue(rows)
+	out := make([]QueuedMessage, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, QueuedMessage{ID: m.ID, File: m.File, Sender: m.Sender, StorageID: m.StorageID, Created: local(m.Created), Size: m.Size, Rcpts: by[m.ID]})
+	}
+	return out
 }
 
 // QueueMessage returns a queued message with all its recipients.
-func (s *Store) QueueMessage(ctx context.Context, id int64) (QueuedMessage, error) {
-	rows, err := s.rdb.QueryContext(ctx, `SELECT q.id, q.file, q.sender, q.storage_id, q.created, q.size,
-		r.id, r.address, r.domain, r.state, r.attempts, r.next_try, r.last_error
-		FROM queue q JOIN queue_rcpts r ON r.message_id = q.id WHERE q.id = ? ORDER BY r.id`, id)
-	if err != nil {
-		return QueuedMessage{}, err
-	}
-	ms, err := scanQueue(rows)
-	if err != nil {
-		return QueuedMessage{}, err
-	}
-	if len(ms) == 0 {
-		return QueuedMessage{}, ErrNoMessage
-	}
-	return ms[0], nil
-}
-
-func scanQueue(rows *sql.Rows) ([]QueuedMessage, error) {
-	defer rows.Close()
+func (s *Store) QueueMessage(ctx context.Context, id string) (QueuedMessage, error) {
 	var out []QueuedMessage
-	for rows.Next() {
-		var m QueuedMessage
-		var r QueuedRcpt
-		var created, next int64
-		if err := rows.Scan(&m.ID, &m.File, &m.Sender, &m.StorageID, &created, &m.Size,
-			&r.ID, &r.Address, &r.Domain, &r.State, &r.Attempts, &next, &r.LastError); err != nil {
-			return nil, err
+	err := s.read(ctx, func(tx *repos) error {
+		m, err := tx.queue.Get(ctx, id)
+		if errors.Is(err, ablage.ErrNotFound) {
+			return ErrNoMessage
 		}
-		r.NextTry = time.Unix(next, 0)
-		if n := len(out); n > 0 && out[n-1].ID == m.ID {
-			out[n-1].Rcpts = append(out[n-1].Rcpts, r)
-			continue
+		if err != nil {
+			return err
 		}
-		m.Created = time.Unix(created, 0)
-		m.Rcpts = []QueuedRcpt{r}
-		out = append(out, m)
+		rcpts, err := tx.queueRcpts.Find(ctx, ablage.Query{Where: ablage.Eq("message_id", id), OrderBy: []ablage.Order{ablage.Asc("pos")}})
+		if err != nil {
+			return err
+		}
+		if len(rcpts) == 0 {
+			return ErrNoMessage
+		}
+		out = joinRcpts([]queueRec{m}, rcpts)
+		return nil
+	})
+	if err != nil {
+		return QueuedMessage{}, err
 	}
-	return out, rows.Err()
+	return out[0], nil
 }
 
 // QueueNext is the earliest time a pending recipient is due; ok is false
 // when nothing is pending.
 func (s *Store) QueueNext(ctx context.Context) (t time.Time, ok bool, err error) {
-	var next sql.NullInt64
-	if err := s.rdb.QueryRowContext(ctx, `SELECT min(next_try) FROM queue_rcpts WHERE state = 0`).Scan(&next); err != nil {
+	rows, err := s.r.queueRcpts.Aggregate(ctx, ablage.Aggregation{Where: ablage.Eq("state", int64(RcptPending)), Values: []ablage.Agg{ablage.Min("next_try", "next")}})
+	if err != nil {
 		return time.Time{}, false, err
 	}
-	if !next.Valid {
+	next, ok := rows[0]["next"].(time.Time)
+	if !ok {
 		return time.Time{}, false, nil
 	}
-	return time.Unix(next.Int64, 0), true, nil
+	return local(next), true, nil
 }
 
 // QueueClaim takes the recipients (by ID) that are still pending and due
@@ -187,19 +199,16 @@ func (s *Store) QueueNext(ctx context.Context) (t time.Time, ok bool, err error)
 // other attempt picks them up meanwhile (and they are tried again after
 // until should the attempt never finish). It returns the IDs it claimed;
 // only those may be delivered.
-func (s *Store) QueueClaim(ctx context.Context, ids []int64, now, until time.Time) ([]int64, error) {
-	var claimed []int64
-	err := s.write(ctx, func(tx *sql.Tx, _ *changes) error {
+func (s *Store) QueueClaim(ctx context.Context, ids []string, now, until time.Time) ([]string, error) {
+	var claimed []string
+	err := s.write(ctx, func(tx *repos, _ *changes) error {
 		claimed = claimed[:0]
 		for _, id := range ids {
-			res, err := tx.Exec(`UPDATE queue_rcpts SET next_try = ? WHERE id = ? AND state = 0 AND next_try <= ?`,
-				until.Unix(), id, now.Unix())
+			n, err := tx.queueRcpts.UpdateWhere(ctx, ablage.And(ablage.Eq("id", id), due(now)), ablage.Row{"next_try": sec(until)})
 			if err != nil {
 				return err
 			}
-			if n, err := res.RowsAffected(); err != nil {
-				return err
-			} else if n == 1 {
+			if n == 1 {
 				claimed = append(claimed, id)
 			}
 		}
@@ -211,10 +220,11 @@ func (s *Store) QueueClaim(ctx context.Context, ids []int64, now, until time.Tim
 // QueueUpdate saves state, attempts, next try and last error of recipients
 // (by ID).
 func (s *Store) QueueUpdate(ctx context.Context, rcpts []QueuedRcpt) error {
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
+	return s.write(ctx, func(tx *repos, _ *changes) error {
 		for _, r := range rcpts {
-			if _, err := tx.Exec(`UPDATE queue_rcpts SET state = ?, attempts = ?, next_try = ?, last_error = ? WHERE id = ?`,
-				r.State, r.Attempts, r.NextTry.Unix(), r.LastError, r.ID); err != nil {
+			if _, err := tx.queueRcpts.UpdateWhere(ctx, ablage.Eq("id", r.ID), ablage.Row{
+				"state": int64(r.State), "attempts": int64(r.Attempts), "next_try": sec(r.NextTry), "last_error": r.LastError,
+			}); err != nil {
 				return err
 			}
 		}
@@ -224,27 +234,23 @@ func (s *Store) QueueUpdate(ctx context.Context, rcpts []QueuedRcpt) error {
 
 // QueueRemoveIfDone deletes a message whose recipients are all delivered or
 // failed. It reports whether it did.
-func (s *Store) QueueRemoveIfDone(ctx context.Context, id int64) (bool, error) {
+func (s *Store) QueueRemoveIfDone(ctx context.Context, id string) (bool, error) {
 	var file string
-	err := s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		var pending int
-		if err := tx.QueryRow(`SELECT count(*) FROM queue_rcpts WHERE message_id = ? AND state = 0`, id).Scan(&pending); err != nil {
+	err := s.write(ctx, func(tx *repos, _ *changes) error {
+		pending, err := tx.queueRcpts.Count(ctx, ablage.And(ablage.Eq("message_id", id), ablage.Eq("state", int64(RcptPending))))
+		if err != nil || pending > 0 {
 			return err
 		}
-		if pending > 0 {
+		m, err := tx.queue.Get(ctx, id)
+		if errors.Is(err, ablage.ErrNotFound) {
 			return nil
 		}
-		if err := tx.QueryRow(`SELECT file FROM queue WHERE id = ?`, id).Scan(&file); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return nil
-			}
+		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`DELETE FROM queue_rcpts WHERE message_id = ?`, id); err != nil {
-			return err
-		}
-		_, err := tx.Exec(`DELETE FROM queue WHERE id = ?`, id)
-		return err
+		file = m.File
+		// The recipients go with it (cascade).
+		return tx.queue.Delete(ctx, id)
 	})
 	if err != nil || file == "" {
 		return false, err
@@ -257,9 +263,8 @@ func (s *Store) QueueRemoveIfDone(ctx context.Context, id int64) (bool, error) {
 
 // QueueLength is the number of messages with recipients still pending.
 func (s *Store) QueueLength(ctx context.Context) (int, error) {
-	var n int
-	err := s.rdb.QueryRowContext(ctx, `SELECT count(DISTINCT message_id) FROM queue_rcpts WHERE state = 0`).Scan(&n)
-	return n, err
+	rows, err := s.r.queueRcpts.Aggregate(ctx, ablage.Aggregation{Where: ablage.Eq("state", int64(RcptPending)), GroupBy: []string{"message_id"}})
+	return len(rows), err
 }
 
 // OpenQueued opens the file of a queued message.
@@ -272,34 +277,21 @@ func (s *Store) OpenQueued(m QueuedMessage) (*os.File, error) {
 
 // reconcileQueue drops queue rows without a file and files without a row
 // (a crash between writing the file and committing: never acknowledged).
-func (s *Store) reconcileQueue(tx *sql.Tx) (missing, stray int, err error) {
-	rows, err := tx.Query(`SELECT id, file FROM queue`)
+func (s *Store) reconcileQueue(ctx context.Context, tx *repos) (missing, stray int, err error) {
+	list, err := tx.queue.Find(ctx, ablage.Query{})
 	if err != nil {
 		return 0, 0, err
 	}
 	known := map[string]bool{}
-	var gone []int64
-	for rows.Next() {
-		var id int64
-		var file string
-		if err := rows.Scan(&id, &file); err != nil {
-			rows.Close()
-			return 0, 0, err
-		}
-		known[file] = true
-		if _, err := os.Stat(filepath.Join(s.QueueDir(), file)); errors.Is(err, os.ErrNotExist) {
-			gone = append(gone, id)
+	var gone []string
+	for _, q := range list {
+		known[q.File] = true
+		if _, err := os.Stat(filepath.Join(s.QueueDir(), q.File)); errors.Is(err, os.ErrNotExist) {
+			gone = append(gone, q.ID)
 		}
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return 0, 0, err
-	}
-	for _, id := range gone {
-		if _, err := tx.Exec(`DELETE FROM queue_rcpts WHERE message_id = ?`, id); err != nil {
-			return 0, 0, err
-		}
-		if _, err := tx.Exec(`DELETE FROM queue WHERE id = ?`, id); err != nil {
+	if len(gone) > 0 {
+		if _, err := tx.queue.DeleteWhere(ctx, ablage.In("id", gone...)); err != nil {
 			return 0, 0, err
 		}
 	}
@@ -354,13 +346,13 @@ type SendLimit struct {
 // It returns the index of the first limit reached, or -1.
 func (s *Store) ReserveSend(ctx context.Context, limits []SendLimit, now time.Time) (int, error) {
 	reached := -1
-	err := s.write(ctx, func(tx *sql.Tx, _ *changes) error {
+	err := s.write(ctx, func(tx *repos, _ *changes) error {
 		for i, l := range limits {
-			var n int
-			if err := tx.QueryRow(`SELECT count(*) FROM send_log WHERE key = ? AND at > ?`, l.Key, l.Since.Unix()).Scan(&n); err != nil {
+			n, err := tx.sendLog.Count(ctx, ablage.And(ablage.Eq("key", l.Key), ablage.Gt("at", sec(l.Since))))
+			if err != nil {
 				return err
 			}
-			if n >= l.Max {
+			if n >= int64(l.Max) {
 				reached = i
 				return nil
 			}
@@ -371,7 +363,7 @@ func (s *Store) ReserveSend(ctx context.Context, limits []SendLimit, now time.Ti
 				continue
 			}
 			done[l.Key] = true
-			if _, err := tx.Exec(`INSERT INTO send_log (key, at) VALUES (?, ?)`, l.Key, now.Unix()); err != nil {
+			if err := tx.sendLog.Create(ctx, &sendLogRec{Key: l.Key, At: sec(now)}); err != nil {
 				return err
 			}
 		}
@@ -384,15 +376,21 @@ func (s *Store) ReserveSend(ctx context.Context, limits []SendLimit, now time.Ti
 // same limits (one entry for every distinct key), for a message that was
 // not accepted after all: its retry must not count twice.
 func (s *Store) ReleaseSend(ctx context.Context, limits []SendLimit, now time.Time) error {
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
+	return s.write(ctx, func(tx *repos, _ *changes) error {
 		done := map[string]bool{}
 		for _, l := range limits {
 			if done[l.Key] {
 				continue
 			}
 			done[l.Key] = true
-			if _, err := tx.Exec(`DELETE FROM send_log WHERE rowid = (SELECT rowid FROM send_log WHERE key = ? AND value = '' AND at = ? LIMIT 1)`,
-				l.Key, now.Unix()); err != nil {
+			e, err := tx.sendLog.First(ctx, ablage.Query{Where: ablage.And(ablage.Eq("key", l.Key), ablage.Eq("value", ""), ablage.Eq("at", sec(now)))})
+			if errors.Is(err, ablage.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if err := tx.sendLog.Delete(ctx, e.ID); err != nil {
 				return err
 			}
 		}
@@ -404,54 +402,52 @@ func (s *Store) ReleaseSend(ctx context.Context, limits []SendLimit, now time.Ti
 // after since. It returns whether it added one and how many entries with
 // distinct values the key has after since.
 func (s *Store) MarkOnce(ctx context.Context, key, value string, since, now time.Time) (added bool, distinct int, err error) {
-	err = s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		var n int
-		if err := tx.QueryRow(`SELECT count(*) FROM send_log WHERE key = ? AND value = ? AND at > ?`, key, value, since.Unix()).Scan(&n); err != nil {
+	err = s.write(ctx, func(tx *repos, _ *changes) error {
+		after := ablage.And(ablage.Eq("key", key), ablage.Gt("at", sec(since)))
+		n, err := tx.sendLog.Count(ctx, ablage.And(after, ablage.Eq("value", value)))
+		if err != nil {
 			return err
 		}
 		if n == 0 {
-			if _, err := tx.Exec(`INSERT INTO send_log (key, value, at) VALUES (?, ?, ?)`, key, value, now.Unix()); err != nil {
+			if err := tx.sendLog.Create(ctx, &sendLogRec{Key: key, Value: value, At: sec(now)}); err != nil {
 				return err
 			}
 			added = true
 		}
-		return tx.QueryRow(`SELECT count(DISTINCT value) FROM send_log WHERE key = ? AND at > ?`, key, since.Unix()).Scan(&distinct)
+		rows, err := tx.sendLog.Aggregate(ctx, ablage.Aggregation{Where: after, GroupBy: []string{"value"}})
+		distinct = len(rows)
+		return err
 	})
 	return added, distinct, err
 }
 
 // CountMarks is the number of entries of key after since.
 func (s *Store) CountMarks(ctx context.Context, key string, since time.Time) (int, error) {
-	var n int
-	err := s.rdb.QueryRowContext(ctx, `SELECT count(*) FROM send_log WHERE key = ? AND at > ?`, key, since.Unix()).Scan(&n)
-	return n, err
+	n, err := s.r.sendLog.Count(ctx, ablage.And(ablage.Eq("key", key), ablage.Gt("at", sec(since))))
+	return int(n), err
 }
 
 // PruneSendLog deletes send log entries older than before.
 func (s *Store) PruneSendLog(ctx context.Context, before time.Time) error {
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		_, err := tx.Exec(`DELETE FROM send_log WHERE at < ?`, before.Unix())
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		_, err := tx.sendLog.DeleteWhere(ctx, ablage.Lt("at", sec(before)))
 		return err
 	})
 }
 
 // Blocked returns the block state of one mailbox.
 func (s *Store) Blocked(ctx context.Context, id string) (Block, error) {
-	var b Block
-	var at int64
-	err := s.rdb.QueryRowContext(ctx, `SELECT reason, at FROM blocks WHERE storage_id = ? AND blocked = 1`, id).Scan(&b.Reason, &at)
-	if errors.Is(err, sql.ErrNoRows) {
+	b, err := s.r.blocks.Get(ctx, id)
+	if errors.Is(err, ablage.ErrNotFound) || err == nil && !b.Blocked {
 		return Block{}, nil
 	}
 	if err != nil {
 		return Block{}, err
 	}
-	b.Blocked = true
-	b.At = time.Unix(at, 0).UTC()
-	return b, nil
+	return Block{Blocked: true, Reason: b.Reason, At: b.At.UTC()}, nil
 }
 
 // mailboxSendKeys are the send log keys that belong to a mailbox.
-func mailboxSendKeys(id string) []any {
-	return []any{KeySends + id, KeyHourlyHits + id, KeyNetworks + id, KeyNotices + id}
+func mailboxSendKeys(id string) []string {
+	return []string{KeySends + id, KeyHourlyHits + id, KeyNetworks + id, KeyNotices + id}
 }

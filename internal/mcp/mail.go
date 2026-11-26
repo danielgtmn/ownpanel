@@ -584,7 +584,7 @@ func addMailTools(s *sdk.Server, p *panel.Service) {
 }
 
 type mailImportInfo struct {
-	ID       int64  `json:"id" jsonschema:"import id; pass it to cancel_mail_import as import_id"`
+	ID       string `json:"id" jsonschema:"import id; pass it to cancel_mail_import as import_id"`
 	Address  string `json:"address" jsonschema:"the mailbox mail is imported into"`
 	Source   string `json:"source" jsonschema:"where the mail comes from: user and server of another account, or the file name"`
 	State    string `json:"state" jsonschema:"uploading, checking, ready (waits to be started), waiting, running, paused (the other server limits downloads; continue in the web interface), interrupted (the mail server restarted; continue in the web interface), done, failed or cancelled"`
@@ -619,9 +619,9 @@ type mailImportsOutput struct {
 
 type mailImportIDInput struct {
 	ID       string `json:"id" jsonschema:"mailbox id from list_mailboxes"`
-	ImportID int64  `json:"import_id" jsonschema:"import id from list_mail_imports"`
+	ImportID string `json:"import_id" jsonschema:"import id from list_mail_imports"`
 }
 
 type cancelledOutput struct {
-	Cancelled int64 `json:"cancelled" jsonschema:"the import that was cancelled or removed"`
+	Cancelled string `json:"cancelled" jsonschema:"the import that was cancelled or removed"`
 }

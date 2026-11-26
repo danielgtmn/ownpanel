@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/davobj"
@@ -20,7 +19,7 @@ func TestDAVStrayFiles(t *testing.T) {
 		dir := t.TempDir()
 		s := open(t, dir, 0)
 		c := defaultCalendar(t, s, idA)
-		collDir := filepath.Join(dir, davDir, idA, strconv.FormatInt(c.ID, 10))
+		collDir := filepath.Join(dir, davDir, idA, c.ID)
 		if err := os.MkdirAll(collDir, 0o700); err != nil {
 			t.Fatal(err)
 		}

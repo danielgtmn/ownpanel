@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -14,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/danielgtmn/ablage"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/davobj"
 )
@@ -35,56 +36,17 @@ import (
 // The epoch (meta dav_epoch) is part of every sync token, ETag and ctag.
 // It changes when the start-up check found index and files apart or after
 // a restore, like UIDVALIDITY for mail, so clients drop what they cached.
-// Collection ids are AUTOINCREMENT, never reused: a calendar deleted and
-// created again never accepts the old one's ETags or sync tokens.
+// Collection ids are never reused (those from before ablage are integers
+// that keep their digits, new ones ablage ids): a calendar deleted and
+// created again never accepts the old one's ETags or sync tokens. The
+// collection's directory is named by its id. In ETags and sync tokens an
+// integer id is written in hex, as before ablage, so the tokens clients
+// hold stay valid; an ablage id as it is.
 //
 // DAV data counts towards the mailbox's quota: its bytes, plus
 // DAVObjectOverhead per object and DAVDeletionOverhead per kept deletion
 // record, are part of mailboxes.used_bytes (not of messages). At most
 // maxDAVDeletions deletion records are kept per collection.
-
-const davSchema = `
-CREATE TABLE IF NOT EXISTS dav_collections (
-	id           INTEGER PRIMARY KEY AUTOINCREMENT,
-	storage_id   TEXT NOT NULL,
-	kind         TEXT NOT NULL,
-	name         TEXT NOT NULL,
-	display_name TEXT NOT NULL DEFAULT '',
-	color        TEXT NOT NULL DEFAULT '',
-	description  TEXT NOT NULL DEFAULT '',
-	components   TEXT NOT NULL DEFAULT '',
-	seq          INTEGER NOT NULL DEFAULT 0,
-	pruned_seq   INTEGER NOT NULL DEFAULT 0,
-	created      INTEGER NOT NULL,
-	UNIQUE (storage_id, kind, name)
-);
-CREATE TABLE IF NOT EXISTS dav_objects (
-	id            INTEGER PRIMARY KEY,
-	collection_id INTEGER NOT NULL REFERENCES dav_collections(id) ON DELETE CASCADE,
-	storage_id    TEXT NOT NULL,
-	name          TEXT NOT NULL,
-	uid           TEXT NOT NULL,
-	component     TEXT NOT NULL,
-	size          INTEGER NOT NULL,
-	start_at      INTEGER NOT NULL,
-	end_at        INTEGER NOT NULL,
-	file          TEXT NOT NULL,
-	seq           INTEGER NOT NULL,
-	modified      INTEGER NOT NULL,
-	UNIQUE (collection_id, name),
-	UNIQUE (collection_id, uid)
-);
-CREATE INDEX IF NOT EXISTS dav_objects_seq ON dav_objects(collection_id, seq);
-CREATE INDEX IF NOT EXISTS dav_objects_mailbox ON dav_objects(storage_id);
-CREATE TABLE IF NOT EXISTS dav_deletions (
-	collection_id INTEGER NOT NULL REFERENCES dav_collections(id) ON DELETE CASCADE,
-	name          TEXT NOT NULL,
-	seq           INTEGER NOT NULL,
-	at            INTEGER NOT NULL,
-	PRIMARY KEY (collection_id, name)
-);
-CREATE INDEX IF NOT EXISTS dav_deletions_at ON dav_deletions(at);
-`
 
 // Limits and names of DAV data.
 const (
@@ -110,11 +72,6 @@ const (
 // variable for tests).
 var maxDAVDeletions = 10_000
 
-// davUsageSQL is the quota use of a mailbox's calendars and contacts (one
-// parameter: the storage id).
-var davUsageSQL = `(SELECT coalesce(sum(size), 0) + ` + strconv.Itoa(DAVObjectOverhead) + ` * count(*) FROM dav_objects WHERE storage_id = ?) +
-	(SELECT ` + strconv.Itoa(DAVDeletionOverhead) + ` * count(*) FROM dav_deletions d JOIN dav_collections c ON c.id = d.collection_id WHERE c.storage_id = ?)`
-
 // Errors of DAV storage.
 var (
 	ErrNoCollection       = errors.New("no such collection")
@@ -137,7 +94,7 @@ func (e *UIDConflictError) Error() string { return "another object has this UID:
 
 // DAVCollection is a calendar or an address book.
 type DAVCollection struct {
-	ID          int64
+	ID          string
 	StorageID   string
 	Kind        string // davobj.Calendar or davobj.AddressBook
 	Name        string // URL segment
@@ -163,35 +120,61 @@ func (c DAVCollection) CTag() string { return fmt.Sprintf("%x-%x", c.Epoch, c.Se
 func (c DAVCollection) SyncToken() string { return SyncToken(c.Epoch, c.ID, c.Seq) }
 
 // SyncToken formats a sync token.
-func SyncToken(epoch, collection, seq int64) string {
-	return fmt.Sprintf("urn:ownpanel:sync:%x:%x:%x", epoch, collection, seq)
+func SyncToken(epoch int64, collection string, seq int64) string {
+	return fmt.Sprintf("urn:ownpanel:sync:%x:%s:%x", epoch, collToken(collection), seq)
 }
 
-// ParseSyncToken reads a token of SyncToken.
-func ParseSyncToken(tok string) (epoch, collection, seq int64, ok bool) {
+// collToken is how a collection id appears in ETags and sync tokens: an
+// integer id (from before ablage) in hex, as it always did, an ablage id
+// as it is. The two never look alike: hex of an int64 has at most 16
+// characters, an ablage id 26.
+func collToken(id string) string {
+	if n, err := strconv.ParseInt(id, 10, 64); err == nil && n > 0 && strconv.FormatInt(n, 10) == id {
+		return strconv.FormatInt(n, 16)
+	}
+	return id
+}
+
+// validCollID tells whether id can be a collection id (and so a directory
+// name).
+func validCollID(id string) bool {
+	if id == "" || len(id) > 32 {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'z') {
+			return false
+		}
+	}
+	return true
+}
+
+// ParseSyncToken reads a token of SyncToken; collection is the id as it
+// appears in the token (see collToken).
+func ParseSyncToken(tok string) (epoch int64, collection string, seq int64, ok bool) {
 	rest, found := strings.CutPrefix(tok, "urn:ownpanel:sync:")
 	if !found {
-		return 0, 0, 0, false
+		return 0, "", 0, false
 	}
 	parts := strings.Split(rest, ":")
-	if len(parts) != 3 {
-		return 0, 0, 0, false
+	if len(parts) != 3 || !validCollID(parts[1]) {
+		return 0, "", 0, false
 	}
-	var v [3]int64
-	for i, p := range parts {
+	var v [2]int64
+	for i, p := range []string{parts[0], parts[2]} {
 		n, err := strconv.ParseInt(p, 16, 64)
 		if err != nil || n < 0 {
-			return 0, 0, 0, false
+			return 0, "", 0, false
 		}
 		v[i] = n
 	}
-	return v[0], v[1], v[2], true
+	return v[0], parts[1], v[1], true
 }
 
 // DAVObject is a calendar object or a vCard.
 type DAVObject struct {
-	ID           int64
-	CollectionID int64
+	ID           string
+	CollectionID string
 	StorageID    string
 	Name         string
 	UID          string
@@ -205,7 +188,9 @@ type DAVObject struct {
 }
 
 // ETag is the object's entity tag, without quotes.
-func (o DAVObject) ETag() string { return fmt.Sprintf("%x-%x-%x", o.epoch, o.CollectionID, o.Seq) }
+func (o DAVObject) ETag() string {
+	return fmt.Sprintf("%x-%s-%x", o.epoch, collToken(o.CollectionID), o.Seq)
+}
 
 // ValidDAVName tells whether name can be a collection or object name: one
 // URL segment of printable UTF-8 without "/", not "." or "..".
@@ -223,67 +208,55 @@ func ValidDAVName(name string) bool {
 
 func (s *Store) davDir(id string) string { return filepath.Join(s.dir, davDir, id) }
 
-func (s *Store) collectionDir(id string, coll int64) string {
-	return filepath.Join(s.davDir(id), strconv.FormatInt(coll, 10))
+func (s *Store) collectionDir(id, coll string) string {
+	return filepath.Join(s.davDir(id), coll)
 }
 
 // davEpoch reads the epoch, creating it the first time.
 func (s *Store) davEpoch(ctx context.Context) (int64, error) {
-	var e int64
-	err := s.rdb.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = 'dav_epoch'`).Scan(&e)
-	if errors.Is(err, sql.ErrNoRows) {
-		err = s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-			var err error
-			e, err = s.txEpoch(tx)
-			return err
-		})
+	e, ok, err := hasMeta(ctx, s.r, metaDAVEpoch)
+	if err != nil || ok {
+		return e, err
 	}
+	err = s.write(ctx, func(tx *repos, _ *changes) error {
+		var err error
+		e, err = s.txEpoch(ctx, tx)
+		return err
+	})
 	return e, err
 }
 
-func (s *Store) txEpoch(tx *sql.Tx) (int64, error) {
-	var e int64
-	err := tx.QueryRow(`SELECT value FROM meta WHERE key = 'dav_epoch'`).Scan(&e)
-	if errors.Is(err, sql.ErrNoRows) {
-		return s.newDAVEpoch(tx)
+func (s *Store) txEpoch(ctx context.Context, tx *repos) (int64, error) {
+	e, ok, err := hasMeta(ctx, tx, metaDAVEpoch)
+	if err != nil || ok {
+		return e, err
 	}
-	return e, err
+	return s.newDAVEpoch(ctx, tx)
 }
 
 // newDAVEpoch sets an epoch never used before: larger than the last one
 // and at least the current time in seconds, so a restored database still
 // gets a new one.
-func (s *Store) newDAVEpoch(tx *sql.Tx) (int64, error) {
-	var last int64
-	err := tx.QueryRow(`SELECT value FROM meta WHERE key = 'dav_epoch'`).Scan(&last)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+func (s *Store) newDAVEpoch(ctx context.Context, tx *repos) (int64, error) {
+	last, err := metaValue(ctx, tx, metaDAVEpoch)
+	if err != nil {
 		return 0, err
 	}
 	v := max(last+1, s.now().Unix())
-	_, err = tx.Exec(`INSERT INTO meta (key, value) VALUES ('dav_epoch', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, v)
-	return v, err
+	return v, setMeta(ctx, tx, metaDAVEpoch, v)
 }
 
-const collectionColumns = `c.id, c.storage_id, c.kind, c.name, c.display_name, c.color, c.description, c.components, c.seq, c.pruned_seq, c.created`
-
-type scanner interface{ Scan(...any) error }
-
-func scanCollection(r scanner, c *DAVCollection, extra ...any) error {
-	var comps string
-	var created int64
-	dst := append([]any{&c.ID, &c.StorageID, &c.Kind, &c.Name, &c.DisplayName, &c.Color, &c.Description, &comps, &c.Seq, &c.PrunedSeq, &created}, extra...)
-	if err := r.Scan(dst...); err != nil {
-		return err
+func (r davCollectionRec) collection(epoch int64) DAVCollection {
+	c := DAVCollection{ID: r.ID, StorageID: r.StorageID, Kind: r.Kind, Name: r.Name, DisplayName: r.DisplayName, Color: r.Color,
+		Description: r.Description, Seq: r.Seq, PrunedSeq: r.PrunedSeq, Created: local(r.Created), Epoch: epoch}
+	if r.Components != "" {
+		c.Components = strings.Split(r.Components, ",")
 	}
-	if comps != "" {
-		c.Components = strings.Split(comps, ",")
-	}
-	c.Created = time.Unix(created, 0)
-	return nil
+	return c
 }
 
 // DAVCollections lists a mailbox's collections of a kind ("" for all), by
-// name, with their object counts and sizes.
+// kind and name, with their object counts and sizes.
 func (s *Store) DAVCollections(ctx context.Context, id, kind string) ([]DAVCollection, error) {
 	if err := checkID(id); err != nil {
 		return nil, err
@@ -292,42 +265,60 @@ func (s *Store) DAVCollections(ctx context.Context, id, kind string) ([]DAVColle
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.rdb.QueryContext(ctx, `SELECT `+collectionColumns+`,
-		(SELECT count(*) FROM dav_objects o WHERE o.collection_id = c.id),
-		(SELECT coalesce(sum(size), 0) FROM dav_objects o WHERE o.collection_id = c.id)
-		FROM dav_collections c WHERE c.storage_id = ? AND (? = '' OR c.kind = ?) ORDER BY c.kind, c.name`, id, kind, kind)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
 	var out []DAVCollection
-	for rows.Next() {
-		var c DAVCollection
-		if err := scanCollection(rows, &c, &c.Objects, &c.Bytes); err != nil {
-			return nil, err
+	err = s.read(ctx, func(tx *repos) error {
+		where := ablage.Eq("storage_id", id)
+		if kind != "" {
+			where = ablage.And(where, ablage.Eq("kind", kind))
 		}
-		c.Epoch = epoch
-		out = append(out, c)
-	}
-	return out, rows.Err()
+		list, err := tx.davCollections.Find(ctx, ablage.Query{Where: where, OrderBy: []ablage.Order{ablage.Asc("kind"), ablage.Asc("name")}})
+		if err != nil || len(list) == 0 {
+			return err
+		}
+		ids := make([]string, len(list))
+		for i, c := range list {
+			ids[i] = c.ID
+		}
+		counts, err := tx.davObjects.Aggregate(ctx, ablage.Aggregation{
+			Where: ablage.In("collection_id", ids...), GroupBy: []string{"collection_id"},
+			Values: []ablage.Agg{ablage.CountAll("n"), ablage.Sum("size", "bytes")},
+		})
+		if err != nil {
+			return err
+		}
+		by := map[string]ablage.Row{}
+		for _, r := range counts {
+			by[r["collection_id"].(string)] = r
+		}
+		for _, r := range list {
+			c := r.collection(epoch)
+			if n, ok := by[r.ID]; ok {
+				c.Objects, c.Bytes = int(n["n"].(int64)), n["bytes"].(int64)
+			}
+			out = append(out, c)
+		}
+		return nil
+	})
+	return out, err
 }
 
 // DAVCollection returns one collection of a mailbox.
 func (s *Store) DAVCollection(ctx context.Context, id, kind, name string) (DAVCollection, error) {
-	var c DAVCollection
 	if err := checkID(id); err != nil {
-		return c, err
+		return DAVCollection{}, err
 	}
 	epoch, err := s.davEpoch(ctx)
 	if err != nil {
-		return c, err
+		return DAVCollection{}, err
 	}
-	err = scanCollection(s.rdb.QueryRowContext(ctx, `SELECT `+collectionColumns+` FROM dav_collections c WHERE c.storage_id = ? AND c.kind = ? AND c.name = ?`, id, kind, name), &c)
-	if errors.Is(err, sql.ErrNoRows) {
-		return c, ErrNoCollection
+	r, err := s.r.davCollections.First(ctx, ablage.Query{Where: ablage.And(ablage.Eq("storage_id", id), ablage.Eq("kind", kind), ablage.Eq("name", name))})
+	if errors.Is(err, ablage.ErrNotFound) {
+		return DAVCollection{}, ErrNoCollection
 	}
-	c.Epoch = epoch
-	return c, err
+	if err != nil {
+		return DAVCollection{}, err
+	}
+	return r.collection(epoch), nil
 }
 
 // CreateDAVCollection creates a collection (Kind, Name, DisplayName, Color,
@@ -339,8 +330,8 @@ func (s *Store) CreateDAVCollection(ctx context.Context, id string, c DAVCollect
 	if !ValidDAVName(c.Name) || c.Kind != davobj.Calendar && c.Kind != davobj.AddressBook {
 		return c, ErrInvalidDAVName
 	}
-	err := s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		return s.createCollection(tx, id, &c)
+	err := s.write(ctx, func(tx *repos, _ *changes) error {
+		return s.createCollection(ctx, tx, id, &c)
 	})
 	if err != nil {
 		return c, err
@@ -348,27 +339,21 @@ func (s *Store) CreateDAVCollection(ctx context.Context, id string, c DAVCollect
 	return s.DAVCollection(ctx, id, c.Kind, c.Name)
 }
 
-func (s *Store) createCollection(tx *sql.Tx, id string, c *DAVCollection) error {
-	var n int
-	if err := tx.QueryRow(`SELECT count(*) FROM dav_collections WHERE storage_id = ?`, id).Scan(&n); err != nil {
+func (s *Store) createCollection(ctx context.Context, tx *repos, id string, c *DAVCollection) error {
+	n, err := tx.davCollections.Count(ctx, ablage.Eq("storage_id", id))
+	if err != nil {
 		return err
 	}
 	if n >= MaxDAVCollections {
 		return ErrTooManyCollections
 	}
-	var exists int
-	if err := tx.QueryRow(`SELECT count(*) FROM dav_collections WHERE storage_id = ? AND kind = ? AND name = ?`, id, c.Kind, c.Name).Scan(&exists); err != nil {
-		return err
-	}
-	if exists > 0 {
+	r := davCollectionRec{StorageID: id, Kind: c.Kind, Name: c.Name, DisplayName: c.DisplayName, Color: c.Color, Description: c.Description,
+		Components: strings.Join(c.Components, ","), Created: sec(s.now())}
+	err = tx.davCollections.Create(ctx, &r)
+	if errors.Is(err, ablage.ErrDuplicate) {
 		return ErrCollectionExists
 	}
-	res, err := tx.Exec(`INSERT INTO dav_collections (storage_id, kind, name, display_name, color, description, components, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, c.Kind, c.Name, c.DisplayName, c.Color, c.Description, strings.Join(c.Components, ","), s.now().Unix())
-	if err != nil {
-		return err
-	}
-	c.ID, err = res.LastInsertId()
+	c.ID = r.ID
 	return err
 }
 
@@ -385,28 +370,30 @@ func (s *Store) EnsureDefaultDAVCollections(ctx context.Context, id string) erro
 	if err := checkID(id); err != nil {
 		return err
 	}
-	var cals, books int
-	if err := s.rdb.QueryRowContext(ctx, `SELECT
-		(SELECT count(*) FROM dav_collections WHERE storage_id = ? AND kind = 'calendar'),
-		(SELECT count(*) FROM dav_collections WHERE storage_id = ? AND kind = 'addressbook')`, id, id).Scan(&cals, &books); err != nil {
+	kinds, err := s.r.davCollections.Aggregate(ctx, ablage.Aggregation{Where: ablage.Eq("storage_id", id), GroupBy: []string{"kind"}})
+	if err != nil {
 		return err
 	}
-	if cals > 0 && books > 0 {
+	have := map[string]bool{}
+	for _, k := range kinds {
+		have[k["kind"].(string)] = true
+	}
+	if have[davobj.Calendar] && have[davobj.AddressBook] {
 		return nil
 	}
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
+	return s.write(ctx, func(tx *repos, _ *changes) error {
 		for _, d := range []DAVCollection{
 			{Kind: davobj.Calendar, Name: DefaultCalendar, DisplayName: "Calendar"},
 			{Kind: davobj.AddressBook, Name: DefaultAddressBook, DisplayName: "Contacts"},
 		} {
-			var n int
-			if err := tx.QueryRow(`SELECT count(*) FROM dav_collections WHERE storage_id = ? AND kind = ?`, id, d.Kind).Scan(&n); err != nil {
+			n, err := tx.davCollections.Count(ctx, ablage.And(ablage.Eq("storage_id", id), ablage.Eq("kind", d.Kind)))
+			if err != nil {
 				return err
 			}
 			if n > 0 {
 				continue
 			}
-			if err := s.createCollection(tx, id, &d); err != nil && !errors.Is(err, ErrCollectionExists) {
+			if err := s.createCollection(ctx, tx, id, &d); err != nil && !errors.Is(err, ErrCollectionExists) {
 				return err
 			}
 		}
@@ -423,54 +410,67 @@ type DAVCollectionUpdate struct {
 }
 
 // UpdateDAVCollection changes a collection's properties.
-func (s *Store) UpdateDAVCollection(ctx context.Context, id string, coll int64, u DAVCollectionUpdate) error {
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		for _, f := range []struct {
-			col string
-			v   *string
-		}{{"display_name", u.DisplayName}, {"color", u.Color}, {"description", u.Description}} {
-			if f.v == nil {
-				continue
-			}
-			res, err := tx.Exec(`UPDATE dav_collections SET `+f.col+` = ? WHERE id = ? AND storage_id = ?`, *f.v, coll, id)
-			if err != nil {
-				return err
-			}
-			if n, _ := res.RowsAffected(); n == 0 {
-				return ErrNoCollection
-			}
+func (s *Store) UpdateDAVCollection(ctx context.Context, id, coll string, u DAVCollectionUpdate) error {
+	set := ablage.Row{}
+	for _, f := range []struct {
+		col string
+		v   *string
+	}{{"display_name", u.DisplayName}, {"color", u.Color}, {"description", u.Description}} {
+		if f.v != nil {
+			set[f.col] = *f.v
 		}
-		return nil
-	})
-}
-
-// DeleteDAVCollection deletes a collection with all its objects.
-func (s *Store) DeleteDAVCollection(ctx context.Context, id string, coll int64) error {
-	if err := checkID(id); err != nil {
-		return err
 	}
-	return s.write(ctx, func(tx *sql.Tx, ch *changes) error {
-		var bytes int64
-		if err := tx.QueryRow(`SELECT
-			(SELECT coalesce(sum(size), 0) + ? * count(*) FROM dav_objects WHERE collection_id = ? AND storage_id = ?) +
-			(SELECT ? * count(*) FROM dav_deletions WHERE collection_id = ?)`,
-			DAVObjectOverhead, coll, id, DAVDeletionOverhead, coll).Scan(&bytes); err != nil {
-			return err
-		}
-		res, err := tx.Exec(`DELETE FROM dav_collections WHERE id = ? AND storage_id = ?`, coll, id)
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		n, err := tx.davCollections.Count(ctx, ablage.And(ablage.Eq("id", coll), ablage.Eq("storage_id", id)))
 		if err != nil {
 			return err
 		}
-		if n, _ := res.RowsAffected(); n == 0 {
+		if n == 0 {
 			return ErrNoCollection
 		}
-		if _, err := tx.Exec(`DELETE FROM dav_objects WHERE collection_id = ?`, coll); err != nil {
+		if len(set) == 0 {
+			return nil
+		}
+		_, err = tx.davCollections.UpdateWhere(ctx, ablage.And(ablage.Eq("id", coll), ablage.Eq("storage_id", id)), set)
+		return err
+	})
+}
+
+// davBytes is what objects and deletion records count towards the quota.
+func davBytes(ctx context.Context, tx *repos, objects, deletions ablage.Cond) (int64, error) {
+	o, err := tx.davObjects.Aggregate(ctx, ablage.Aggregation{Where: objects, Values: []ablage.Agg{ablage.CountAll("n"), ablage.Sum("size", "bytes")}})
+	if err != nil {
+		return 0, err
+	}
+	d, err := tx.davDeletions.Count(ctx, deletions)
+	if err != nil {
+		return 0, err
+	}
+	return o[0]["bytes"].(int64) + DAVObjectOverhead*o[0]["n"].(int64) + DAVDeletionOverhead*d, nil
+}
+
+// DeleteDAVCollection deletes a collection with all its objects.
+func (s *Store) DeleteDAVCollection(ctx context.Context, id, coll string) error {
+	if err := checkID(id); err != nil {
+		return err
+	}
+	if !validCollID(coll) {
+		return ErrNoCollection
+	}
+	return s.write(ctx, func(tx *repos, ch *changes) error {
+		bytes, err := davBytes(ctx, tx, ablage.And(ablage.Eq("collection_id", coll), ablage.Eq("storage_id", id)), ablage.Eq("collection_id", coll))
+		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`DELETE FROM dav_deletions WHERE collection_id = ?`, coll); err != nil {
+		// Objects and deletion records go with it (cascade).
+		n, err := tx.davCollections.DeleteWhere(ctx, ablage.And(ablage.Eq("id", coll), ablage.Eq("storage_id", id)))
+		if err != nil {
 			return err
 		}
-		if err := addUsage(tx, id, -bytes, 0); err != nil {
+		if n == 0 {
+			return ErrNoCollection
+		}
+		if err := addUsage(ctx, tx, id, -bytes, 0); err != nil {
 			return err
 		}
 		return s.trashDir(ch, s.collectionDir(id, coll), id)
@@ -490,47 +490,36 @@ func (s *Store) trashDir(ch *changes, dir, id string) error {
 	return nil
 }
 
-const objectColumns = `id, collection_id, storage_id, name, uid, component, size, start_at, end_at, seq, modified, file`
-
-func scanObject(r scanner, o *DAVObject) error {
-	var mod int64
-	if err := r.Scan(&o.ID, &o.CollectionID, &o.StorageID, &o.Name, &o.UID, &o.Component, &o.Size, &o.Start, &o.End, &o.Seq, &mod, &o.file); err != nil {
-		return err
-	}
-	o.Modified = time.Unix(mod, 0)
-	return nil
+func (r davObjectRec) object(epoch int64) DAVObject {
+	return DAVObject{ID: r.ID, CollectionID: r.CollectionID, StorageID: r.StorageID, Name: r.Name, UID: r.UID, Component: r.Component,
+		Size: r.Size, Start: r.StartAt, End: r.EndAt, Seq: r.Seq, Modified: local(r.Modified), file: r.File, epoch: epoch}
 }
 
-func (s *Store) queryObjects(ctx context.Context, epoch int64, q string, args ...any) ([]DAVObject, error) {
-	rows, err := s.rdb.QueryContext(ctx, `SELECT `+objectColumns+` FROM dav_objects WHERE `+q, args...)
+func (s *Store) findObjects(ctx context.Context, epoch int64, q ablage.Query) ([]DAVObject, error) {
+	list, err := s.r.davObjects.Find(ctx, q)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []DAVObject
-	for rows.Next() {
-		var o DAVObject
-		if err := scanObject(rows, &o); err != nil {
-			return nil, err
-		}
-		o.epoch = epoch
-		out = append(out, o)
+	for _, r := range list {
+		out = append(out, r.object(epoch))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // DAVObjects lists the objects of a collection by name. With start < end,
 // only those whose span overlaps [start, end) (Unix seconds).
 func (s *Store) DAVObjects(ctx context.Context, c DAVCollection, start, end int64) ([]DAVObject, error) {
+	where := ablage.Eq("collection_id", c.ID)
 	if start < end {
-		return s.queryObjects(ctx, c.Epoch, `collection_id = ? AND start_at < ? AND end_at >= ? ORDER BY name`, c.ID, end, start)
+		where = ablage.And(where, ablage.Lt("start_at", end), ablage.Gte("end_at", start))
 	}
-	return s.queryObjects(ctx, c.Epoch, `collection_id = ? ORDER BY name`, c.ID)
+	return s.findObjects(ctx, c.Epoch, ablage.Query{Where: where, OrderBy: []ablage.Order{ablage.Asc("name")}})
 }
 
 // DAVObject returns one object of a collection by name.
 func (s *Store) DAVObject(ctx context.Context, c DAVCollection, name string) (DAVObject, error) {
-	list, err := s.queryObjects(ctx, c.Epoch, `collection_id = ? AND name = ?`, c.ID, name)
+	list, err := s.findObjects(ctx, c.Epoch, ablage.Query{Where: ablage.And(ablage.Eq("collection_id", c.ID), ablage.Eq("name", name))})
 	if err != nil {
 		return DAVObject{}, err
 	}
@@ -542,7 +531,7 @@ func (s *Store) DAVObject(ctx context.Context, c DAVCollection, name string) (DA
 
 // DAVObjectByUID returns the object of a collection with a UID.
 func (s *Store) DAVObjectByUID(ctx context.Context, c DAVCollection, uid string) (DAVObject, error) {
-	list, err := s.queryObjects(ctx, c.Epoch, `collection_id = ? AND uid = ?`, c.ID, uid)
+	list, err := s.findObjects(ctx, c.Epoch, ablage.Query{Where: ablage.And(ablage.Eq("collection_id", c.ID), ablage.Eq("uid", uid))})
 	if err != nil {
 		return DAVObject{}, err
 	}
@@ -555,7 +544,7 @@ func (s *Store) DAVObjectByUID(ctx context.Context, c DAVCollection, uid string)
 // ReadDAVObject reads an object's data. An object replaced or deleted
 // meanwhile answers ErrNoObject.
 func (s *Store) ReadDAVObject(o DAVObject) ([]byte, error) {
-	if !fileNameRe.MatchString(o.file) || checkID(o.StorageID) != nil {
+	if !fileNameRe.MatchString(o.file) || checkID(o.StorageID) != nil || !validCollID(o.CollectionID) {
 		return nil, ErrNoObject
 	}
 	b, err := os.ReadFile(filepath.Join(s.collectionDir(o.StorageID, o.CollectionID), o.file))
@@ -612,54 +601,52 @@ func (s *Store) PutDAVObject(ctx context.Context, c DAVCollection, name string, 
 	defer os.Remove(tmp)
 	quota := s.quota(id)
 	created := false
-	err = s.write(ctx, func(tx *sql.Tx, ch *changes) error {
-		epoch, err := s.txEpoch(tx)
+	err = s.write(ctx, func(tx *repos, ch *changes) error {
+		epoch, err := s.txEpoch(ctx, tx)
 		if err != nil {
 			return err
 		}
-		var seq int64
-		if err := tx.QueryRow(`SELECT seq FROM dav_collections WHERE id = ? AND storage_id = ?`, c.ID, id).Scan(&seq); errors.Is(err, sql.ErrNoRows) {
+		coll, err := tx.davCollections.First(ctx, ablage.Query{Where: ablage.And(ablage.Eq("id", c.ID), ablage.Eq("storage_id", id))})
+		if errors.Is(err, ablage.ErrNotFound) {
 			return ErrNoCollection
 		} else if err != nil {
 			return err
 		}
-		var old DAVObject
-		err = scanObject(tx.QueryRow(`SELECT `+objectColumns+` FROM dav_objects WHERE collection_id = ? AND name = ?`, c.ID, name), &old)
+		seq := coll.Seq
+		old, err := tx.davObjects.First(ctx, ablage.Query{Where: ablage.And(ablage.Eq("collection_id", c.ID), ablage.Eq("name", name))})
 		exists := err == nil
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		if err != nil && !errors.Is(err, ablage.ErrNotFound) {
 			return err
 		}
-		old.epoch = epoch
-		if !cond.holds(exists, old.ETag()) {
+		if !cond.holds(exists, old.object(epoch).ETag()) {
 			return ErrPrecondition
 		}
-		var other string
-		err = tx.QueryRow(`SELECT name FROM dav_objects WHERE collection_id = ? AND uid = ? AND name <> ?`, c.ID, info.UID, name).Scan(&other)
+		other, err := tx.davObjects.First(ctx, ablage.Query{Where: ablage.And(ablage.Eq("collection_id", c.ID), ablage.Eq("uid", info.UID), ablage.Ne("name", name))})
 		if err == nil {
-			return &UIDConflictError{Name: other}
-		} else if !errors.Is(err, sql.ErrNoRows) {
+			return &UIDConflictError{Name: other.Name}
+		} else if !errors.Is(err, ablage.ErrNotFound) {
 			return err
 		}
 		if !exists {
-			var n int
-			if err := tx.QueryRow(`SELECT count(*) FROM dav_objects WHERE collection_id = ?`, c.ID).Scan(&n); err != nil {
+			n, err := tx.davObjects.Count(ctx, ablage.Eq("collection_id", c.ID))
+			if err != nil {
 				return err
 			}
 			if n >= MaxDAVObjects {
 				return ErrTooManyObjects
 			}
 		}
-		var deleted int
-		if err := tx.QueryRow(`SELECT count(*) FROM dav_deletions WHERE collection_id = ? AND name = ?`, c.ID, name).Scan(&deleted); err != nil {
+		deleted, err := tx.davDeletions.Count(ctx, ablage.And(ablage.Eq("collection_id", c.ID), ablage.Eq("name", name)))
+		if err != nil {
 			return err
 		}
-		grow := size - old.Size - int64(deleted)*DAVDeletionOverhead
+		grow := size - old.Size - deleted*DAVDeletionOverhead
 		if !exists {
 			grow += DAVObjectOverhead
 		}
 		if quota > 0 && grow > 0 {
-			var used int64
-			if err := tx.QueryRow(`SELECT used_bytes FROM mailboxes WHERE storage_id = ?`, id).Scan(&used); err != nil {
+			used, err := usedBytes(ctx, tx, id)
+			if err != nil {
 				return err
 			}
 			if used+grow > quota {
@@ -671,33 +658,33 @@ func (s *Store) PutDAVObject(ctx context.Context, c DAVCollection, name string, 
 			return err
 		}
 		seq++
-		now := s.now().Unix()
+		now := sec(s.now())
+		o := davObjectRec{ID: old.ID, CollectionID: c.ID, StorageID: id, Name: name, UID: info.UID, Component: info.Component, Size: size,
+			StartAt: info.Start, EndAt: info.End, File: file, Seq: seq, Modified: now}
 		if exists {
-			if _, err := tx.Exec(`UPDATE dav_objects SET uid = ?, component = ?, size = ?, start_at = ?, end_at = ?, file = ?, seq = ?, modified = ? WHERE id = ?`,
-				info.UID, info.Component, size, info.Start, info.End, file, seq, now, old.ID); err != nil {
+			if err := tx.davObjects.Patch(ctx, old.ID, ablage.Row{"uid": info.UID, "component": info.Component, "size": size,
+				"start_at": info.Start, "end_at": info.End, "file": file, "seq": seq, "modified": now}); err != nil {
 				return err
 			}
-			if err := s.trashFile(ch, filepath.Join(s.collectionDir(id, c.ID), old.file), id); err != nil {
+			if err := s.trashFile(ch, filepath.Join(s.collectionDir(id, c.ID), old.File), id); err != nil {
 				return err
 			}
 		} else {
-			if _, err := tx.Exec(`INSERT INTO dav_objects (collection_id, storage_id, name, uid, component, size, start_at, end_at, file, seq, modified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				c.ID, id, name, info.UID, info.Component, size, info.Start, info.End, file, seq, now); err != nil {
+			if err := tx.davObjects.Create(ctx, &o); err != nil {
 				return err
 			}
 			created = true
 		}
-		if _, err := tx.Exec(`DELETE FROM dav_deletions WHERE collection_id = ? AND name = ?`, c.ID, name); err != nil {
+		if _, err := tx.davDeletions.DeleteWhere(ctx, ablage.And(ablage.Eq("collection_id", c.ID), ablage.Eq("name", name))); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`UPDATE dav_collections SET seq = ? WHERE id = ?`, seq, c.ID); err != nil {
+		if err := tx.davCollections.Patch(ctx, c.ID, ablage.Row{"seq": seq}); err != nil {
 			return err
 		}
-		if err := addUsage(tx, id, grow, 0); err != nil {
+		if err := addUsage(ctx, tx, id, grow, 0); err != nil {
 			return err
 		}
-		obj = DAVObject{CollectionID: c.ID, StorageID: id, Name: name, UID: info.UID, Component: info.Component, Size: size,
-			Start: info.Start, End: info.End, Seq: seq, Modified: time.Unix(now, 0), file: file, epoch: epoch}
+		obj = o.object(epoch)
 		return nil
 	})
 	return obj, created, err
@@ -710,68 +697,66 @@ func (s *Store) DeleteDAVObject(ctx context.Context, c DAVCollection, name strin
 	if err := checkID(id); err != nil {
 		return err
 	}
-	return s.write(ctx, func(tx *sql.Tx, ch *changes) error {
-		epoch, err := s.txEpoch(tx)
+	return s.write(ctx, func(tx *repos, ch *changes) error {
+		epoch, err := s.txEpoch(ctx, tx)
 		if err != nil {
 			return err
 		}
-		var o DAVObject
-		err = scanObject(tx.QueryRow(`SELECT `+objectColumns+` FROM dav_objects WHERE collection_id = ? AND name = ? AND storage_id = ?`, c.ID, name, id), &o)
-		if errors.Is(err, sql.ErrNoRows) {
+		o, err := tx.davObjects.First(ctx, ablage.Query{Where: ablage.And(ablage.Eq("collection_id", c.ID), ablage.Eq("name", name), ablage.Eq("storage_id", id))})
+		if errors.Is(err, ablage.ErrNotFound) {
 			return ErrNoObject
 		} else if err != nil {
 			return err
 		}
-		o.epoch = epoch
-		if !cond.holds(true, o.ETag()) {
+		if !cond.holds(true, o.object(epoch).ETag()) {
 			return ErrPrecondition
 		}
-		var seq int64
-		if err := tx.QueryRow(`SELECT seq FROM dav_collections WHERE id = ?`, c.ID).Scan(&seq); err != nil {
-			return err
-		}
-		seq++
-		if _, err := tx.Exec(`DELETE FROM dav_objects WHERE id = ?`, o.ID); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`INSERT INTO dav_deletions (collection_id, name, seq, at) VALUES (?, ?, ?, ?)
-			ON CONFLICT (collection_id, name) DO UPDATE SET seq = excluded.seq, at = excluded.at`, c.ID, name, seq, s.now().Unix()); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`UPDATE dav_collections SET seq = ? WHERE id = ?`, seq, c.ID); err != nil {
-			return err
-		}
-		trimmed, err := trimDeletions(tx, c.ID)
+		coll, err := tx.davCollections.Get(ctx, c.ID)
 		if err != nil {
 			return err
 		}
-		if err := addUsage(tx, id, -o.Size-DAVObjectOverhead+int64(1-trimmed)*DAVDeletionOverhead, 0); err != nil {
+		seq := coll.Seq + 1
+		if err := tx.davObjects.Delete(ctx, o.ID); err != nil {
 			return err
 		}
-		return s.trashFile(ch, filepath.Join(s.collectionDir(id, c.ID), o.file), id)
+		if err := tx.davDeletions.UpsertOn(ctx, &davDeletionRec{CollectionID: c.ID, Name: name, Seq: seq, At: sec(s.now())}, "collection_id", "name"); err != nil {
+			return err
+		}
+		if err := tx.davCollections.Patch(ctx, c.ID, ablage.Row{"seq": seq}); err != nil {
+			return err
+		}
+		trimmed, err := trimDeletions(ctx, tx, c.ID)
+		if err != nil {
+			return err
+		}
+		if err := addUsage(ctx, tx, id, -o.Size-DAVObjectOverhead+int64(1-trimmed)*DAVDeletionOverhead, 0); err != nil {
+			return err
+		}
+		return s.trashFile(ch, filepath.Join(s.collectionDir(id, c.ID), o.File), id)
 	})
 }
 
 // trimDeletions keeps at most maxDAVDeletions deletion records of a
 // collection: the oldest go, and pruned_seq rises so that sync tokens from
 // before them are refused. It returns how many went.
-func trimDeletions(tx *sql.Tx, coll int64) (int, error) {
-	var n int
-	if err := tx.QueryRow(`SELECT count(*) FROM dav_deletions WHERE collection_id = ?`, coll).Scan(&n); err != nil {
+func trimDeletions(ctx context.Context, tx *repos, coll string) (int, error) {
+	n, err := tx.davDeletions.Count(ctx, ablage.Eq("collection_id", coll))
+	if err != nil {
 		return 0, err
 	}
-	extra := n - maxDAVDeletions
+	extra := int(n) - maxDAVDeletions
 	if extra <= 0 {
 		return 0, nil
 	}
-	var upTo int64
-	if err := tx.QueryRow(`SELECT max(seq) FROM (SELECT seq FROM dav_deletions WHERE collection_id = ? ORDER BY seq LIMIT ?)`, coll, extra).Scan(&upTo); err != nil {
+	oldest, err := tx.davDeletions.Find(ctx, ablage.Query{Where: ablage.Eq("collection_id", coll), OrderBy: []ablage.Order{ablage.Asc("seq")}, Limit: extra})
+	if err != nil {
 		return 0, err
 	}
-	if _, err := tx.Exec(`DELETE FROM dav_deletions WHERE collection_id = ? AND seq <= ?`, coll, upTo); err != nil {
+	upTo := oldest[len(oldest)-1].Seq
+	if _, err := tx.davDeletions.DeleteWhere(ctx, ablage.And(ablage.Eq("collection_id", coll), ablage.Lte("seq", upTo))); err != nil {
 		return 0, err
 	}
-	if _, err := tx.Exec(`UPDATE dav_collections SET pruned_seq = max(pruned_seq, ?) WHERE id = ?`, upTo, coll); err != nil {
+	if _, err := tx.davCollections.UpdateWhere(ctx, ablage.And(ablage.Eq("id", coll), ablage.Lt("pruned_seq", upTo)), ablage.Row{"pruned_seq": upTo}); err != nil {
 		return 0, err
 	}
 	return extra, nil
@@ -787,62 +772,65 @@ func (s *Store) DAVChanges(ctx context.Context, c DAVCollection, token string) (
 		return changed, nil, err
 	}
 	epoch, coll, seq, ok := ParseSyncToken(token)
-	if !ok || epoch != c.Epoch || coll != c.ID || seq > c.Seq || seq < c.PrunedSeq {
+	if !ok || epoch != c.Epoch || coll != collToken(c.ID) || seq > c.Seq || seq < c.PrunedSeq {
 		return nil, nil, ErrInvalidSyncToken
 	}
-	changed, err = s.queryObjects(ctx, c.Epoch, `collection_id = ? AND seq > ? ORDER BY seq`, c.ID, seq)
-	if err != nil {
-		return nil, nil, err
-	}
-	rows, err := s.rdb.QueryContext(ctx, `SELECT name FROM dav_deletions WHERE collection_id = ? AND seq > ? ORDER BY seq`, c.ID, seq)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var n string
-		if err := rows.Scan(&n); err != nil {
-			return nil, nil, err
+	err = s.read(ctx, func(tx *repos) error {
+		list, err := tx.davObjects.Find(ctx, ablage.Query{Where: ablage.And(ablage.Eq("collection_id", c.ID), ablage.Gt("seq", seq)), OrderBy: []ablage.Order{ablage.Asc("seq")}})
+		if err != nil {
+			return err
 		}
-		deleted = append(deleted, n)
-	}
-	return changed, deleted, rows.Err()
+		for _, r := range list {
+			changed = append(changed, r.object(c.Epoch))
+		}
+		dels, err := tx.davDeletions.Find(ctx, ablage.Query{Where: ablage.And(ablage.Eq("collection_id", c.ID), ablage.Gt("seq", seq)), OrderBy: []ablage.Order{ablage.Asc("seq")}})
+		if err != nil {
+			return err
+		}
+		for _, d := range dels {
+			deleted = append(deleted, d.Name)
+		}
+		return nil
+	})
+	return changed, deleted, err
 }
 
 // PruneDAVDeletions forgets deletions older than DAVDeletionRetention; sync
 // tokens from before them are refused from then on.
 func (s *Store) PruneDAVDeletions(ctx context.Context) error {
-	cutoff := s.now().Add(-DAVDeletionRetention).Unix()
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		if _, err := tx.Exec(`UPDATE dav_collections SET pruned_seq = max(pruned_seq,
-			(SELECT max(seq) FROM dav_deletions d WHERE d.collection_id = dav_collections.id AND d.at < ?))
-			WHERE id IN (SELECT collection_id FROM dav_deletions WHERE at < ?)`, cutoff, cutoff); err != nil {
+	cutoff := sec(s.now().Add(-DAVDeletionRetention))
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		old := ablage.Lt("at", cutoff)
+		rows, err := tx.davDeletions.Aggregate(ctx, ablage.Aggregation{Where: old, GroupBy: []string{"collection_id"},
+			Values: []ablage.Agg{ablage.CountAll("n"), ablage.Max("seq", "seq")}})
+		if err != nil || len(rows) == 0 {
 			return err
 		}
-		rows, err := tx.Query(`SELECT c.storage_id, count(*) FROM dav_deletions d JOIN dav_collections c ON c.id = d.collection_id
-			WHERE d.at < ? GROUP BY c.storage_id`, cutoff)
+		ids := make([]string, len(rows))
+		for i, r := range rows {
+			ids[i] = r["collection_id"].(string)
+		}
+		colls, err := tx.davCollections.Find(ctx, ablage.Query{Where: ablage.In("id", ids...)})
 		if err != nil {
 			return err
 		}
+		owner := map[string]string{}
+		for _, c := range colls {
+			owner[c.ID] = c.StorageID
+		}
 		freed := map[string]int64{}
-		for rows.Next() {
-			var sid string
-			var n int64
-			if err := rows.Scan(&sid, &n); err != nil {
-				rows.Close()
+		for _, r := range rows {
+			coll, upTo := r["collection_id"].(string), r["seq"].(int64)
+			if _, err := tx.davCollections.UpdateWhere(ctx, ablage.And(ablage.Eq("id", coll), ablage.Lt("pruned_seq", upTo)), ablage.Row{"pruned_seq": upTo}); err != nil {
 				return err
 			}
-			freed[sid] = n
+			freed[owner[coll]] += r["n"].(int64)
 		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`DELETE FROM dav_deletions WHERE at < ?`, cutoff); err != nil {
+		if _, err := tx.davDeletions.DeleteWhere(ctx, old); err != nil {
 			return err
 		}
 		for sid, n := range freed {
-			if err := addUsage(tx, sid, -n*DAVDeletionOverhead, 0); err != nil {
+			if err := addUsage(ctx, tx, sid, -n*DAVDeletionOverhead, 0); err != nil {
 				return err
 			}
 		}
@@ -854,7 +842,18 @@ func (s *Store) PruneDAVDeletions(ctx context.Context) error {
 // its quota: their size and the overhead of objects and deletion records.
 func (s *Store) DAVUsage(ctx context.Context, id string) (int64, error) {
 	var n int64
-	err := s.rdb.QueryRowContext(ctx, `SELECT `+davUsageSQL, id, id).Scan(&n)
+	err := s.read(ctx, func(tx *repos) error {
+		colls, err := tx.davCollections.Find(ctx, ablage.Query{Where: ablage.Eq("storage_id", id)})
+		if err != nil {
+			return err
+		}
+		ids := make([]string, len(colls))
+		for i, c := range colls {
+			ids[i] = c.ID
+		}
+		n, err = davBytes(ctx, tx, ablage.Eq("storage_id", id), ablage.In("collection_id", ids...))
+		return err
+	})
 	return n, err
 }
 
@@ -921,15 +920,13 @@ func (s *Store) trashFile(ch *changes, file, id string) error {
 
 // deleteDAV removes all DAV data of a mailbox in DeleteMailbox's
 // transaction.
-func (s *Store) deleteDAV(tx *sql.Tx, ch *changes, id string) error {
-	for _, q := range []string{
-		`DELETE FROM dav_deletions WHERE collection_id IN (SELECT id FROM dav_collections WHERE storage_id = ?)`,
-		`DELETE FROM dav_objects WHERE storage_id = ?`,
-		`DELETE FROM dav_collections WHERE storage_id = ?`,
-	} {
-		if _, err := tx.Exec(q, id); err != nil {
-			return err
-		}
+func (s *Store) deleteDAV(ctx context.Context, tx *repos, ch *changes, id string) error {
+	// Objects and deletion records go with their collections (cascade).
+	if _, err := tx.davObjects.DeleteWhere(ctx, ablage.Eq("storage_id", id)); err != nil {
+		return err
+	}
+	if _, err := tx.davCollections.DeleteWhere(ctx, ablage.Eq("storage_id", id)); err != nil {
+		return err
 	}
 	return s.trashDir(ch, s.davDir(id), id)
 }
@@ -945,37 +942,23 @@ type davReport struct {
 // except after a restore, when they are indexed into their collection
 // under the name their UID gives, if they are a valid object whose UID is
 // not there yet. It sets a new epoch when anything differed or restored is set.
-func (s *Store) reconcileDAV(tx *sql.Tx, restored bool) (davReport, bool, error) {
+func (s *Store) reconcileDAV(ctx context.Context, tx *repos, restored bool) (davReport, bool, error) {
 	var rep davReport
-	type row struct {
-		id, coll int64
-		sid      string
-		file     string
-	}
-	rows, err := tx.Query(`SELECT id, collection_id, storage_id, file FROM dav_objects`)
+	objs, err := tx.davObjects.Find(ctx, ablage.Query{})
 	if err != nil {
 		return rep, false, err
 	}
-	var missing []row
+	var missing []string
 	known := map[string]bool{}
-	for rows.Next() {
-		var r row
-		if err := rows.Scan(&r.id, &r.coll, &r.sid, &r.file); err != nil {
-			rows.Close()
-			return rep, false, err
-		}
-		p := filepath.Join(s.collectionDir(r.sid, r.coll), r.file)
+	for _, o := range objs {
+		p := filepath.Join(s.collectionDir(o.StorageID, o.CollectionID), o.File)
 		known[p] = true
 		if _, err := os.Stat(p); errors.Is(err, os.ErrNotExist) {
-			missing = append(missing, r)
+			missing = append(missing, o.ID)
 		}
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return rep, false, err
-	}
-	for _, r := range missing {
-		if _, err := tx.Exec(`DELETE FROM dav_objects WHERE id = ?`, r.id); err != nil {
+	if len(missing) > 0 {
+		if _, err := tx.davObjects.DeleteWhere(ctx, ablage.In("id", missing...)); err != nil {
 			return rep, false, err
 		}
 	}
@@ -995,14 +978,13 @@ func (s *Store) reconcileDAV(tx *sql.Tx, restored bool) (davReport, bool, error)
 			return rep, false, err
 		}
 		for _, cd := range colls {
-			collID, err := strconv.ParseInt(cd.Name(), 10, 64)
-			if !cd.IsDir() || err != nil {
+			collID := cd.Name()
+			if !cd.IsDir() || !validCollID(collID) {
 				continue
 			}
-			var kind, comps string
-			err = tx.QueryRow(`SELECT kind, components FROM dav_collections WHERE id = ? AND storage_id = ?`, collID, sid).Scan(&kind, &comps)
+			coll, err := tx.davCollections.First(ctx, ablage.Query{Where: ablage.And(ablage.Eq("id", collID), ablage.Eq("storage_id", sid))})
 			haveColl := err == nil
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			if err != nil && !errors.Is(err, ablage.ErrNotFound) {
 				return rep, false, err
 			}
 			dir := s.collectionDir(sid, collID)
@@ -1016,12 +998,12 @@ func (s *Store) reconcileDAV(tx *sql.Tx, restored bool) (davReport, bool, error)
 					continue
 				}
 				ok := false
-				if restored {
+				if restored && haveColl {
 					// Only after a restore: the files were written after the
 					// copy of the index and acknowledged to clients. Without
 					// a restore they come from a write that crashed before
 					// its commit, which the client will repeat.
-					ok, err = s.indexStray(tx, haveColl, sid, collID, kind, comps, p, f.Name())
+					ok, err = s.indexStray(ctx, tx, coll, p, f.Name())
 				}
 				if err != nil {
 					return rep, false, err
@@ -1038,7 +1020,7 @@ func (s *Store) reconcileDAV(tx *sql.Tx, restored bool) (davReport, bool, error)
 		}
 	}
 	if rep.missing > 0 || rep.indexed > 0 || restored {
-		if _, err := s.newDAVEpoch(tx); err != nil {
+		if _, err := s.newDAVEpoch(ctx, tx); err != nil {
 			return rep, false, err
 		}
 		return rep, true, nil
@@ -1059,8 +1041,8 @@ func strayName(uid, ext string) string {
 }
 
 // indexStray indexes a file found without a row, if it can be.
-func (s *Store) indexStray(tx *sql.Tx, haveColl bool, sid string, coll int64, kind, comps, path, file string) (bool, error) {
-	if !haveColl || !fileNameRe.MatchString(file) {
+func (s *Store) indexStray(ctx context.Context, tx *repos, coll davCollectionRec, path, file string) (bool, error) {
+	if !fileNameRe.MatchString(file) {
 		return false, nil
 	}
 	data, err := os.ReadFile(path)
@@ -1069,10 +1051,10 @@ func (s *Store) indexStray(tx *sql.Tx, haveColl bool, sid string, coll int64, ki
 	}
 	var info davobj.Info
 	ext := ".ics"
-	if kind == davobj.Calendar {
+	if coll.Kind == davobj.Calendar {
 		var allowed []string
-		if comps != "" {
-			allowed = strings.Split(comps, ",")
+		if coll.Components != "" {
+			allowed = strings.Split(coll.Components, ",")
 		}
 		info, _, err = davobj.ParseCalendar(data, allowed)
 	} else {
@@ -1082,30 +1064,27 @@ func (s *Store) indexStray(tx *sql.Tx, haveColl bool, sid string, coll int64, ki
 	if err != nil {
 		return false, nil
 	}
-	var n int
-	if err := tx.QueryRow(`SELECT count(*) FROM dav_objects WHERE collection_id = ? AND uid = ?`, coll, info.UID).Scan(&n); err != nil {
+	if n, err := tx.davObjects.Count(ctx, ablage.And(ablage.Eq("collection_id", coll.ID), ablage.Eq("uid", info.UID))); err != nil {
 		return false, err
-	}
-	if n > 0 {
+	} else if n > 0 {
 		return false, nil
 	}
 	name := strayName(info.UID, ext)
-	var taken int
-	if err := tx.QueryRow(`SELECT count(*) FROM dav_objects WHERE collection_id = ? AND name = ?`, coll, name).Scan(&taken); err != nil {
+	if taken, err := tx.davObjects.Count(ctx, ablage.And(ablage.Eq("collection_id", coll.ID), ablage.Eq("name", name))); err != nil {
 		return false, err
-	}
-	if taken > 0 {
+	} else if taken > 0 {
 		name = "restored-" + file + ext
 	}
-	var seq int64
-	if err := tx.QueryRow(`UPDATE dav_collections SET seq = seq + 1 WHERE id = ? RETURNING seq`, coll).Scan(&seq); err != nil {
+	if err := tx.davCollections.Patch(ctx, coll.ID, ablage.Row{"seq": ablage.Incr(1)}); err != nil {
 		return false, err
 	}
-	if _, err := tx.Exec(`INSERT INTO dav_objects (collection_id, storage_id, name, uid, component, size, start_at, end_at, file, seq, modified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		coll, sid, name, info.UID, info.Component, len(data), info.Start, info.End, file, seq, s.now().Unix()); err != nil {
+	c, err := tx.davCollections.Get(ctx, coll.ID)
+	if err != nil {
 		return false, err
 	}
-	return true, nil
+	err = tx.davObjects.Create(ctx, &davObjectRec{CollectionID: coll.ID, StorageID: coll.StorageID, Name: name, UID: info.UID, Component: info.Component,
+		Size: int64(len(data)), StartAt: info.Start, EndAt: info.End, File: file, Seq: c.Seq, Modified: sec(s.now())})
+	return err == nil, err
 }
 
 // ExportDAVCollection writes collection c as one .ics file (each time zone

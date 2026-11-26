@@ -100,3 +100,16 @@ func TestDropInvalid(t *testing.T) {
 		t.Fatalf("valid configuration changed: %v", again)
 	}
 }
+
+func TestValidImportID(t *testing.T) {
+	for _, id := range []string{"1", "42", "01jx3k5m7n9p1q3r5s7t9v1w3x", strings.Repeat("a", 32)} {
+		if !ValidImportID(id) {
+			t.Errorf("%q should be valid", id)
+		}
+	}
+	for _, id := range []string{"", "..", "../x", "a/b", "A1", "1.spool", "a b", "-1", strings.Repeat("a", 33), "ä"} {
+		if ValidImportID(id) {
+			t.Errorf("%q should be invalid", id)
+		}
+	}
+}

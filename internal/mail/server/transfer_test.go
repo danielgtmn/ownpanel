@@ -14,7 +14,7 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 )
 
-func waitJob(t *testing.T, c *config.Client, sid string, id int64, states ...string) config.ImportJob {
+func waitJob(t *testing.T, c *config.Client, sid, id string, states ...string) config.ImportJob {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -28,7 +28,7 @@ func waitJob(t *testing.T, c *config.Client, sid string, id int64, states ...str
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("job %d is %s (%s)", id, j.State, j.Error)
+			t.Fatalf("job %s is %s (%s)", id, j.State, j.Error)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
