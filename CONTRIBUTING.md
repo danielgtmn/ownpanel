@@ -22,7 +22,7 @@ cd web && npm ci && npm run dev   # the web interface with hot reload, talking t
 
 1. Fork, then branch from `main`.
 2. Read [AGENTS.md](AGENTS.md): layout, the rules that are easy to break (permissions only in `internal/panel`, secrets never in logs or responses, root stays out of the daemon, new migrations only), and the commands. When you touch `web/`, read [web/AGENTS.md](web/AGENTS.md) too.
-3. Add tests with the change, and update the documentation in `wiki/` (and the README, where it covers the same thing) in the same pull request.
+3. Add tests with the change, and update the documentation in `wiki/` (and the README, where it covers the same thing) in the same pull request. Leave `wiki/Roadmap.md` alone: it is updated when a release is prepared.
 4. Run what CI runs for what you touched:
 
    ```sh

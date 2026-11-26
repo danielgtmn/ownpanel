@@ -9,6 +9,13 @@ import (
 	"github.com/danielgtmn/panzerschrank"
 )
 
+// The tools of sharing.go and their annotations (see TestToolsAndAnnotations).
+var _ = expectTools(map[string]toolWant{
+	"set_mailbox_kind":      {destructive: true, idempotent: true},
+	"set_mailbox_access":    {idempotent: true},
+	"remove_mailbox_access": {destructive: true, idempotent: true},
+})
+
 func TestSharingTools(t *testing.T) {
 	e := newEnvWith(t, "", func(c *panel.Config) {
 		box, err := panzerschrank.OpenKeyFile(filepath.Join(t.TempDir(), panzerschrank.KeyFile))

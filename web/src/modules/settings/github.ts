@@ -8,7 +8,25 @@ export type GitHubInstallation = {
   suspended: boolean
   repository_count: number | null
   settings_url: string
+  /** Sites linked to one of its repositories. */
+  sites: GitHubLinkedSite[]
 }
+
+export type GitHubLinkedSite = { site: string; repository: string; repository_id: number; branch: string }
+
+export type GitHubRepository = {
+  id: number
+  installation_id: number
+  owner: string
+  name: string
+  full_name: string
+  private: boolean
+  archived: boolean
+  default_branch: string
+  html_url: string
+}
+
+export type GitHubRepositories = { repositories: GitHubRepository[]; truncated: boolean }
 
 export type GitHubConnection = {
   /** The panel's id of the connection. */
@@ -32,11 +50,16 @@ export type GitHubState = {
   ready: boolean
   problem?: string
   apps: GitHubConnection[]
+  /** Sites linked to a repository whose connection was removed. */
+  sites_without_connection: GitHubLinkedSite[]
 }
 
 export type GitHubRemoved = { name: string; settings_url: string }
 
 export const getGitHub = () => request<GitHubState>('/github')
+
+export const listInstallationRepositories = (installationId: number) =>
+  request<GitHubRepositories>(`/github/installations/${installationId}/repositories`)
 
 export const refreshGitHub = () => request<GitHubState>('/github/refresh', { method: 'POST' })
 
@@ -121,4 +144,24 @@ export function validateOrganization(name: string): string | undefined {
     return 'Use the name from the organisation’s address on GitHub: letters, digits and single hyphens.'
   }
   return undefined
+}
+
+/** "2 sites", "1 site" */
+export function sitesLabel(count: number): string {
+  return count === 1 ? '1 site' : `${count} sites`
+}
+
+/** The repositories sorted by name, with the ones sites are linked to first. */
+export function sortRepositories(list: GitHubRepository[], linked: GitHubLinkedSite[]): GitHubRepository[] {
+  const used = new Set(linked.map((site) => site.repository_id))
+  return [...list].sort((a, b) => {
+    const ua = used.has(a.id) ? 0 : 1
+    const ub = used.has(b.id) ? 0 : 1
+    return ua - ub || a.full_name.localeCompare(b.full_name)
+  })
+}
+
+/** The linked sites of one repository. */
+export function sitesOf(repository: GitHubRepository, linked: GitHubLinkedSite[]): GitHubLinkedSite[] {
+  return linked.filter((site) => site.repository_id === repository.id)
 }

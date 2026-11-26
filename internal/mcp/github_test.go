@@ -18,6 +18,12 @@ import (
 	"github.com/danielgtmn/panzerschrank"
 )
 
+// The tools of github.go and their annotations (see TestToolsAndAnnotations).
+var _ = expectTools(map[string]toolWant{
+	"get_github_status":        {readOnly: true, idempotent: true},
+	"list_github_repositories": {readOnly: true, idempotent: true},
+})
+
 func TestGitHubTools(t *testing.T) {
 	gh := githubtest.New()
 	t.Cleanup(gh.Close)

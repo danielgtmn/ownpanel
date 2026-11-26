@@ -19,6 +19,16 @@ import (
 	"github.com/danielgtmn/panzerschrank"
 )
 
+// The tools of sitebuilds.go and their annotations (see TestToolsAndAnnotations).
+var _ = expectTools(map[string]toolWant{
+	"get_site_build_settings":     {readOnly: true, idempotent: true},
+	"set_site_build_settings":     {destructive: true, idempotent: true},
+	"propose_site_build_settings": {readOnly: true, idempotent: true},
+	"start_site_build":            {},
+	"cancel_site_run":             {destructive: true},
+	"read_site_run_log":           {readOnly: true, idempotent: true},
+})
+
 func TestSiteBuildTools(t *testing.T) {
 	gh := githubtest.New()
 	t.Cleanup(gh.Close)

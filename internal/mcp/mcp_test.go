@@ -265,6 +265,33 @@ func loginCookie(t *testing.T, e *env) string {
 	return secret
 }
 
+// toolWant is the annotations a tool must have.
+type toolWant struct{ readOnly, destructive, idempotent bool }
+
+var (
+	// toolWants holds every tool's expected annotations. Each area lists its
+	// own tools in its _test.go with expectTools, so feature branches of
+	// different areas do not change the same lines.
+	toolWants = map[string]toolWant{}
+	// toolWantDups are the tools listed more than once.
+	toolWantDups []string
+)
+
+// expectTools adds the expected annotations of an area's tools. It is
+// called from package-level variables of the test files.
+func expectTools(ws map[string]toolWant) bool {
+	for name, w := range ws {
+		if _, dup := toolWants[name]; dup {
+			toolWantDups = append(toolWantDups, name)
+		}
+		toolWants[name] = w
+	}
+	return true
+}
+
+// TestToolsAndAnnotations: every registered tool is expected exactly once
+// (in the _test.go of the file that registers it), with exactly these
+// annotations, and nothing expected is missing.
 func TestToolsAndAnnotations(t *testing.T) {
 	e := newEnv(t, "")
 	cs := e.connect(t, e.read)
@@ -275,83 +302,13 @@ func TestToolsAndAnnotations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	type want struct{ readOnly, destructive, idempotent bool }
-	wants := map[string]want{
-		"list_sites":                    {readOnly: true, idempotent: true},
-		"get_site":                      {readOnly: true, idempotent: true},
-		"create_site":                   {},
-		"set_site_domains":              {destructive: true, idempotent: true},
-		"delete_site":                   {destructive: true},
-		"make_version_live":             {idempotent: true},
-		"publish_files":                 {},
-		"create_upload_link":            {},
-		"check_site_domains":            {readOnly: true, idempotent: true},
-		"list_redirects":                {readOnly: true, idempotent: true},
-		"set_redirect":                  {destructive: true},
-		"delete_redirect":               {destructive: true},
-		"get_mail_status":               {readOnly: true, idempotent: true},
-		"list_mail_domains":             {readOnly: true, idempotent: true},
-		"get_mail_records":              {readOnly: true, idempotent: true},
-		"set_up_mail_records":           {destructive: true},
-		"get_mail_health":               {readOnly: true, idempotent: true},
-		"set_up_mail_host_spf":          {idempotent: true},
-		"enable_mail_domain":            {},
-		"check_mail_domain":             {idempotent: true},
-		"delete_mail_domain":            {destructive: true},
-		"list_mailboxes":                {readOnly: true, idempotent: true},
-		"set_mailbox_limits":            {idempotent: true},
-		"unblock_mailbox":               {idempotent: true},
-		"delete_mailbox":                {destructive: true},
-		"list_mail_aliases":             {readOnly: true, idempotent: true},
-		"set_mail_alias":                {destructive: true},
-		"delete_mail_alias":             {destructive: true},
-		"list_mail_imports":             {readOnly: true, idempotent: true},
-		"cancel_mail_import":            {destructive: true},
-		"list_mail_organisations":       {readOnly: true, idempotent: true},
-		"set_mail_organisation":         {},
-		"delete_mail_organisation":      {destructive: true},
-		"set_mail_domain_organisation":  {idempotent: true},
-		"set_mailbox_display_name":      {idempotent: true},
-		"set_mailbox_kind":              {destructive: true, idempotent: true},
-		"set_mailbox_access":            {idempotent: true},
-		"remove_mailbox_access":         {destructive: true, idempotent: true},
-		"get_mailbox_out_of_office":     {readOnly: true, idempotent: true},
-		"set_mailbox_out_of_office":     {idempotent: true},
-		"clear_mailbox_out_of_office":   {destructive: true, idempotent: true},
-		"list_dns_domains":              {readOnly: true, idempotent: true},
-		"manage_dns_domain":             {idempotent: true},
-		"stop_managing_dns_domain":      {},
-		"list_dns_record_templates":     {readOnly: true, idempotent: true},
-		"apply_dns_record_template":     {destructive: true, idempotent: true},
-		"list_domains":                  {readOnly: true, idempotent: true},
-		"add_domain":                    {idempotent: true},
-		"remove_domain":                 {},
-		"get_github_status":             {readOnly: true, idempotent: true},
-		"list_github_repositories":      {readOnly: true, idempotent: true},
-		"get_site_source":               {readOnly: true, idempotent: true},
-		"list_site_source_repositories": {readOnly: true, idempotent: true},
-		"list_site_source_branches":     {readOnly: true, idempotent: true},
-		"link_site_source":              {destructive: true, idempotent: true},
-		"unlink_site_source":            {destructive: true},
-		"list_site_runs":                {readOnly: true, idempotent: true},
-		"get_site_build_settings":       {readOnly: true, idempotent: true},
-		"set_site_build_settings":       {destructive: true, idempotent: true},
-		"propose_site_build_settings":   {readOnly: true, idempotent: true},
-		"start_site_build":              {},
-		"cancel_site_run":               {destructive: true},
-		"read_site_run_log":             {readOnly: true, idempotent: true},
-		"list_dns_connections":          {readOnly: true, idempotent: true},
-		"list_dns_records":              {readOnly: true, idempotent: true},
-		"set_dns_record":                {destructive: true, idempotent: true},
-		"delete_dns_record":             {destructive: true, idempotent: true},
-		"check_domain":                  {readOnly: true, idempotent: true},
-		"point_domain_at_server":        {destructive: true, idempotent: true},
-		"build_site":                    {},
+	for _, name := range toolWantDups {
+		t.Errorf("tool %s is expected in more than one file", name)
 	}
 	got := map[string]bool{}
 	for _, tool := range res.Tools {
 		got[tool.Name] = true
-		w, known := wants[tool.Name]
+		w, known := toolWants[tool.Name]
 		if !known {
 			t.Errorf("unexpected tool %s", tool.Name)
 			continue
@@ -368,7 +325,7 @@ func TestToolsAndAnnotations(t *testing.T) {
 			t.Errorf("%s: description too short", tool.Name)
 		}
 	}
-	for name := range wants {
+	for name := range toolWants {
 		if !got[name] {
 			t.Errorf("missing tool %s", name)
 		}

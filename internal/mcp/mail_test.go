@@ -15,6 +15,28 @@ import (
 	"github.com/danielgtmn/panzerschrank"
 )
 
+// The tools of mail.go and their annotations (see TestToolsAndAnnotations).
+var _ = expectTools(map[string]toolWant{
+	"get_mail_status":      {readOnly: true, idempotent: true},
+	"get_mail_records":     {readOnly: true, idempotent: true},
+	"set_up_mail_records":  {destructive: true},
+	"get_mail_health":      {readOnly: true, idempotent: true},
+	"set_up_mail_host_spf": {idempotent: true},
+	"list_mail_domains":    {readOnly: true, idempotent: true},
+	"enable_mail_domain":   {},
+	"check_mail_domain":    {idempotent: true},
+	"delete_mail_domain":   {destructive: true},
+	"list_mailboxes":       {readOnly: true, idempotent: true},
+	"set_mailbox_limits":   {idempotent: true},
+	"unblock_mailbox":      {idempotent: true},
+	"delete_mailbox":       {destructive: true},
+	"list_mail_aliases":    {readOnly: true, idempotent: true},
+	"set_mail_alias":       {destructive: true},
+	"delete_mail_alias":    {destructive: true},
+	"list_mail_imports":    {readOnly: true, idempotent: true},
+	"cancel_mail_import":   {destructive: true},
+})
+
 type mxHere struct{}
 
 func (mxHere) LookupMX(context.Context, string) ([]*net.MX, error) {

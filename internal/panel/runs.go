@@ -2,6 +2,7 @@ package panel
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"time"
 	"unicode"
@@ -72,10 +73,13 @@ type Run struct {
 	Branch       string `json:"branch,omitempty"`
 	Commit       string `json:"commit"`
 	ShortCommit  string `json:"short_commit"`
-	Message      string `json:"message"`
-	AuthorName   string `json:"author_name"`
-	AuthorLogin  string `json:"author_login,omitempty"`
-	Pusher       string `json:"pusher,omitempty"`
+	// CommitURL is the commit's page on GitHub, "" if the repository's
+	// name is not a plain owner/name.
+	CommitURL   string `json:"commit_url,omitempty"`
+	Message     string `json:"message"`
+	AuthorName  string `json:"author_name"`
+	AuthorLogin string `json:"author_login,omitempty"`
+	Pusher      string `json:"pusher,omitempty"`
 	// Detail says why a run was skipped, failed or cancelled.
 	Detail string `json:"detail,omitempty"`
 	// Waiting is set on a queued run while the panel cannot build yet.
@@ -99,10 +103,10 @@ type SiteRuns struct {
 // runWaiting is what a queued run says while there are no builds.
 const runWaiting = "waits for building on the server, which this panel cannot do yet"
 
-// viewRun is runView with what depends on the panel: whether a queued run
-// waits for building to be set up.
+// viewRun is runViewFor with what depends on the panel: whether a queued
+// run waits for building to be set up.
 func (s *Service) viewRun(r store.Run) Run {
-	v := runView(r)
+	v := s.runViewFor(r)
 	if r.Status == store.RunQueued && !s.PublishingAvailable() {
 		v.Waiting = runWaiting
 	}
@@ -123,6 +127,16 @@ func runView(r store.Run) Run {
 	v.ShortCommit = r.CommitSHA
 	if len(v.ShortCommit) > 7 {
 		v.ShortCommit = v.ShortCommit[:7]
+	}
+	return v
+}
+
+// runViewFor is runView with the commit's page on GitHub.
+func (s *Service) runViewFor(r store.Run) Run {
+	v := runView(r)
+	owner, name, ok := strings.Cut(r.Repository, "/")
+	if ok && owner != "" && name != "" && !strings.Contains(name, "/") && v.Commit != "" {
+		v.CommitURL = s.github.WebURL() + "/" + url.PathEscape(owner) + "/" + url.PathEscape(name) + "/commit/" + url.PathEscape(v.Commit)
 	}
 	return v
 }

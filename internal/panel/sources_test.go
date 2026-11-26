@@ -308,11 +308,24 @@ func TestSiteSourceConnectionRemoved(t *testing.T) {
 	if _, err := g.svc.SetSiteSource(ctx, rootSess, "rootsite", SiteSourceInput{InstallationID: inst, RepositoryID: g.site, Branch: "main", PublishOnPush: true}); err != nil {
 		t.Fatal(err)
 	}
+	// The settings list the site under its installation.
+	conns, err := g.svc.GitHubConnections(ctx, rootSess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sites := conns.Apps[0].Installations[0].Sites; len(sites) != 1 || sites[0] != (GitHubLinkedSite{Site: "rootsite", Repository: "acme/site", RepositoryID: g.site, Branch: "main"}) ||
+		len(conns.SitesWithoutConnection) != 0 {
+		t.Fatalf("linked sites: %+v", conns)
+	}
 
 	// Uninstalled on GitHub, noticed by a refresh.
 	g.gh.RemoveInstallation(inst)
-	if _, err := g.svc.RefreshGitHub(ctx, rootSess); err != nil {
+	conns, err = g.svc.RefreshGitHub(ctx, rootSess)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(conns.Apps[0].Installations) != 0 || len(conns.SitesWithoutConnection) != 1 || conns.SitesWithoutConnection[0].Site != "rootsite" {
+		t.Fatalf("sites without connection: %+v", conns)
 	}
 	src := g.source("rootsite")
 	if src.Status != SourceConnectionMissing || src.Repository != "acme/site" || src.Branch != "main" || src.InstallationID != 0 {

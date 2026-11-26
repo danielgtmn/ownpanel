@@ -110,4 +110,7 @@ could not be tested end to end, say so explicitly.
 - Planned work is tracked as GitHub issues labelled `area: …` and `type: …`;
   reference the issue in the PR (`Closes #n`).
 - Update the wiki (and README where it covers the same) in the same PR as
-  the behaviour it describes.
+  the behaviour it describes: the area's page, `wiki/API.md`, `wiki/MCP.md`.
+  **Not `wiki/Roadmap.md`:** it is updated when a release is prepared (a PR
+  into `main` before `main → release`), so feature PRs do not all change
+  the same lines.
