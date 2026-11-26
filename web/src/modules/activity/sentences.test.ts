@@ -18,7 +18,7 @@ describe('describeActivity', () => {
     ['account.password', '', 'anna changed their password'],
     ['account.login', '', 'anna signed in'],
     ['account.email', '', 'anna changed their e-mail address'],
-    ['account.password_reset', '', 'Someone chose a new password with a link sent by e-mail'],
+    ['account.password_reset', 'anna', 'anna chose a new password with a link sent by e-mail'],
     ['account.password_reset_failed', '', 'A link to choose a new password could not be sent'],
     ['setup', '', 'anna set up the panel'],
     ['setup.complete', '', 'anna finished setting up the panel'],
@@ -109,6 +109,14 @@ describe('nextLimit', () => {
     expect(nextLimit(50)).toBe(100)
     expect(nextLimit(100)).toBe(200)
     expect(nextLimit(200)).toBeNull()
+  })
+})
+
+describe('describeActivity for older entries', () => {
+  it('keeps the old wording for password resets that did not name the person', () => {
+    expect(describeActivity({ actor: 'reset link', action: 'account.password_reset', target: '' })).toBe(
+      'Someone chose a new password with a link sent by e-mail',
+    )
   })
 })
 

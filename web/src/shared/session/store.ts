@@ -122,9 +122,11 @@ export async function changePassword(current: string, next: string): Promise<voi
   }
 }
 
-// Sets or, with "", removes the signed-in person's own address.
-export async function setOwnEmail(email: string): Promise<User> {
-  const user = await request<User>('/account/email', { method: 'PUT', body: { email } })
+// Sets or, with "", removes the signed-in person's own address. The server
+// asks for the current password so an unattended login cannot redirect
+// password reset links.
+export async function setOwnEmail(email: string, current: string): Promise<User> {
+  const user = await request<User>('/account/email', { method: 'PUT', body: { email, current } })
   if (state.status === 'signedIn' && state.user.id === user.id) update({ ...state, user })
   return user
 }

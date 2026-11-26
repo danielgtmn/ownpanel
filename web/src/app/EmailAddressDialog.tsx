@@ -6,22 +6,28 @@ import { toast } from '@ui-sdk/react/toast'
 import { useState, type FormEvent } from 'react'
 import { errorMessage } from '../shared/api/index.ts'
 import { setOwnEmail, useSession, validateEmail } from '../shared/session/index.ts'
-import { FormDialog } from '../shared/ui/index.ts'
+import { FormDialog, PasswordField } from '../shared/ui/index.ts'
 
 const EMAIL_HINT = 'Used to send you a link when you forget your password. You can also sign in with it.'
 
 function EmailAddressForm({ onDone }: { onDone: () => void }) {
   const { user } = useSession()
   const [email, setEmail] = useState(user.email)
+  const [current, setCurrent] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [currentError, setCurrentError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   async function save(next: string) {
+    if (!current) {
+      setCurrentError('Enter your current password.')
+      return
+    }
     setBusy(true)
     setFormError(null)
     try {
-      await setOwnEmail(next)
+      await setOwnEmail(next, current)
       toast.success(next ? 'Your e-mail address was saved.' : 'Your e-mail address was removed.')
       onDone()
     } catch (caught) {
@@ -65,6 +71,19 @@ function EmailAddressForm({ onDone }: { onDone: () => void }) {
         <FieldDescription>{EMAIL_HINT}</FieldDescription>
         {error ? <FieldError match>{error}</FieldError> : null}
       </Field>
+      <PasswordField
+        name="current"
+        label="Current password"
+        autoComplete="current-password"
+        value={current}
+        description="Needed so nobody else can change where links for a new password are sent."
+        error={currentError ?? undefined}
+        onValueChange={(value) => {
+          setCurrent(value)
+          setCurrentError(null)
+          setFormError(null)
+        }}
+      />
       {formError ? (
         <p className="form-error" role="alert">
           {formError}

@@ -255,7 +255,9 @@ export function describeActivity({ actor, action, target }: Entry): string {
     case 'account.email':
       return `${who} changed their e-mail address`
     case 'account.password_reset':
-      return 'Someone chose a new password with a link sent by e-mail'
+      // Entries from before the person was named have the actor "reset link".
+      if (actor === 'reset link') return 'Someone chose a new password with a link sent by e-mail'
+      return `${who} chose a new password with a link sent by e-mail`
     case 'account.password_reset_failed':
       return 'A link to choose a new password could not be sent'
     case 'setup':

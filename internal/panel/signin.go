@@ -375,9 +375,15 @@ func (s *Service) ResetPassword(ctx context.Context, token, next string) error {
 		return err
 	}
 	defer release()
-	if err := s.pw.ResetPassword(ctx, token, next); err != nil {
+	au, err := s.pw.ResetPassword(ctx, token, next)
+	if err != nil {
 		return authError(err)
 	}
-	s.record(ctx, Actor{Name: "reset link"}, "account.password_reset", "", "")
+	// Named like a sign-in: the person acted, the link proved who they are.
+	name := au.Username
+	if u, err := s.store.UserByAuthID(ctx, au.ID); err == nil {
+		name = u.Name
+	}
+	s.record(ctx, Actor{Name: name}, "account.password_reset", name, "")
 	return nil
 }

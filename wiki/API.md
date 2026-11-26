@@ -94,7 +94,7 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 | `POST` | `/api/password-reset/confirm` | open | `{"token", "password"}` | `204`; ends all sessions of that person. `400` link invalid, used or expired, or password not allowed |
 | `POST` | `/api/logout` | open | | `204`; clears the cookie |
 | `PUT` | `/api/account/password` | password sign-in | `{"current", "new"}` | `204`; ends your other sessions |
-| `PUT` | `/api/account/email` | password sign-in | `{"email"}`; `""` removes it | User. `409` the address belongs to someone else |
+| `PUT` | `/api/account/email` | password sign-in | `{"email", "current"}`; `""` removes the address; `current` is your current password | User. `400` invalid address or missing or wrong current password, `409` the address belongs to someone else, `429` too many wrong passwords |
 | `POST` | `/api/account/logout-everywhere` | password sign-in | | `204`; ends all your sessions, this one included, and clears the cookie. Tokens keep working |
 
 ### Access tokens

@@ -78,9 +78,10 @@ locked in the panel).
   and can expire after 30, 90 or 365 days, or never.
 - A sign-in ends after 3 days without use and at the latest after 30 days;
   "sign out everywhere" ends all of a person's sign-ins. After 5 failed
-  sign-ins for an account (from any address), or 20 sign-ins from one address
-  for any names, within 15 minutes, further attempts are refused until the
-  window passes, also across restarts.
+  sign-ins for an account (from any address), or 20 failed sign-ins from one
+  address for any names, within 15 minutes, further attempts are refused until
+  the window passes, also across restarts. Successful sign-ins do not count.
+- Changing your own e-mail address needs your current password.
 - Every change is recorded in the activity log, with the token's name when a
   token was used.
 
@@ -106,7 +107,7 @@ made with the cookie must send `X-Ownpanel-Request: 1`.
 | `POST` | `/api/password-reset` | `{"email"}`: send a link to choose a new password (always `204`; `404` when the panel cannot send e-mail) |
 | `POST` | `/api/password-reset/confirm` | `{"token", "password"}`: set the new password and end all sessions of that person |
 | `PUT` | `/api/account/password` | body `{"current", "new"}`; ends your other sessions |
-| `PUT` | `/api/account/email` | body `{"email"}` (`""` removes it) |
+| `PUT` | `/api/account/email` | body `{"email", "current"}` (`""` removes it; `current` is your current password) |
 | `GET` `POST` | `/api/tokens` | your access tokens; create with `{"name", "access": "read"\|"write", "sites": [..] \| null}` |
 | `DELETE` | `/api/tokens/{id}` | revoke a token |
 | `GET` | `/api/sites` | list sites |
