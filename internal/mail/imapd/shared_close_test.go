@@ -3,6 +3,8 @@ package imapd
 import (
 	"testing"
 
+	"github.com/emersion/go-imap/v2"
+
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/mail/storage"
 )
@@ -27,8 +29,11 @@ func TestCloseAfterLosingWrite(t *testing.T) {
 	if err := a.UnselectAndExpunge().Wait(); err != nil {
 		t.Fatalf("CLOSE: %v", err)
 	}
-	if st := a.Mailbox(); st != nil {
-		t.Errorf("still selected: %+v", st)
+	// The server must have left the selected state: a command that needs a
+	// selected folder is refused. (The client's own view, a.Mailbox(), is
+	// not a reliable check: go-imap returns from Wait before it clears it.)
+	if _, err := a.Fetch(imap.SeqSetNum(1), &imap.FetchOptions{UID: true}).Collect(); err == nil {
+		t.Error("still selected: FETCH after CLOSE worked")
 	}
 	if st, _ := se.store.FolderStatus(t.Context(), idTeam, "INBOX"); st.Messages != 1 {
 		t.Errorf("expunged without the write right: %+v", st)
