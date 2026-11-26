@@ -210,3 +210,21 @@ func (w *mailWorld) lastMailbox(t *testing.T, sid string) config.Mailbox {
 	t.Fatalf("mailbox %s not pushed", sid)
 	return config.Mailbox{}
 }
+
+// Settings made by the person, or by someone with the Manage right acting
+// for the mailbox, stay private; those a panel user made are shown.
+func TestRulesViewPrivacy(t *testing.T) {
+	r := config.MailRules{Managed: true}
+	r.OutOfOffice = config.OutOfOffice{Enabled: true, Subject: "Away", Text: "Back Monday", Days: 7}
+	r.Forwarding = config.Forwarding{Enabled: true, To: "boss@elsewhere.example"}
+	for setBy, shown := range map[string]bool{"": false, "anna@example.com": false, "admin": true} {
+		r.OutOfOffice.SetBy, r.Forwarding.SetBy = setBy, setBy
+		v := rulesView(r, true)
+		if got := v.OutOfOffice.Text != "" && v.Forwarding.To != ""; got != shown {
+			t.Errorf("set by %q: shown %v, want %v", setBy, got, shown)
+		}
+		if !v.OutOfOffice.Enabled || !v.Forwarding.Enabled {
+			t.Errorf("set by %q: whether it is on must always show", setBy)
+		}
+	}
+}

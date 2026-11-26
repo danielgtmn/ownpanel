@@ -112,13 +112,22 @@ func rulesView(r config.MailRules, mayForward bool) MailboxRules {
 		d := today.Format("2006-01-02")
 		v.OutOfOffice.On = (o.Start == "" || d >= o.Start) && (o.End == "" || d <= o.End)
 	}
-	if o.SetBy != "" {
+	if setByPanel(o.SetBy) {
 		v.OutOfOffice.Subject, v.OutOfOffice.Text, v.OutOfOffice.Days = o.Subject, o.Text, o.Days
 	}
-	if f.SetBy != "" {
+	if setByPanel(f.SetBy) {
 		v.Forwarding.To, v.Forwarding.KeepCopy = f.To, f.KeepCopy
 	}
 	return v
+}
+
+// setByPanel tells whether a panel user set out-of-office or forwarding,
+// so the panel may show what was set. The mailbox's own settings stay
+// private, and so do those of someone with the Manage right acting for it
+// (an assistant setting a reply for their boss): those are recorded by
+// mailbox address, while panel user names never contain "@".
+func setByPanel(setBy string) bool {
+	return setBy != "" && !strings.Contains(setBy, "@")
 }
 
 func (s *Service) mailRules() (MailRules, error) {

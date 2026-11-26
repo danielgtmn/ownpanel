@@ -445,7 +445,10 @@ entry when a message was not forwarded and says why.
 panel, **Out-of-office and forwarding**: set or clear an out-of-office reply
 and forwarding for it. The activity log records it, and the person sees on
 their page who set it. The panel shows whether an out-of-office reply is on
-(also in the list of mailboxes), but not the text the person wrote. There
+(also in the list of mailboxes), but not the text the person wrote, nor
+one written for the mailbox by someone with the Manage right (an
+assistant setting their boss's reply); it shows the text only when a
+panel user set it. There
 you can also turn off **Filters of this mailbox may forward mail**
 (on by default).
 
