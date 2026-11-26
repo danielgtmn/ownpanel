@@ -53,7 +53,7 @@ ProtectSystem=strict
 ReadWritePaths=/var/lib/ownpanel-build/home /var/lib/ownpanel-build/work
 ProtectHome=true
 PrivateTmp=true
-InaccessiblePaths=-/var/lib/ownpanel -/var/lib/ownpanel-mail -/var/lib/ownpanel-caddy -/var/lib/ownpanel-update -/etc/ownpanel -/run/ownpanel -/run/ownpanel-mail -/var/lib/ownpanel-build/disk.img -/var/backups
+InaccessiblePaths=-/var/lib/ownpanel -/var/lib/ownpanel-mail -/var/lib/ownpanel-caddy -/var/lib/ownpanel-update -/etc/ownpanel -/run/ownpanel -/run/ownpanel-mail -/run/ownpanel-mail-web -/var/lib/ownpanel-build/disk.img -/var/backups
 # Devices: the usual pseudo devices, plus what the user-space network
 # (tun) and the terminal of a container need.
 DevicePolicy=closed

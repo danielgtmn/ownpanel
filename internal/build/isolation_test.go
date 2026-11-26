@@ -248,7 +248,7 @@ func TestBuildCannotReadPanelData(t *testing.T) {
 	script := `
 for p in /var/lib/ownpanel /var/lib/ownpanel/secret.key /var/lib/ownpanel/ownpanel.db /var/lib/ownpanel/sites \
   /var/lib/ownpanel-mail /var/lib/ownpanel-caddy /var/lib/ownpanel-update /etc/ownpanel \
-  /run/ownpanel /run/ownpanel/caddy-admin.sock /run/ownpanel-mail/admin.sock \
+  /run/ownpanel /run/ownpanel/caddy-admin.sock /run/ownpanel-mail/admin.sock /run/ownpanel-mail-web \
   /run/ownpanel-build/worker.sock /run/ownpanel-build /run/podman /run/user /var/run/docker.sock \
   /var/lib/ownpanel-build /var/lib/ownpanel-build/work /var/lib/ownpanel-build/disk.img; do
   if [ -e "$p" ]; then echo "VISIBLE $p"; else echo "absent $p"; fi
