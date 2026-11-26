@@ -7,12 +7,14 @@
 #   OWNPANEL_SITE=blog OWNPANEL_PATH=dist actions/publish/publish.sh
 #
 # OWNPANEL_TIMEOUT (seconds, default 300) limits the upload and the wait for
-# the web server. In GitHub Actions the outputs "version" and "url" go to
-# $GITHUB_OUTPUT and a summary to $GITHUB_STEP_SUMMARY.
+# the web server. OWNPANEL_LIVE=false adds the version without making it
+# live. In GitHub Actions the outputs "version", "url" and "preview-url" go
+# to $GITHUB_OUTPUT and a summary to $GITHUB_STEP_SUMMARY.
 #
 # The API is synchronous: POST /api/sites/{name}/deployments unpacks the
-# archive, switches the site to the new version and answers 201 with the site
-# (current_release is the new version). Only a 502 "saved, but the web server
+# archive, switches the site to the new version (unless ?live=false) and
+# answers 201 with the site and the new version (published_release; older
+# panels only send current_release). Only a 502 "saved, but the web server
 # could not be updated yet" leaves something to wait for; then the site's
 # address is polled until it serves.
 set -euo pipefail
@@ -26,6 +28,7 @@ token=${OWNPANEL_TOKEN:-}
 site=${OWNPANEL_SITE:-}
 path=${OWNPANEL_PATH:-}
 timeout=${OWNPANEL_TIMEOUT:-300}
+live=${OWNPANEL_LIVE:-true}
 
 in_actions() { [ "${GITHUB_ACTIONS:-}" = true ]; }
 
@@ -86,6 +89,11 @@ fi
 
 [[ $timeout =~ ^[1-9][0-9]{0,4}$ ]] || fail "The timeout must be a number of seconds between 1 and 99999, not '$timeout'."
 
+case $live in
+  true | false) ;;
+  *) fail "The input 'live' must be true or false, not '$live'." ;;
+esac
+
 [ -n "$path" ] || fail "No folder given (input 'path'), for example dist."
 [ -e "$path" ] || fail "The folder '$path' does not exist. Did the build step run, and does it write there?"
 [ -d "$path" ] || fail "'$path' is not a folder. Give the folder with the built site, for example dist."
@@ -143,9 +151,20 @@ network_error() {
   fail "Could not reach the panel at $panel: $(tr -d '\000-\037' <"$work/curl.err" | head -c 500). Check the address and that the panel is reachable from GitHub's runners."
 }
 
+if [ "$live" = false ]; then
+  # A panel that does not know ?live=false would make the version live, so
+  # ask first whether it lists versions with their state (newer panels do).
+  request "$panel/api/sites/$site"
+  if [ "$code" = 200 ] && ! jq -e 'type == "object" and has("versions")' "$work/body" >/dev/null 2>&1; then
+    fail "This panel cannot publish without making the version live yet; nothing was uploaded. Update the panel, or publish with live: true."
+  fi
+fi
+
+query=""
+if [ "$live" = false ]; then query="?live=false"; fi
 echo "Uploading to site '$site' on $panel ..."
 request -X POST -H 'Content-Type: application/octet-stream' \
-  --data-binary "@$archive" "$panel/api/sites/$site/deployments"
+  --data-binary "@$archive" "$panel/api/sites/$site/deployments$query"
 
 msg=$(message)
 not_synced=false
@@ -180,7 +199,12 @@ case $code in
     ;;
 esac
 
-if [ "$not_synced" = true ]; then
+# The new version and its preview address, from the answer to the upload.
+version=$(jq -r '.published_release // .current_release // empty' "$work/body" 2>/dev/null || true)
+preview_url=$(jq -r '.preview_url // empty | strings' "$work/body" 2>/dev/null || true)
+[[ $preview_url =~ ^https?://[a-z0-9.-]+(:[0-9]+)?/\?[a-z-]+=[a-z0-9]+$ ]] || preview_url=""
+
+if [ "$not_synced" = true ] && [ "$live" = true ]; then
   # The new version is saved and switched to, but the web server has not
   # been told about the site yet (only the first publish needs that). The
   # panel keeps retrying in the background; fetch the site for the version.
@@ -191,9 +215,13 @@ if [ "$not_synced" = true ]; then
     000) network_error ;;
     *) fail "Could not read site '$site' after publishing (HTTP $code)." ;;
   esac
+  version=$(jq -r '.current_release // empty' "$work/body" 2>/dev/null || true)
+elif [ "$not_synced" = true ]; then
+  # Saved, not live: nothing visitors see changed. Only the preview address
+  # may not answer until the panel has updated the web server.
+  warn "$msg The preview address may only work once the panel has caught up."
 fi
 
-version=$(jq -r '.current_release // empty' "$work/body" 2>/dev/null || true)
 [[ $version =~ ^[A-Za-z0-9._-]+$ ]] || fail "The panel's answer contained no valid version; it may not be an ownpanel panel."
 domains=()
 while IFS= read -r d; do
@@ -203,7 +231,7 @@ done < <(jq -r '.domains // [] | .[] | strings' "$work/body" 2>/dev/null || true
 url=""
 if [ "${#domains[@]}" -gt 0 ]; then url="https://${domains[0]}"; fi
 
-if [ "$not_synced" = true ]; then
+if [ "$not_synced" = true ] && [ "$live" = true ]; then
   [ -n "$url" ] || fail "Version $version is saved, but the site has no domain to check whether it is served. $msg"
   # Wait until the address serves the site: not the "no content yet"
   # placeholder (503), not "Unknown site." (404) of a web server that does
@@ -224,7 +252,14 @@ fi
 
 # --- Report -----------------------------------------------------------------
 
-if [ -n "$url" ]; then
+if [ "$live" = false ]; then
+  echo "Published version $version of '$site' without making it live; visitors still see the previous version."
+  if [ -n "$preview_url" ]; then
+    echo "Preview: $preview_url"
+  else
+    warn "Version $version has no preview address: an administrator can set a domain for previews in the panel settings. Make it live in the panel."
+  fi
+elif [ -n "$url" ]; then
   echo "Published version $version of '$site'; it is live at $url"
 else
   echo "Published version $version of '$site'."
@@ -235,6 +270,7 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then
   {
     echo "version=$version"
     echo "url=$url"
+    echo "preview-url=$preview_url"
   } >>"$GITHUB_OUTPUT"
 fi
 
@@ -246,6 +282,8 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo "|---|---|"
     echo "| Site | \`$site\` |"
     echo "| Version | \`$version\` |"
+    if [ "$live" = true ]; then echo "| Live | yes |"; else echo "| Live | no, the previous version stays live |"; fi
+    if [ -n "$preview_url" ]; then echo "| Preview | $preview_url |"; fi
     if [ "${#domains[@]}" -gt 0 ]; then
       links=""
       for d in "${domains[@]}"; do links="$links${links:+, }https://$d"; done
