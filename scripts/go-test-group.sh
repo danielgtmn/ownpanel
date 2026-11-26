@@ -16,14 +16,27 @@
 #   rest               every other package of `go list ./...`, so a new
 #                      package is never left out
 #
-# The panel shards are computed from `go test -list`: names are sorted, the
-# slow permission matrices (names containing "Permission") come first, then
-# the names are dealt out in turn. A new test lands in some shard by itself.
+# The panel shards are computed from `go test -list`: the slow tests listed
+# in panel_slow come first, then the other names sorted, and they are dealt
+# out like cards in snake order (1 2 … N N … 2 1 1 2 …). A new test lands in
+# some shard by itself; panel_slow only balances the shards, `check` proves
+# that every test runs exactly once whatever it says.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-panel_shards=4
+panel_shards=5
+# The slowest tests of internal/panel, slowest first, as measured on the
+# GitHub runners (race detector): about 55, 55, 45, 43, 30, 14 and 10 s.
+panel_slow=(
+	TestMailPermissionMatrix
+	TestMailTransferPermissions
+	TestRedirectPermissionMatrix
+	TestDNSPermissionMatrix
+	TestPermissionMatrix
+	TestMailRulesPermissions
+	TestPreviewPermissions
+)
 module="$(go list -m)"
 panel="$module/internal/panel"
 
@@ -46,10 +59,17 @@ panel_tests() {
 panel_shard() {
 	local n="$1" tests
 	tests="$(panel_tests)"
+	slow="$(printf '%s\n' "${panel_slow[@]}")"
 	{
-		grep 'Permission' <<<"$tests" || true
-		grep -v 'Permission' <<<"$tests" || true
-	} | awk -v n="$n" -v m="$panel_shards" 'NF && (NR - 1) % m == n - 1'
+		# Listed slow tests that exist, in the listed order, then the rest.
+		grep -xF -f <(printf '%s\n' "$tests") <<<"$slow" || true
+		grep -vxF -f <(printf '%s\n' "$slow") <<<"$tests" || true
+	} | awk -v n="$n" -v m="$panel_shards" '
+		NF {
+			r = (NR - 1) % (2 * m)
+			shard = r < m ? r + 1 : 2 * m - r
+			if (shard == n) print
+		}'
 }
 
 rest_packages() {

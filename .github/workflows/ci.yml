@@ -115,7 +115,7 @@ jobs:
       - name: Every test runs in exactly one group
         env:
           # Keep in sync with the matrix of go-test.
-          MATRIX: panel-1 panel-2 panel-3 panel-4 mail rest
+          MATRIX: panel-1 panel-2 panel-3 panel-4 panel-5 mail rest
         run: |
           groups="$(scripts/go-test-group.sh groups | paste -sd' ' -)"
           if [ "$groups" != "$MATRIX" ]; then
@@ -133,7 +133,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [panel-1, panel-2, panel-3, panel-4, mail, rest]
+        group: [panel-1, panel-2, panel-3, panel-4, panel-5, mail, rest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
