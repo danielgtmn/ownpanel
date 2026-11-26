@@ -29,7 +29,7 @@ type dnsTemplatesOutput struct {
 }
 
 type applyDNSTemplateInput struct {
-	ConnectionID int64             `json:"connection_id" jsonschema:"id of your DNS connection that holds the domain, from list_dns_domains"`
+	ConnectionID string            `json:"connection_id" jsonschema:"id of your DNS connection that holds the domain, from list_dns_domains"`
 	Domain       string            `json:"domain" jsonschema:"the domain (zone), e.g. example.com"`
 	Template     string            `json:"template" jsonschema:"template id from list_dns_record_templates"`
 	Params       map[string]string `json:"params,omitempty" jsonschema:"the template's parameters by id"`

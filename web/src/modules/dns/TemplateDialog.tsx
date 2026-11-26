@@ -241,7 +241,7 @@ function TemplateFlow({
   zone,
   onApplied,
 }: {
-  connectionId: number
+  connectionId: string
   zone: string
   onApplied: (title: string, result: TemplateResult) => Promise<void>
 }) {
@@ -286,7 +286,7 @@ function TemplateFlow({
 type TemplateDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
-  connectionId: number
+  connectionId: string
   zone: string
   onApplied: (title: string, result: TemplateResult) => Promise<void>
 }

@@ -41,12 +41,12 @@ export function listTemplates(): Promise<RecordTemplate[]> {
   return request<RecordTemplate[]>('/dns/templates')
 }
 
-export const templatePath = (connectionId: number, zone: string, template: string) =>
+export const templatePath = (connectionId: string, zone: string, template: string) =>
   `${connectionPath(connectionId)}/zones/${encodeSegment(zone)}/templates/${encodeSegment(template)}`
 
 // Without confirm nothing is written: the answer is the preview.
 export function applyTemplate(
-  connectionId: number,
+  connectionId: string,
   zone: string,
   template: string,
   params: Record<string, string>,

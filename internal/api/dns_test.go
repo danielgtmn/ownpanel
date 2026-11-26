@@ -404,7 +404,7 @@ func TestDNSTemplateRoutes(t *testing.T) {
 	}
 	wantKeys(t, list[0], "id", "title", "description", "params", "own_mail")
 
-	path := fmt.Sprintf("/api/dns/connections/%d/zones/example.com/templates/", id)
+	path := fmt.Sprintf("/api/dns/connections/%s/zones/example.com/templates/", id)
 	rec = d.root("POST", path+"domain-verification", `{"params":{"value":"verify=1"}}`)
 	wantStatus(t, rec, 200, "")
 	res := decode[map[string]json.RawMessage](t, rec)

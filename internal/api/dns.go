@@ -178,10 +178,7 @@ func (s *Server) listDNSTemplates(w http.ResponseWriter, r *http.Request) {
 // applyDNSTemplate returns what the template changes; with confirm the
 // changes are written.
 func (s *Server) applyDNSTemplate(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "DNS connection")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	var body struct {
 		Params  map[string]string `json:"params"`
 		Confirm bool              `json:"confirm"`

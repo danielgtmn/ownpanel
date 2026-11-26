@@ -236,7 +236,7 @@ func dnsTemplate(id string) (DNSTemplate, error) {
 // same path as SetDNSRecord. Without confirm nothing is written: the plan
 // is the preview, and a read-only actor may see it. With confirm a plan
 // that has a conflict is refused as a whole.
-func (s *Service) ApplyDNSTemplate(ctx context.Context, a Actor, connID int64, zone, templateID string, params map[string]string, confirm bool) (DNSTemplateResult, error) {
+func (s *Service) ApplyDNSTemplate(ctx context.Context, a Actor, connID, zone, templateID string, params map[string]string, confirm bool) (DNSTemplateResult, error) {
 	if err := needDNS(a); err != nil {
 		return DNSTemplateResult{}, err
 	}

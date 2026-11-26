@@ -55,9 +55,9 @@ describe('record templates', () => {
   it('previews without confirming', async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ template: 't', zone: 'example.com', changes: [], applied: false })))
     vi.stubGlobal('fetch', fetchMock)
-    await applyTemplate(3, 'example.com', 'domain-verification', { value: 'x' }, false)
+    await applyTemplate('3', 'example.com', 'domain-verification', { value: 'x' }, false)
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
-    expect(url).toContain(templatePath(3, 'example.com', 'domain-verification'))
+    expect(url).toContain(templatePath('3', 'example.com', 'domain-verification'))
     expect(init.method).toBe('POST')
     expect(JSON.parse(String(init.body))).toEqual({ params: { value: 'x' }, confirm: false })
     fetchMock.mockResolvedValueOnce(new Response('[]'))
@@ -68,7 +68,7 @@ describe('record templates', () => {
   it('renders the dialog with its title', () => {
     const html = renderToStaticMarkup(
       <Dialog open>
-        <TemplateDialog open onOpenChange={() => undefined} connectionId={1} zone="example.com" onApplied={async () => undefined} />
+        <TemplateDialog open onOpenChange={() => undefined} connectionId="1" zone="example.com" onApplied={async () => undefined} />
       </Dialog>,
     )
     expect(html).toContain('Set up a service')
