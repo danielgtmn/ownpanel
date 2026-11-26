@@ -108,7 +108,8 @@ func TestDeliveryPushCreatesRuns(t *testing.T) {
 		if r.Site != site || r.Status != store.RunQueued || r.Trigger != RunTriggerPush || r.Commit != commitA ||
 			r.ShortCommit != "6113728" || r.Ref != "refs/heads/main" || r.Branch != "main" || r.Repository != "acme/site" ||
 			r.Message != "Fix the header" || r.AuthorName != "Ann Author" || r.AuthorLogin != "ann" || r.Pusher != "ann" ||
-			r.Waiting == "" || r.CreatedAt.IsZero() || r.StartedAt != nil {
+			r.Waiting == "" || r.CreatedAt.IsZero() || r.StartedAt != nil ||
+			!strings.HasSuffix(r.CommitURL, "/acme/site/commit/"+commitA) || !strings.HasPrefix(r.CommitURL, "http") {
 			t.Fatalf("%s run: %+v", site, r)
 		}
 	}

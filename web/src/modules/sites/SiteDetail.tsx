@@ -27,6 +27,7 @@ import { MainAddressSection } from './MainAddressSection.tsx'
 import { PathRedirectsSection } from './PathRedirectsSection.tsx'
 import { PublishSection } from './PublishSection.tsx'
 import { formatReleaseDate, hasContent } from './releases.ts'
+import { RunsSection } from './RunsSection.tsx'
 import { SiteFormDialog } from './SiteFormDialog.tsx'
 import { SourceSection } from './SourceSection.tsx'
 import { VersionsSection } from './VersionsSection.tsx'
@@ -106,6 +107,7 @@ function Loaded({ site, reload }: { site: Site; reload: () => Promise<void> }) {
       <PublishSection name={site.name} previewAddresses={site.preview_addresses === true} onPublished={reload} />
       <VersionsSection site={site} onChanged={reload} />
       <SourceSection site={site.name} />
+      <RunsSection site={site.name} />
       <Section
         title="Domains"
         description="Visitors reach this site on these domains."
