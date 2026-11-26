@@ -126,27 +126,36 @@ func TestCheckHeader(t *testing.T) {
 		return m
 	}
 	ok := h("From: A <a@sender.test>", "Date: Mon, 23 Nov 2026 10:00:00 +0000", "Message-ID: <1@x>")
-	if sc, d := CheckHeader(ok, []string{"example.org"}, own); sc.Points != 0 || len(d) != 1 || d[0] != "sender.test" {
+	if sc, d, _ := CheckHeader(ok, []string{"example.org"}, own); sc.Points != 0 || len(d) != 1 || d[0] != "sender.test" {
 		t.Errorf("clean: %v %v", sc, d)
 	}
-	sc, _ := CheckHeader(h("From: a@sender.test"), nil, own)
+	sc, _, _ := CheckHeader(h("From: a@sender.test"), nil, own)
 	if sc.String() != "2 (no-message-id no-date)" {
 		t.Errorf("missing: %v", sc)
 	}
-	sc, d := CheckHeader(h("From: a@one.test", "From: b@two.test", "Date: x", "Message-ID: <1@x>"), nil, own)
+	sc, d, _ := CheckHeader(h("From: a@one.test", "From: b@two.test", "Date: x", "Message-ID: <1@x>"), nil, own)
 	if sc.String() != "3.5 (bad-date multiple-from)" || len(d) != 2 {
 		t.Errorf("multiple: %v %v", sc, d)
 	}
-	if sc, _ := CheckHeader(h("From: <<<", "Date: Mon, 23 Nov 2026 10:00:00 +0000", "Message-ID: <1@x>"), nil, own); sc.String() != "2.5 (bad-from)" {
-		t.Errorf("malformed: %v", sc)
+	if sc, _, bad := CheckHeader(h("From: <<<", "Date: Mon, 23 Nov 2026 10:00:00 +0000", "Message-ID: <1@x>"), nil, own); sc.String() != "2.5 (bad-from)" || !bad {
+		t.Errorf("malformed: %v %v", sc, bad)
+	}
+	// Values net/mail cannot read are reported, so port 25 can refuse them.
+	for _, from := range []string{"alice@example.org <alice@example.org>", "Alice [CEO] <alice@example.org>", "<alice@example.org> (CEO"} {
+		if _, d, bad := CheckHeader(h("From: "+from), nil, own); !bad || len(d) != 0 {
+			t.Errorf("%q: unreadable %v, domains %v", from, bad, d)
+		}
+	}
+	if _, _, bad := CheckHeader(h("Date: Mon, 23 Nov 2026 10:00:00 +0000"), nil, own); bad {
+		t.Error("missing From reported as unreadable")
 	}
 	spoof := h(`From: "boss@example.org" <evil@attacker.test>`, "Date: Mon, 23 Nov 2026 10:00:00 +0000", "Message-ID: <1@x>")
-	if sc, _ := CheckHeader(spoof, []string{"example.org"}, own); sc.String() != "3 (spoofed-name)" {
+	if sc, _, _ := CheckHeader(spoof, []string{"example.org"}, own); sc.String() != "3 (spoofed-name)" {
 		t.Errorf("spoof: %v", sc)
 	}
 	// From our own domain the name is not suspicious.
 	self := h(`From: "boss@example.org" <boss@example.org>`, "Date: Mon, 23 Nov 2026 10:00:00 +0000", "Message-ID: <1@x>")
-	if sc, _ := CheckHeader(self, []string{"example.org"}, own); sc.Points != 0 {
+	if sc, _, _ := CheckHeader(self, []string{"example.org"}, own); sc.Points != 0 {
 		t.Errorf("self: %v", sc)
 	}
 }

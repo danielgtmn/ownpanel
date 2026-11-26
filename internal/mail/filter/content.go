@@ -19,8 +19,12 @@ import (
 // domains of its From addresses (lowercase, without duplicates) for DMARC.
 // rcptDomains are the domains of the message's local recipients; own tells
 // whether a domain is one of this server's.
-func CheckHeader(h textproto.MIMEHeader, rcptDomains []string, own func(string) bool) (Score, []string) {
-	var sc Score
+//
+// unreadable reports a From field that is present but cannot be parsed (or
+// has an address without a domain). Such a value contributes no domain, so
+// the caller must not let it pass the domain-based checks (DMARC, the
+// refusal of forged own domains) unnoticed.
+func CheckHeader(h textproto.MIMEHeader, rcptDomains []string, own func(string) bool) (sc Score, domains []string, unreadable bool) {
 	if strings.TrimSpace(h.Get("Message-Id")) == "" {
 		sc.Add(PointsNoMessageID, "no-message-id")
 	}
@@ -33,11 +37,10 @@ func CheckHeader(h textproto.MIMEHeader, rcptDomains []string, own func(string) 
 	switch {
 	case len(values) == 0:
 		sc.Add(PointsBadFrom, "no-from")
-		return sc, nil
+		return sc, nil, false
 	case len(values) > 1:
 		sc.Add(PointsBadFrom, "multiple-from")
 	}
-	var domains []string
 	spoofed, bad := false, false
 	for _, v := range values {
 		list, err := (&mail.AddressParser{WordDecoder: wordDecoder}).ParseList(v)
@@ -72,7 +75,7 @@ func CheckHeader(h textproto.MIMEHeader, rcptDomains []string, own func(string) 
 	if spoofed {
 		sc.Add(PointsSpoofedName, "spoofed-name")
 	}
-	return sc, domains
+	return sc, domains, bad
 }
 
 func contains(list []string, s string) bool {

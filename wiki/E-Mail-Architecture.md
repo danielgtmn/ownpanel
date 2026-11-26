@@ -463,7 +463,10 @@ all DNS goes through one resolver interface, replaced in tests):
   any `reject` failure refuses. Lookup errors give `temperror` and never a
   refusal (a DNS error on the way to a possible pass also gives
   `temperror`, not `fail`).
-- **Answers:** DMARC `p=reject` failure `550 5.7.1` at `DATA`; SBL/CSS/XBL/
+- **Answers:** DMARC `p=reject` failure `550 5.7.1` at `DATA`; a `From`
+  field that cannot be read (so it would give no domain for DMARC and the
+  own-domain check) `550 5.6.0`, except from loopback clients, where it
+  only adds `bad-from`; SBL/CSS/XBL/
   DROP (`127.0.0.2`–`.7`, `.9` of a Spamhaus zone, including DQS zones under
   `spamhaus.net`) `554 5.7.1` for every recipient (the connection stays
   open; the text names the list); dangerous attachment `554 5.7.1`;
@@ -476,7 +479,8 @@ all DNS goes through one resolver interface, replaced in tests):
   servers' results are kept.
 - **Score points** (threshold `junk_score`, default 5; reaching it means
   Junk): `no-message-id` 1, `no-date`/`bad-date` 1, `no-from`/`bad-from`/
-  `multiple-from` 2.5 each, `no-ptr` 1.5 (only when the lookup answered),
+  `multiple-from` 2.5 each (`bad-from` only from loopback clients; others are
+  refused), `no-ptr` 1.5 (only when the lookup answered),
   `spoofed-name` 3 (display name contains `@<recipient's domain>` while the
   From domain is not ours), `spf-softfail` 1, `spf-fail` 2.5, `dkim-fail`
   1.5 (a failing signature and none passing), `listed:<zone>` 3 per listing
