@@ -1,6 +1,7 @@
 # Checks every change. The job names (go, web, lint, build) are used as
 # required status checks in the branch protection rules; renaming one
-# means updating the rules as well. The action job (the publish GitHub
+# means updating the rules as well. "go" only sums up the parallel Go jobs
+# "go (vet)" and "go (<group>)". The action job (the publish GitHub
 # Action against a real ownpaneld) is not required.
 #
 # On pull requests, jobs run only when files they check changed (a skipped
@@ -83,11 +84,16 @@ jobs:
             echo "action=$action"
           } | tee -a "$GITHUB_OUTPUT"
 
-  go:
+  # The Go checks are split into jobs that run in parallel: go-vet (format,
+  # vet, and that the test groups cover every test) and one go-test job per
+  # group of scripts/go-test-group.sh. The job "go" sums them up for the
+  # branch rules.
+  go-vet:
+    name: go (vet)
     needs: changes
     if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -106,8 +112,69 @@ jobs:
           fi
       - name: Vet
         run: go vet ./...
+      - name: Every test runs in exactly one group
+        env:
+          # Keep in sync with the matrix of go-test.
+          MATRIX: panel-1 panel-2 panel-3 panel-4 mail rest
+        run: |
+          groups="$(scripts/go-test-group.sh groups | paste -sd' ' -)"
+          if [ "$groups" != "$MATRIX" ]; then
+            echo "::error::The go-test matrix ($MATRIX) does not match scripts/go-test-group.sh groups ($groups)."
+            exit 1
+          fi
+          scripts/go-test-group.sh check
+
+  go-test:
+    name: go (${{ matrix.group }})
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [panel-1, panel-2, panel-3, panel-4, mail, rest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: true
       - name: Test
-        run: go test -race -count=1 ./...
+        env:
+          GROUP: ${{ matrix.group }}
+        run: scripts/go-test-group.sh "$GROUP"
+
+  # The required check "go": passes when the Go jobs passed, or when no Go
+  # file changed and they were skipped.
+  go:
+    needs: [changes, go-vet, go-test]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Sum up the Go jobs
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          RUN: ${{ needs.changes.outputs.go }}
+          VET: ${{ needs.go-vet.result }}
+          TEST: ${{ needs.go-test.result }}
+        run: |
+          echo "changes=$CHANGES go=$RUN vet=$VET test=$TEST"
+          if [ "$CHANGES" != success ]; then
+            echo "::error::Deciding which checks to run failed."
+            exit 1
+          fi
+          if [ "$RUN" != true ]; then
+            echo "No Go file changed."
+            exit 0
+          fi
+          if [ "$VET" != success ] || [ "$TEST" != success ]; then
+            echo "::error::A Go job did not pass."
+            exit 1
+          fi
 
   web:
     needs: changes
@@ -169,13 +236,13 @@ jobs:
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
 
   build:
-    needs: [changes, go, web]
-    # Runs after go and web, also when one of them was skipped, never after
-    # a failure.
+    needs: [changes, go-vet, web]
+    # Runs after go-vet and web (not after the tests, to save time), also
+    # when one of them was skipped, never after a failure.
     if: >-
       !cancelled() &&
       needs.changes.outputs.build == 'true' &&
-      needs.go.result != 'failure' &&
+      needs.go-vet.result != 'failure' &&
       needs.web.result != 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 20
