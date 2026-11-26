@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"slices"
@@ -117,7 +118,7 @@ func TestSplitLabels(t *testing.T) {
 
 func mboxMessages(t *testing.T, data string, rd bool) ([]string, []time.Time) {
 	t.Helper()
-	mr, err := newMboxReader(strings.NewReader(data), rd)
+	mr, err := newMboxReader(context.Background(), strings.NewReader(data), rd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +162,7 @@ func TestMbox(t *testing.T) {
 	if msgs[0] != "Subject: one\n\nbody\nFrom quoted\nFrom here on, plain text\n" || msgs[1] != "Subject: two\n\n\n>From x\n" {
 		t.Fatalf("rd %q", msgs)
 	}
-	if _, err := newMboxReader(strings.NewReader("Subject: x\n\n"), false); !errors.Is(err, errNotMbox) {
+	if _, err := newMboxReader(context.Background(), strings.NewReader("Subject: x\n\n"), false); !errors.Is(err, errNotMbox) {
 		t.Fatal(err)
 	}
 	// Takeout's form of the date.

@@ -605,7 +605,9 @@ password first if it may have been stolen.
   arrives some minutes later; much spam never comes back.
 
 Mail that claims to come from one of your own domains but was not sent by
-its servers (no passing SPF or signature) is refused.
+its servers (no passing SPF or signature) is refused. So is mail from other
+servers whose sender (the From line) cannot be read, because it could hide
+such a claim.
 
 ## Moving mail in and out
 

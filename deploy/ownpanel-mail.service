@@ -33,6 +33,16 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
 LimitNOFILE=65536
+# Defence in depth: one process serves mail for every mailbox, so a bug
+# that makes it grow must not take the whole server with it. Normal use is
+# a few hundred MB at most; the Go runtime collects harder near its soft
+# limit (GOMEMLIMIT), the kernel reclaims above MemoryHigh and kills the
+# service (which restarts) above MemoryMax. Threads, not connections, count
+# as tasks; Go needs few.
+Environment=GOMEMLIMIT=1280MiB
+MemoryHigh=1536M
+MemoryMax=2G
+TasksMax=1024
 PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict

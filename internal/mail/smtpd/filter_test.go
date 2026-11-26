@@ -627,3 +627,46 @@ func TestBounceToSRSAddressLimited(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A From header that net/mail cannot read gives no domain; it must not let
+// a forged own domain or a DMARC p=reject domain past the checks.
+func TestUnreadableFromRefused(t *testing.T) {
+	e := start(t, fwdConfig(t))
+	senderDNS(t, e, "")
+	e.res.TXT["example.org"] = []string{"v=spf1 ip4:203.0.113.0/24 -all"}
+	e.res.TXT["bank.test"] = []string{"v=spf1 ip4:203.0.113.0/24 -all"}
+	e.res.TXT["_dmarc.bank.test"] = []string{"v=DMARC1; p=reject"}
+	e.from("192.0.2.10") // SPF pass and PTR for sender.test only
+	c := dial(t, e.addr, false)
+	with := func(from string) string {
+		return strings.Replace(goodMsg, "From: A <a@sender.test>", "From: "+from, 1)
+	}
+	for _, from := range []string{
+		"alice@example.org <alice@example.org>",
+		"Alice [CEO] <alice@example.org>",
+		"<alice@example.org> (CEO",
+		"pay@bank.test <pay@bank.test>",
+	} {
+		c.Reset()
+		err := send(c, "a@sender.test", []string{"bob@example.org"}, with(from))
+		var se *smtp.SMTPError
+		if !asSMTP(err, &se) || se.Code != 550 || se.EnhancedCode != (smtp.EnhancedCode{5, 6, 0}) {
+			t.Errorf("From %q not refused: %v", from, err)
+		}
+	}
+	// A well-formed foreign From still arrives.
+	c.Reset()
+	if err := send(c, "a@sender.test", []string{"bob@example.org"}, goodMsg); err != nil {
+		t.Fatalf("good From: %v", err)
+	}
+	if n := len(inbox(t, e, idBob)); n != 1 {
+		t.Fatalf("bob has %d messages, want 1", n)
+	}
+
+	// Local programs (loopback) keep the old behaviour: only points.
+	e.from("127.0.0.1")
+	c = dial(t, e.addr, false)
+	if err := send(c, "a@sender.test", []string{"bob@example.org"}, with("alice@example.org <alice@example.org>")); err != nil {
+		t.Fatalf("loopback: %v", err)
+	}
+}

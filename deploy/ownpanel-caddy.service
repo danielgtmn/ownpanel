@@ -6,8 +6,12 @@ Wants=network-online.target
 [Service]
 User=caddy
 Group=caddy
-Environment=XDG_DATA_HOME=/var/lib/ownpanel/caddy-home
-Environment=XDG_CONFIG_HOME=/var/lib/ownpanel/caddy-home
+# Caddy's own directory, outside the panel's data: its home (the last config)
+# here, its certificates in storage (set by ownpaneld).
+Environment=XDG_DATA_HOME=/var/lib/ownpanel-caddy/home
+Environment=XDG_CONFIG_HOME=/var/lib/ownpanel-caddy/home
+StateDirectory=ownpanel-caddy
+StateDirectoryMode=0700
 # The admin API is a Unix socket, never a TCP port: on TCP every local user
 # could rewrite the web server's config.
 # Access: systemd creates /run/ownpanel as caddy:caddy with mode 0750, and Caddy

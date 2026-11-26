@@ -47,6 +47,9 @@ var repo = "danielgtmn/ownpanel"
 // The panel only offers updates when it exists.
 const releaseFile = "/etc/ownpanel/release"
 
+// defaultCaddyStorage is where install.sh lets Caddy keep its certificates.
+const defaultCaddyStorage = "/var/lib/ownpanel-caddy/storage"
+
 func main() {
 	args := os.Args[1:]
 	cmd := "serve"
@@ -61,6 +64,8 @@ func main() {
 		err = runBackup(args)
 	case backupMailCommand:
 		err = runBackupMail(args)
+	case backupDBCommand:
+		err = runBackupDB(args)
 	case "mail":
 		err = runMail(args)
 	case "version":
@@ -78,20 +83,27 @@ func runBackup(args []string) error {
 	fs := flag.NewFlagSet("backup", flag.ExitOnError)
 	dataDir := fs.String("data", "./data", "data directory of the daemon")
 	mailData := fs.String("mail-data", "/var/lib/ownpanel-mail", "data directory of the mail service (skipped if it does not exist)")
+	caddyStorage := fs.String("caddy-storage", defaultCaddyStorage, "Caddy's certificate storage; if it does not exist, caddy in the data directory")
 	noMail := fs.Bool("no-mail", false, "leave the stored mail out of the archive")
 	out := fs.String("out", "", "archive to write (.tar.gz); must not exist")
 	fs.Parse(args)
 	if *out == "" {
 		return errors.New("backup needs -out <file.tar.gz>")
 	}
-	var mail backup.MailSource
+	src := backup.Sources{}
+	if fi, err := os.Lstat(*caddyStorage); err == nil && fi.IsDir() {
+		src.CaddyStorage = *caddyStorage
+	}
+	var err error
+	if src.DB, err = dbSource(*dataDir); err != nil {
+		return err
+	}
 	if !*noMail {
-		var err error
-		if mail, err = mailSource(*mailData); err != nil {
+		if src.Mail, err = mailSource(*mailData); err != nil {
 			return err
 		}
 	}
-	if err := backup.CreateWithMail(*dataDir, *out, mail); err != nil {
+	if err := backup.CreateFrom(*dataDir, *out, src); err != nil {
 		return err
 	}
 	slog.Info("backup written", "file", *out)
@@ -103,6 +115,8 @@ func serve(args []string) error {
 	var (
 		listen      = fs.String("listen", "127.0.0.1:8600", "address of the panel (web interface and API)")
 		dataDir     = fs.String("data", "./data", "directory for the database, site files and certificates")
+		storage     = fs.String("caddy-storage", "", "where Caddy keeps certificates (default: caddy in the data directory)")
+		updateDir   = fs.String("update-dir", "", "where update requests go to the root-side updater and its status comes back (default: update in the data directory)")
 		caddyAdmin  = fs.String("caddy-admin", "http://127.0.0.1:2019", "Caddy's admin API: http://host:port or unix:///path/to.sock")
 		tlsMode     = fs.String("tls", caddy.TLSACME, "certificates: acme (public), internal (self-signed, for testing) or off")
 		httpPort    = fs.Int("http-port", 80, "port for HTTP")
@@ -129,7 +143,7 @@ func serve(args []string) error {
 	}
 	opts := caddy.Options{
 		AdminListen: admin.Listen(),
-		StorageDir:  filepath.Join(data, "caddy"),
+		StorageDir:  orDefault(*storage, filepath.Join(data, "caddy")),
 		TLSMode:     *tlsMode,
 		HTTPPort:    *httpPort,
 		HTTPSPort:   *httpsPort,
@@ -206,7 +220,7 @@ func serve(args []string) error {
 			Repo:        repo,
 			APIURL:      *releasesAPI,
 			ReleaseFile: releaseFile,
-			Dir:         filepath.Join(data, "update"),
+			Dir:         orDefault(*updateDir, filepath.Join(data, "update")),
 		},
 		Mail:       mailService,
 		MailHost:   *mailHost,
@@ -249,6 +263,17 @@ func serve(args []string) error {
 // dialAddress turns a listen address into one Caddy can connect to: a
 // wildcard host becomes loopback, which also makes ownpaneld trust the
 // X-Forwarded-* headers Caddy sets.
+// orDefault is path made absolute, or def if path is "".
+func orDefault(path, def string) string {
+	if path == "" {
+		return def
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
+}
+
 func dialAddress(listen string) string {
 	host, port, err := net.SplitHostPort(listen)
 	if err != nil {

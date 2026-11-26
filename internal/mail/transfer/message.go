@@ -78,7 +78,10 @@ func prepare(r io.Reader, w io.Writer, opts prepOptions) (*prepared, error) {
 	var bodyStart []byte // a line that ended the header without being empty
 	sawEmpty := false
 	for {
-		line, err := br.ReadBytes('\n')
+		line, err := readLineMax(br, maxHeaderBytes-headerLen)
+		if errors.Is(err, errHeaderTooLong) {
+			return nil, err
+		}
 		if len(line) == 0 && err != nil {
 			if errors.Is(err, io.EOF) {
 				break
@@ -86,9 +89,6 @@ func prepare(r io.Reader, w io.Writer, opts prepOptions) (*prepared, error) {
 			return nil, err
 		}
 		headerLen += len(line)
-		if headerLen > maxHeaderBytes {
-			return nil, errHeaderTooLong
-		}
 		trimmed := bytes.TrimRight(line, "\r\n")
 		if len(trimmed) == 0 {
 			sawEmpty = true
@@ -170,6 +170,23 @@ func prepare(r io.Reader, w io.Writer, opts prepOptions) (*prepared, error) {
 	p.size = cw.n
 	p.flags = cleanFlags(p.flags)
 	return p, nil
+}
+
+// readLineMax reads a line like ReadBytes('\n'), but gives up with
+// errHeaderTooLong as soon as it holds more than max bytes, so an
+// endless line is never buffered whole.
+func readLineMax(br *bufio.Reader, max int) ([]byte, error) {
+	var line []byte
+	for {
+		b, err := br.ReadSlice('\n')
+		if len(line)+len(b) > max {
+			return nil, errHeaderTooLong
+		}
+		line = append(line, b...)
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return line, err
+		}
+	}
 }
 
 // splitField returns the name and the unfolded value of a raw field.

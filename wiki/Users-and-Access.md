@@ -26,6 +26,7 @@ Refused by design:
 The sign-in screen offers **Forgot your password?** only when the panel can send e-mail itself: the mail service is connected, the panel has a domain, and that domain or one of its parent domains is an active mail domain. The link is sent from `no-reply@` that mail domain, through the panel's own mail server.
 
 - Enter the e-mail address of your account. The answer is the same whether or not the address belongs to someone, so it does not reveal who has an account.
+- No link is sent to an address in a mail domain of this panel that belongs to another member: they could read it. Use an address in your own mail domain, an administrator's, or one elsewhere.
 - The e-mail contains a link to `https://<panel domain>/#/reset-password?token=…`, built from the panel domain at the time of the request. It works **once** and for **1 hour**.
 - Choosing a new password there ends all of that person's sessions; then they sign in with the new password.
 - At most 3 links per address and 20 requests per network address within an hour.

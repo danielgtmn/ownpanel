@@ -44,6 +44,12 @@ load_installer() {
 
 load_installer
 
+# Defined by install.sh; an installed install.sh of a version before the
+# updater kept its files outside /var/lib/ownpanel does not have them.
+UPDATE_ROOT=${UPDATE_ROOT:-/var/lib/ownpanel-update}
+BACKUP_DIR=${BACKUP_DIR:-$UPDATE_ROOT/backups}
+CADDY_DATA=${CADDY_DATA:-/var/lib/ownpanel-caddy}
+
 # Defined after loading install.sh, which has its own.
 usage() {
   cat <<'EOF'
@@ -63,7 +69,7 @@ Options:
   --no-rollback             keep a failed update in place (for tests)
   -h, --help                show this help
 
-Before it changes anything it writes a backup to /var/lib/ownpanel/backups
+Before it changes anything it writes a backup to /var/lib/ownpanel-update/backups
 (the last three are kept) and keeps the current files as *.previous. If the
 panel does not answer with the new version within 60 seconds, the previous
 version is put back.
@@ -159,7 +165,7 @@ finish() {
     if [ -z "$why" ]; then why="The update stopped with an error (exit $rc)."; fi
     case $last_step in
       installing | verifying | rolling_back)
-        why="$why It may be half installed: check that the panel answers; the backup is in $DATA/backups." ;;
+        why="$why It may be half installed: check that the panel answers; the backup is in $BACKUP_DIR." ;;
       *) why="$why Nothing was changed." ;;
     esac
     report failed "" "$why"
@@ -201,16 +207,28 @@ keep_previous() {
 }
 
 # The backup holds the database, the sites, the certificates and the secret
-# key; root-only, the last three are kept.
+# key; root-only, the last three are kept. It goes to a directory only root
+# can change. ownpaneld copies the database as the owner of the data
+# directory, so root neither opens it nor leaves files of its own there.
 do_backup() {
-  local dir=$DATA/backups file
-  install -d -m 0700 "$dir"
-  file=$dir/ownpanel-$(date -u +%Y%m%dT%H%M%SZ)-${old_version//[^A-Za-z0-9._-]/_}.tar.gz
-  "$BIN/ownpaneld" backup -data "$DATA" -out "$file" >/dev/null 2>&1 ||
+  local file bin=$BIN/ownpaneld args=()
+  install -d -m 0755 -o root -g root "$UPDATE_ROOT"
+  install -d -m 0700 -o root -g root "$BACKUP_DIR"
+  # An ownpaneld from before that could not do so (updating by hand from an
+  # old version): use the new release's for the backup.
+  if ! "$bin" backup-db -h >/dev/null 2>&1; then
+    bin=$UPDATE_ROOT/.ownpaneld-backup
+    install -m 0755 -o root -g root "$src/ownpaneld" "$bin"
+  fi
+  # Caddy's certificates, once they live in their own directory.
+  [ -d "$CADDY_DATA/storage" ] && [ ! -L "$CADDY_DATA/storage" ] && args+=(-caddy-storage "$CADDY_DATA/storage")
+  file=$BACKUP_DIR/ownpanel-$(date -u +%Y%m%dT%H%M%SZ)-${old_version//[^A-Za-z0-9._-]/_}.tar.gz
+  if ! "$bin" backup -data "$DATA" "${args[@]}" -out "$file" >/dev/null 2>&1; then
+    rm -f "$UPDATE_ROOT/.ownpaneld-backup"
     die "the backup failed, so nothing was changed (try: $BIN/ownpaneld backup -data $DATA -out /root/ownpanel.tar.gz)"
-  # Reading the database as root must not leave files ownpaneld cannot open.
-  find "$DATA" -maxdepth 1 -name 'ownpanel.db*' -user root -exec chown ownpanel:ownpanel {} + 2>/dev/null || true
-  find "$dir" -maxdepth 1 -name 'ownpanel-*.tar.gz' -printf '%T@ %p\n' | sort -rn | tail -n +4 | cut -d' ' -f2- |
+  fi
+  rm -f "$UPDATE_ROOT/.ownpaneld-backup"
+  find "$BACKUP_DIR" -maxdepth 1 -name 'ownpanel-*.tar.gz' -printf '%T@ %p\n' | sort -rn | tail -n +4 | cut -d' ' -f2- |
     while IFS= read -r f; do rm -f -- "$f"; done
   say "Backup written: $file"
 }
@@ -252,8 +270,8 @@ rollback() {
   fi
   systemctl --no-pager --lines=0 status "${SERVICES[@]}" >&2 || true
   journalctl --no-pager -u ownpaneld -n 20 >&2 || true
-  report failed "" "The update to $target failed and $old_version could not be started again. Restore the backup in $DATA/backups. $1"
-  printf 'Error: the rollback failed too; restore the backup in %s/backups\n' "$DATA" >&2
+  report failed "" "The update to $target failed and $old_version could not be started again. Restore the backup in $BACKUP_DIR. $1"
+  printf 'Error: the rollback failed too; restore the backup in %s\n' "$BACKUP_DIR" >&2
   exit "$EXIT_BROKEN"
 }
 

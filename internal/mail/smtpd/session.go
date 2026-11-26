@@ -42,6 +42,7 @@ var (
 	errReportsOnly    = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 7, 1}, Message: "This address only accepts delivery status notifications"}
 	errForwardLimited = &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 7, 1}, Message: "Forwarding limit reached, try again later"}
 	errOwnDomain      = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 7, 1}, Message: "Sender address of a domain hosted here, but not sent by its servers"}
+	errBadFrom        = &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 6, 0}, Message: "The message has no readable From header"}
 )
 
 func errListed(zone string) error {
@@ -594,8 +595,16 @@ func (ss *session) check(ctx context.Context, f *os.File, fields []field) (verdi
 	}
 	v.dkim = ver.DKIM(ctx, f)
 	hdr := mimeHeader(fields)
-	sc, fromDomains := filter.CheckHeader(hdr, ss.rcptDomains, ss.ours)
+	sc, fromDomains, unreadable := filter.CheckHeader(hdr, ss.rcptDomains, ss.ours)
 	v.score.Merge(sc)
+	// A From that cannot be read gives no domain, so DMARC and the refusal
+	// of forged own domains would not see it, while mail clients often
+	// still show it. Mail from the internet must have a readable From
+	// (RFC 5322 3.6); local programs (loopback) keep the score only.
+	if unreadable && !ss.ip.IsLoopback() {
+		ss.s.log.Info("smtp: refused unreadable From", "remote", ss.remote)
+		return v, errBadFrom
+	}
 	quarantine := ""
 	for i, d := range fromDomains {
 		if i >= 5 {

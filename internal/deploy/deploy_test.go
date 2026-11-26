@@ -5,6 +5,10 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"context"
+	"encoding/binary"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,7 +53,7 @@ func served(t *testing.T, m *Manager, site, file string) string {
 
 func TestDeployAndRollback(t *testing.T) {
 	m := &Manager{Base: t.TempDir()}
-	v1, err := m.Deploy("a", archive(t, entry{name: "./index.html", body: "v1"}, entry{name: "css/app.css", body: "x"}))
+	v1, err := m.Deploy(t.Context(), "a", archive(t, entry{name: "./index.html", body: "v1"}, entry{name: "css/app.css", body: "x"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +63,7 @@ func TestDeployAndRollback(t *testing.T) {
 	if got := served(t, m, "a", "css/app.css"); got != "x" {
 		t.Fatalf("got %q", got)
 	}
-	v2, err := m.Deploy("a", archive(t, entry{name: "index.html", body: "v2"}))
+	v2, err := m.Deploy(t.Context(), "a", archive(t, entry{name: "index.html", body: "v2"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +95,7 @@ func TestDeployRejectsUnsafeArchives(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			base := t.TempDir()
 			m := &Manager{Base: filepath.Join(base, "sites")}
-			if _, err := m.Deploy("a", archive(t, entry{name: "index.html", body: "ok"}, e)); err == nil {
+			if _, err := m.Deploy(t.Context(), "a", archive(t, entry{name: "index.html", body: "ok"}, e)); err == nil {
 				t.Fatal("expected error")
 			}
 			if m.Current("a") != "" || len(m.Releases("a")) != 0 {
@@ -107,7 +111,7 @@ func TestDeployRejectsUnsafeArchives(t *testing.T) {
 func TestPruneKeepsActiveRelease(t *testing.T) {
 	m := &Manager{Base: t.TempDir()}
 	for i := 0; i < KeepReleases+3; i++ {
-		if _, err := m.Deploy("a", archive(t, entry{name: "index.html", body: "x"})); err != nil {
+		if _, err := m.Deploy(t.Context(), "a", archive(t, entry{name: "index.html", body: "x"})); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -164,7 +168,7 @@ func releasesDirEntries(t *testing.T, m *Manager, site string) []string {
 
 func TestDeployZip(t *testing.T) {
 	m := &Manager{Base: t.TempDir()}
-	id, err := m.Deploy("a", zipArchive(t,
+	id, err := m.Deploy(t.Context(), "a", zipArchive(t,
 		zipEntry{name: "index.html", body: "hello"},
 		zipEntry{name: "css/", mode: os.ModeDir | 0o755},
 		zipEntry{name: "css/deep/app.css", body: "x"},
@@ -207,7 +211,7 @@ func TestDeployZipRejectsUnsafeArchives(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			base := t.TempDir()
 			m := &Manager{Base: filepath.Join(base, "sites")}
-			_, err := m.Deploy("a", zipArchive(t, zipEntry{name: "index.html", body: "ok"}, e))
+			_, err := m.Deploy(t.Context(), "a", zipArchive(t, zipEntry{name: "index.html", body: "ok"}, e))
 			if err == nil {
 				t.Fatal("expected error")
 			}
@@ -241,7 +245,7 @@ func TestDeployZipLimitsUseActualBytes(t *testing.T) {
 	for name, a := range map[string]*bytes.Reader{"honest header": honest, "lying header": lying} {
 		t.Run(name, func(t *testing.T) {
 			m := &Manager{Base: t.TempDir()}
-			if _, err := m.Deploy("a", a); err == nil {
+			if _, err := m.Deploy(t.Context(), "a", a); err == nil {
 				t.Fatal("expected error")
 			}
 			if m.Current("a") != "" || len(releasesDirEntries(t, m, "a")) != 0 {
@@ -265,10 +269,10 @@ func TestDeployTooManyEntries(t *testing.T) {
 	MaxFiles = 2
 	t.Cleanup(func() { MaxFiles = old })
 	m := &Manager{Base: t.TempDir()}
-	if _, err := m.Deploy("a", zipArchive(t, zipEntry{name: "a", body: "1"}, zipEntry{name: "b", body: "1"}, zipEntry{name: "c", body: "1"})); err == nil {
+	if _, err := m.Deploy(t.Context(), "a", zipArchive(t, zipEntry{name: "a", body: "1"}, zipEntry{name: "b", body: "1"}, zipEntry{name: "c", body: "1"})); err == nil {
 		t.Fatal("zip: expected error")
 	}
-	if _, err := m.Deploy("a", archive(t, entry{name: "a"}, entry{name: "b"}, entry{name: "c"})); err == nil {
+	if _, err := m.Deploy(t.Context(), "a", archive(t, entry{name: "a"}, entry{name: "b"}, entry{name: "c"})); err == nil {
 		t.Fatal("tar: expected error")
 	}
 	if len(releasesDirEntries(t, m, "a")) != 0 {
@@ -278,7 +282,7 @@ func TestDeployTooManyEntries(t *testing.T) {
 
 func TestDeploySkipsMacJunk(t *testing.T) {
 	m := &Manager{Base: t.TempDir()}
-	_, err := m.Deploy("z", zipArchive(t,
+	_, err := m.Deploy(t.Context(), "z", zipArchive(t,
 		zipEntry{name: "index.html", body: "z"},
 		zipEntry{name: "__MACOSX/", mode: os.ModeDir | 0o755},
 		zipEntry{name: "__MACOSX/._index.html", body: "junk"},
@@ -290,7 +294,7 @@ func TestDeploySkipsMacJunk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = m.Deploy("t", archive(t,
+	_, err = m.Deploy(t.Context(), "t", archive(t,
 		entry{name: "index.html", body: "t"},
 		entry{name: "__MACOSX/._index.html", body: "junk"},
 		entry{name: ".DS_Store", body: "junk"},
@@ -344,7 +348,7 @@ func TestDeployUnwrapsSingleFolder(t *testing.T) {
 	for name, mk := range cases {
 		t.Run(name, func(t *testing.T) {
 			m := &Manager{Base: t.TempDir()}
-			if _, err := m.Deploy("a", mk(t)); err != nil {
+			if _, err := m.Deploy(t.Context(), "a", mk(t)); err != nil {
 				t.Fatal(err)
 			}
 			if served(t, m, "a", "index.html") != "hi" || served(t, m, "a", "mysite/inner.txt") != "in" {
@@ -358,7 +362,7 @@ func TestDeployUnwrapsSingleFolder(t *testing.T) {
 
 	// Two top-level entries: nothing is unwrapped.
 	m := &Manager{Base: t.TempDir()}
-	if _, err := m.Deploy("a", zipArchive(t, zipEntry{name: "d/index.html", body: "x"}, zipEntry{name: "robots.txt", body: "y"})); err != nil {
+	if _, err := m.Deploy(t.Context(), "a", zipArchive(t, zipEntry{name: "d/index.html", body: "x"}, zipEntry{name: "robots.txt", body: "y"})); err != nil {
 		t.Fatal(err)
 	}
 	if served(t, m, "a", "d/index.html") != "x" {
@@ -383,11 +387,11 @@ func TestDeployRejectsNonArchivesAndEmptyArchives(t *testing.T) {
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			m := &Manager{Base: t.TempDir()}
-			if _, err := m.Deploy("a", archive(t, entry{name: "index.html", body: "live"})); err != nil {
+			if _, err := m.Deploy(t.Context(), "a", archive(t, entry{name: "index.html", body: "live"})); err != nil {
 				t.Fatal(err)
 			}
 			live := m.Current("a")
-			_, err := m.Deploy("a", c.in)
+			_, err := m.Deploy(t.Context(), "a", c.in)
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 				t.Fatalf("got %v, want error containing %q", err, c.wantErr)
 			}
@@ -403,17 +407,201 @@ func TestDeployRejectsNonArchivesAndEmptyArchives(t *testing.T) {
 
 func TestDeployLeavesNoTempFiles(t *testing.T) {
 	m := &Manager{Base: t.TempDir()}
-	id, err := m.Deploy("a", zipArchive(t, zipEntry{name: "index.html", body: "x"}))
+	id, err := m.Deploy(t.Context(), "a", zipArchive(t, zipEntry{name: "index.html", body: "x"}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := releasesDirEntries(t, m, "a"); len(got) != 1 || got[0] != id {
 		t.Fatalf("after success: %v", got)
 	}
-	if _, err := m.Deploy("a", zipArchive(t, zipEntry{name: "../x", body: "x"})); err == nil {
+	if _, err := m.Deploy(t.Context(), "a", zipArchive(t, zipEntry{name: "../x", body: "x"})); err == nil {
 		t.Fatal("expected error")
 	}
 	if got := releasesDirEntries(t, m, "a"); len(got) != 1 || got[0] != id {
 		t.Fatalf("after failure: %v", got)
+	}
+}
+
+// Ignored entries (macOS junk) in a tar are decompressed all the same, so
+// their content counts toward the unpacked size. (Ignored zip entries are
+// never opened.)
+func TestDeployCountsIgnoredContent(t *testing.T) {
+	old := MaxUnpackedBytes
+	MaxUnpackedBytes = 1000
+	t.Cleanup(func() { MaxUnpackedBytes = old })
+	junk := strings.Repeat("a", 5000) // compresses to a few bytes
+
+	for name, a := range map[string]*bytes.Reader{
+		"junk name": archive(t,
+			entry{name: "index.html", body: "x"},
+			entry{name: "._index.html", body: junk},
+		),
+		"junk folder": archive(t,
+			entry{name: "index.html", body: "x"},
+			entry{name: "__MACOSX/big", body: junk},
+		),
+		"archive root": archive(t,
+			entry{name: "index.html", body: "x"},
+			entry{name: ".", body: junk},
+		),
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := &Manager{Base: t.TempDir()}
+			_, err := m.Deploy(t.Context(), "a", a)
+			if !errors.Is(err, ErrBadArchive) || !strings.Contains(err.Error(), "larger than") {
+				t.Fatalf("got %v, want the size limit", err)
+			}
+			if m.Current("a") != "" || len(releasesDirEntries(t, m, "a")) != 0 {
+				t.Fatal("failed deployment left files behind")
+			}
+		})
+	}
+}
+
+func TestDeployCountsIgnoredEntries(t *testing.T) {
+	old := MaxFiles
+	MaxFiles = 3
+	t.Cleanup(func() { MaxFiles = old })
+	m := &Manager{Base: t.TempDir()}
+	_, err := m.Deploy(t.Context(), "a", archive(t,
+		entry{name: "index.html", body: "x"},
+		entry{name: "._a"}, entry{name: "._b"}, entry{name: "._c"},
+	))
+	if err == nil || !strings.Contains(err.Error(), "more than 3 entries") {
+		t.Fatalf("got %v, want the entry limit", err)
+	}
+}
+
+// Headers are not entry content, but they are decompressed too: extended
+// headers must not be a way around the limits.
+func TestDeployLimitsTarHeaders(t *testing.T) {
+	oldBytes, oldFiles := MaxUnpackedBytes, MaxFiles
+	MaxUnpackedBytes, MaxFiles = 1000, 2
+	t.Cleanup(func() { MaxUnpackedBytes, MaxFiles = oldBytes, oldFiles })
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	hdr := &tar.Header{
+		Name: "index.html", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1, Format: tar.FormatPAX,
+		PAXRecords: map[string]string{"comment": strings.Repeat("a", 512<<10)},
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatal(err)
+	}
+	tw.Write([]byte("x"))
+	tw.Close()
+	gz.Close()
+
+	m := &Manager{Base: t.TempDir()}
+	_, err := m.Deploy(t.Context(), "a", bytes.NewReader(buf.Bytes()))
+	if !errors.Is(err, ErrBadArchive) || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("got %v, want the size limit", err)
+	}
+}
+
+// zipEnd returns the offset of the end of central directory record of a zip
+// written without a comment.
+func zipEnd(t *testing.T, raw []byte) int {
+	t.Helper()
+	i := len(raw) - 22
+	if binary.LittleEndian.Uint32(raw[i:]) != 0x06054b50 {
+		t.Fatal("no end of central directory record")
+	}
+	return i
+}
+
+// toZip64 rewrites the end of a zip into the zip64 form, declaring records
+// entries.
+func toZip64(t *testing.T, raw []byte, records uint64) []byte {
+	t.Helper()
+	i := zipEnd(t, raw)
+	dirSize := uint64(binary.LittleEndian.Uint32(raw[i+12:]))
+	dirOffset := uint64(binary.LittleEndian.Uint32(raw[i+16:]))
+	out := append([]byte{}, raw[:i]...)
+	end64 := uint64(len(out))
+	le := binary.LittleEndian
+	out = le.AppendUint32(out, 0x06064b50)
+	out = le.AppendUint64(out, 44) // size of the rest of this record
+	out = le.AppendUint16(out, 45)
+	out = le.AppendUint16(out, 45)
+	out = le.AppendUint32(out, 0)
+	out = le.AppendUint32(out, 0)
+	out = le.AppendUint64(out, records)
+	out = le.AppendUint64(out, records)
+	out = le.AppendUint64(out, dirSize)
+	out = le.AppendUint64(out, dirOffset)
+	out = le.AppendUint32(out, 0x07064b50)
+	out = le.AppendUint32(out, 0)
+	out = le.AppendUint64(out, end64)
+	out = le.AppendUint32(out, 1)
+	out = le.AppendUint32(out, 0x06054b50)
+	out = le.AppendUint16(out, 0)
+	out = le.AppendUint16(out, 0)
+	out = le.AppendUint16(out, 0xffff)
+	out = le.AppendUint16(out, 0xffff)
+	out = le.AppendUint32(out, 0xffffffff)
+	out = le.AppendUint32(out, 0xffffffff)
+	out = le.AppendUint16(out, 0)
+	return out
+}
+
+// The central directory is checked before archive/zip reads it into memory.
+// Each case would fail differently (or not at all) if the records were
+// parsed first, so the error shows the check ran before.
+func TestDeployZipDirectoryCheckedFirst(t *testing.T) {
+	old := MaxFiles
+	MaxFiles = 10
+	t.Cleanup(func() { MaxFiles = old })
+
+	var many []zipEntry
+	for i := range 20 {
+		many = append(many, zipEntry{name: fmt.Sprintf("f%d", i), body: "x"})
+	}
+	// More records than the end record admits to: archive/zip compares the
+	// count only modulo 65536 and would report a damaged file here.
+	understated := mustRead(t, zipArchive(t, many...))
+	i := zipEnd(t, understated)
+	understated[i+8], understated[i+10] = 4, 4
+
+	// A zip64 end record declaring billions of records for a single one:
+	// archive/zip would report a damaged file.
+	overstated := toZip64(t, mustRead(t, zipArchive(t, zipEntry{name: "index.html", body: "x"})), 1<<32)
+
+	for name, raw := range map[string][]byte{"understated count": understated, "zip64 declared count": overstated} {
+		t.Run(name, func(t *testing.T) {
+			m := &Manager{Base: t.TempDir()}
+			_, err := m.Deploy(t.Context(), "a", bytes.NewReader(raw))
+			if !errors.Is(err, ErrBadArchive) || !strings.Contains(err.Error(), "more than 10 entries") {
+				t.Fatalf("got %v, want the entry limit", err)
+			}
+		})
+	}
+}
+
+func TestDeployZip64(t *testing.T) {
+	raw := toZip64(t, mustRead(t, zipArchive(t,
+		zipEntry{name: "index.html", body: "hi"},
+		zipEntry{name: "css/app.css", body: "x"},
+	)), 2)
+	m := &Manager{Base: t.TempDir()}
+	if _, err := m.Deploy(t.Context(), "a", bytes.NewReader(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if served(t, m, "a", "index.html") != "hi" {
+		t.Fatal("index.html missing")
+	}
+}
+
+func TestDeployStopsWhenCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	m := &Manager{Base: t.TempDir()}
+	_, err := m.Deploy(ctx, "a", archive(t, entry{name: "index.html", body: "x"}))
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrBadArchive) {
+		t.Fatalf("got %v, want context.Canceled", err)
+	}
+	if m.Current("a") != "" || len(releasesDirEntries(t, m, "a")) != 0 {
+		t.Fatal("cancelled deployment left files behind")
 	}
 }
