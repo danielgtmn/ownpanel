@@ -717,6 +717,15 @@ in the service. The same is said in [[Security|Security]].
   UTF-8, as macOS writes them without the flag), else CP437; no `..`,
   absolute paths, NUL or backslash; duplicate or case-colliding names
   merged into one folder. Other entries are skipped and counted.
+- **Reading files** holds little of them in memory: a header line is given
+  up as soon as the header passes 1 MB, other lines are read in pieces of
+  64 KiB, and only `From ` lines up to 512 bytes are looked at for a date.
+  Cancelling stops a scan or job in the middle of a message.
+- **Scans** of complete uploads run at most two at once (apart from the
+  running jobs) and are scanned again after a restart, but only once more:
+  an upload whose scan was started twice without ending (the service
+  stopped while reading it, other than by a normal stop) fails with "the
+  file could not be checked".
 
 ### Export
 

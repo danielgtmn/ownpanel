@@ -35,6 +35,7 @@ type importData struct {
 	Failed   int                           `json:"failed,omitempty"`
 	Bytes    int64                         `json:"bytes,omitempty"`
 	Position int64                         `json:"position,omitempty"`
+	Scans    int                           `json:"scans,omitempty"`
 }
 
 const importCols = `id, storage_id, kind, state, error, host, port, username, file_name, file_size, received, data, created, started, finished`
@@ -69,7 +70,7 @@ func scanImport(sc interface{ Scan(...any) error }) (config.ImportJob, error) {
 	if j.Folders == nil {
 		j.Folders = []config.ImportFolderProgress{}
 	}
-	j.Messages, j.Copied, j.Skipped, j.Failed, j.Bytes, j.Position = d.Messages, d.Copied, d.Skipped, d.Failed, d.Bytes, d.Position
+	j.Messages, j.Copied, j.Skipped, j.Failed, j.Bytes, j.Position, j.Scans = d.Messages, d.Copied, d.Skipped, d.Failed, d.Bytes, d.Position, d.Scans
 	j.Created, j.Started, j.Finished = timeOrZero(created), timeOrZero(started), timeOrZero(finished)
 	return j, nil
 }
@@ -78,6 +79,7 @@ func encodeImportData(j *config.ImportJob) (string, error) {
 	b, err := json.Marshal(importData{
 		Choices: j.Choices, Check: j.Check, Folders: j.Folders,
 		Messages: j.Messages, Copied: j.Copied, Skipped: j.Skipped, Failed: j.Failed, Bytes: j.Bytes, Position: j.Position,
+		Scans: j.Scans,
 	})
 	return string(b), err
 }
