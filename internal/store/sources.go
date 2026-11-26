@@ -16,6 +16,8 @@ const (
 
 // SiteSource is where a site's code comes from.
 type SiteSource struct {
+	// ID is the row's id (set when read).
+	ID   string
 	Site string
 	Kind string
 	// InstallationID is GitHub's installation id; 0 once the installation
@@ -28,12 +30,23 @@ type SiteSource struct {
 	Repository    string
 	Branch        string
 	PublishOnPush bool
-	// DeployKey and NotifySecret are sealed (kind git, #111).
-	DeployKey    []byte
-	NotifySecret []byte
-	CreatedBy    string // user name, "" if the user was removed
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// Kind git (#111): DeployKey and NotifySecret are sealed by the panel;
+	// DeployPublicKey, HostKey and HostKeyNew are authorized_keys lines
+	// (empty for HTTPS addresses); NotifyID is the random id of the
+	// notification address.
+	DeployKey       []byte
+	DeployPublicKey string
+	HostKey         string
+	HostKeyNew      string
+	NotifySecret    []byte
+	NotifyID        string
+	// CheckedAt is when the panel last reached the repository (nil:
+	// never), CheckError what went wrong then ("" if it worked).
+	CheckedAt  *time.Time
+	CheckError string
+	CreatedBy  string // user name, "" if the user was removed
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 var errNoSource = notFoundf("the site has no source")
@@ -45,12 +58,20 @@ func checkSource(src SiteSource) error {
 		if src.RepositoryID <= 0 {
 			return invalidf("a GitHub source needs GitHub's id of the repository")
 		}
-		if len(src.DeployKey) > 0 || len(src.NotifySecret) > 0 {
+		if len(src.DeployKey) > 0 || len(src.NotifySecret) > 0 || src.DeployPublicKey != "" || src.HostKey != "" ||
+			src.HostKeyNew != "" || src.NotifyID != "" {
 			return invalidf("a GitHub source has no deploy key")
 		}
 	case SourceGit:
 		if src.InstallationID != 0 || src.RepositoryID != 0 {
 			return invalidf("a Git source has no GitHub installation or repository")
+		}
+		if src.Repository == "" || src.NotifyID == "" || len(src.NotifySecret) == 0 {
+			return invalidf("a Git source needs an address and a notification secret")
+		}
+		ssh := len(src.DeployKey) > 0
+		if ssh != (src.DeployPublicKey != "") || ssh != (src.HostKey != "") {
+			return invalidf("a Git source over SSH needs a deploy key and the server's key, one over HTTPS neither")
 		}
 	default:
 		return invalidf("unknown kind of source %q", src.Kind)
@@ -75,10 +96,11 @@ func sourcesOf(ctx context.Context, r repos, rows []siteSourceRow) ([]SiteSource
 				return nil, err
 			}
 		}
-		out[i] = SiteSource{Site: row.SiteName, Kind: row.Kind, InstallationID: inst, RepositoryID: deref(row.RepositoryID),
+		out[i] = SiteSource{ID: row.ID, Site: row.SiteName, Kind: row.Kind, InstallationID: inst, RepositoryID: deref(row.RepositoryID),
 			Repository: row.Repository, Branch: row.Branch, PublishOnPush: row.PublishOnPush, DeployKey: row.DeployKey,
 			NotifySecret: row.NotifySecret, CreatedBy: names[deref(row.CreatedBy)], CreatedAt: row.CreatedAt,
-			UpdatedAt: row.UpdatedAt}
+			UpdatedAt: row.UpdatedAt, DeployPublicKey: row.DeployPublicKey, HostKey: row.HostKey, HostKeyNew: row.HostKeyNew,
+			NotifyID: deref(row.NotifyID), CheckedAt: row.CheckedAt, CheckError: row.CheckError}
 	}
 	return out, nil
 }
@@ -123,7 +145,8 @@ func (s *Store) PutSiteSource(ctx context.Context, src SiteSource, by string) (S
 	now := s.now()
 	row := siteSourceRow{SiteName: src.Site, Kind: src.Kind, Repository: src.Repository, Branch: src.Branch,
 		PublishOnPush: src.PublishOnPush, DeployKey: src.DeployKey, NotifySecret: src.NotifySecret,
-		CreatedBy: optional(by), CreatedAt: now, UpdatedAt: now}
+		CreatedBy: optional(by), CreatedAt: now, UpdatedAt: now, DeployPublicKey: src.DeployPublicKey, HostKey: src.HostKey,
+		HostKeyNew: src.HostKeyNew, NotifyID: optional(src.NotifyID), CheckedAt: src.CheckedAt, CheckError: src.CheckError}
 	if src.InstallationID != 0 {
 		row.InstallationID = ptr(installationKey(src.InstallationID))
 	}
@@ -150,6 +173,9 @@ func (s *Store) PutSiteSource(ctx context.Context, src SiteSource, by string) (S
 			// The installation or the user went away in between.
 			return notFoundf("the GitHub installation or the user is gone")
 		}
+		if errors.Is(err, ablage.ErrDuplicate) {
+			return conflictf("the notification address is already in use; try again")
+		}
 		return err
 	})
 	if err != nil {
@@ -175,4 +201,125 @@ func (s *Store) DeleteSiteSource(ctx context.Context, site string) error {
 		return errNoSource
 	}
 	return nil
+}
+
+// ---- kind git (#111) ----
+
+// GitSourceByNotifyID returns the Git source whose notification address
+// has the id; ErrNotFound if none has.
+func (s *Store) GitSourceByNotifyID(ctx context.Context, id string) (SiteSource, error) {
+	if id == "" {
+		return SiteSource{}, errNoSource
+	}
+	row, err := s.r.sources.First(ctx, ablage.Query{Where: ablage.And(ablage.Eq("kind", SourceGit), ablage.Eq("notify_id", id))})
+	if err != nil {
+		return SiteSource{}, missing(err, errNoSource)
+	}
+	list, err := sourcesOf(ctx, s.r, []siteSourceRow{row})
+	if err != nil {
+		return SiteSource{}, err
+	}
+	return list[0], nil
+}
+
+// gitSourceWhere matches the Git source of a site with the row id id, so a
+// change made while the site was linked anew does not touch the new link.
+func gitSourceWhere(site, id string) ablage.Cond {
+	return ablage.And(ablage.Eq("site_name", site), ablage.Eq("kind", SourceGit), ablage.Eq("id", id))
+}
+
+func (s *Store) patchGitSource(ctx context.Context, site, id string, patch ablage.Row) error {
+	n, err := s.r.sources.UpdateWhere(ctx, gitSourceWhere(site, id), patch)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return errNoSource
+	}
+	return nil
+}
+
+// SetGitSourceCheck records the result of reaching a Git source's
+// repository: checkError "" when it worked; hostKeyNew is the different key
+// the server showed ("" if it showed the confirmed one).
+func (s *Store) SetGitSourceCheck(ctx context.Context, site, id, checkError, hostKeyNew string) error {
+	return s.patchGitSource(ctx, site, id, ablage.Row{"checked_at": s.now(), "check_error": checkError, "host_key_new": hostKeyNew})
+}
+
+// SetGitHostKey pins another server key for a Git source over SSH.
+func (s *Store) SetGitHostKey(ctx context.Context, site, id, hostKey string) error {
+	if hostKey == "" {
+		return invalidf("a Git source over SSH needs the server's key")
+	}
+	return s.patchGitSource(ctx, site, id, ablage.Row{"host_key": hostKey, "host_key_new": "", "check_error": "",
+		"updated_at": s.now()})
+}
+
+// SetGitDeployKey replaces the deploy key of a Git source over SSH.
+func (s *Store) SetGitDeployKey(ctx context.Context, site, id string, sealed []byte, public string) error {
+	if len(sealed) == 0 || public == "" {
+		return invalidf("a deploy key needs both halves")
+	}
+	return s.patchGitSource(ctx, site, id, ablage.Row{"deploy_key": sealed, "deploy_public_key": public, "check_error": "",
+		"checked_at": nil, "updated_at": s.now()})
+}
+
+// SetGitNotifySecret replaces the notification address and secret of a
+// Git source.
+func (s *Store) SetGitNotifySecret(ctx context.Context, site, id, notifyID string, sealed []byte) error {
+	if notifyID == "" || len(sealed) == 0 {
+		return invalidf("a notification address needs an id and a secret")
+	}
+	err := s.patchGitSource(ctx, site, id, ablage.Row{"notify_id": notifyID, "notify_secret": sealed, "updated_at": s.now()})
+	if errors.Is(err, ablage.ErrDuplicate) {
+		return conflictf("the notification address is already in use; try again")
+	}
+	return err
+}
+
+// ClaimGitDelivery records a Git host's delivery id for a source before it
+// is handled. False: the id was seen before (and not released).
+func (s *Store) ClaimGitDelivery(ctx context.Context, sourceID, delivery string) (bool, error) {
+	if sourceID == "" || delivery == "" {
+		return false, invalidf("a delivery needs a source and an id")
+	}
+	err := s.r.gitDelivs.Create(ctx, &gitDeliveryRow{ID: sourceID + "/" + delivery, SourceID: sourceID, ReceivedAt: s.now()})
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, ablage.ErrDuplicate):
+		return false, nil
+	case errors.Is(err, ablage.ErrReference):
+		return false, errNoSource
+	}
+	return false, err
+}
+
+// ReleaseGitDelivery forgets a claimed delivery id whose handling failed.
+func (s *Store) ReleaseGitDelivery(ctx context.Context, sourceID, delivery string) error {
+	_, err := s.r.gitDelivs.DeleteWhere(ctx, ablage.Eq("id", sourceID+"/"+delivery))
+	return err
+}
+
+// ForgetGitDeliveries removes delivery ids received before t, and the
+// oldest beyond max (up to 10000 of those per call).
+func (s *Store) ForgetGitDeliveries(ctx context.Context, before time.Time, max int) (int, error) {
+	removed := 0
+	err := s.tx(ctx, func(r repos) error {
+		extra, err := r.gitDelivs.Find(ctx, ablage.Query{
+			OrderBy: []ablage.Order{ablage.Desc("received_at"), ablage.Desc("id")},
+			Offset:  max, Limit: 10000,
+		})
+		if err != nil {
+			return err
+		}
+		ids := make([]string, len(extra))
+		for i, d := range extra {
+			ids[i] = d.ID
+		}
+		n, err := r.gitDelivs.DeleteWhere(ctx, ablage.Or(ablage.Lt("received_at", seconds(before)), ablage.In("id", ids...)))
+		removed = int(n)
+		return err
+	})
+	return removed, err
 }

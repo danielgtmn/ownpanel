@@ -187,6 +187,10 @@ type Service struct {
 	githubRepos githubRepoCache
 	// githubHooks limits GitHub's deliveries (github_webhook.go).
 	githubHooks githubHooks
+	// gitChecks limits connections people make to Git hosts, gitHooks
+	// the notifications of Git hosts (gitsource.go, gitnotify.go).
+	gitChecks gitChecks
+	gitHooks  gitHooks
 }
 
 // New returns a Service. It rejects invalid web server options up front, and

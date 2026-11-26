@@ -88,7 +88,8 @@ func TestSiteSources(t *testing.T) {
 		}
 		// A Git source keeps its sealed values.
 		git := SiteSource{Site: "shop", Kind: SourceGit, Repository: "git@example.org:shop.git", Branch: "main",
-			DeployKey: []byte{4}, NotifySecret: []byte{5}}
+			DeployKey: []byte{4}, NotifySecret: []byte{5}, DeployPublicKey: "ssh-ed25519 A", HostKey: "ssh-ed25519 B",
+			NotifyID: "0123456789abcdef0123456789abcdef"}
 		if got, err := s.PutSiteSource(ctx, git, ""); err != nil || string(got.DeployKey) != "\x04" ||
 			string(got.NotifySecret) != "\x05" || got.InstallationID != 0 || got.RepositoryID != 0 {
 			t.Fatalf("git source: %+v %v", got, err)
