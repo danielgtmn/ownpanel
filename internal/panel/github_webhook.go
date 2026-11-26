@@ -203,6 +203,9 @@ func (s *Service) ReceiveGitHubDelivery(ctx context.Context, d GitHubDelivery) (
 		return GitHubDeliveryResult{}, err
 	}
 	slog.Info("GitHub delivery", "delivery", d.ID, "event", d.Event, "connection", app.ID, "result", res.Result, "runs", res.Runs)
+	if res.Runs > 0 {
+		s.wakeRunner()
+	}
 	return res, nil
 }
 

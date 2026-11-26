@@ -46,7 +46,7 @@ func newBuildWorld(t *testing.T) *buildWorld {
 	svc := h.svc
 	svc.builds = b.fake.Client()
 	svc.build.poll = 5 * time.Millisecond
-	svc.runner.poll = 20 * time.Millisecond
+	svc.runner.poll = time.Hour // runs must wake the runner
 	t.Cleanup(b.stopRunner)
 	b.startRunner()
 	return b
