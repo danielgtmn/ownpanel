@@ -156,6 +156,14 @@ func (s *Server) Serve(l net.Listener) error {
 		s.mu.Unlock()
 		return errors.New("smtpd: already serving")
 	}
+	select {
+	case <-s.done:
+		// Shutdown or Close came first: never start accepting.
+		s.mu.Unlock()
+		l.Close()
+		return nil
+	default:
+	}
 	s.ln = newLimitListener(l, d.Limits().ConnectionsPerIP, s.opts.MaxConnections, s.opts.IdleTimeout)
 	refusal := func(line string) string { return line }
 	if s.opts.ImplicitTLS {
@@ -298,6 +306,7 @@ func (s *Server) Close() error {
 	s.mu.Unlock()
 	if g != nil {
 		g.srv.Close()
+		g.ln.Close() // see retire
 		g.run.Wait()
 	}
 	return s.closeListener()
