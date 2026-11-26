@@ -7,6 +7,7 @@ export {
   updateSettings,
   type PanelChecks,
   type PanelSettings,
+  type PreviewDnsCheck,
   type SettingsChange,
 } from './api.ts'
 export { AddressPicker, ADDRESSES_PURPOSE } from './AddressPicker.tsx'

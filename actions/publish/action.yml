@@ -1,5 +1,5 @@
 name: Publish to ownpanel
-description: Upload a built static site to an ownpanel site as a new version and make it live.
+description: Upload a built static site to an ownpanel site as a new version and make it live, or only add it as a preview.
 author: ownpanel
 branding:
   icon: upload-cloud
@@ -24,6 +24,13 @@ inputs:
     description: Seconds to wait for the upload and for the site to be served.
     required: false
     default: "300"
+  live:
+    description: >-
+      "true" makes the new version live at once. "false" only adds it: the
+      live version stays, and the new one can be opened at its preview
+      address (output preview-url) and made live later in the panel.
+    required: false
+    default: "true"
 
 outputs:
   version:
@@ -32,6 +39,11 @@ outputs:
   url:
     description: Address of the site (its first domain), empty if it has no domain.
     value: ${{ steps.publish.outputs.url }}
+  preview-url:
+    description: >-
+      Address where the new version can be opened, live or not. Anyone with it
+      can open the version. Empty if the panel has no domain for previews.
+    value: ${{ steps.publish.outputs.preview-url }}
 
 runs:
   using: composite
@@ -45,4 +57,5 @@ runs:
         OWNPANEL_SITE: ${{ inputs.site }}
         OWNPANEL_PATH: ${{ inputs.path }}
         OWNPANEL_TIMEOUT: ${{ inputs.timeout }}
+        OWNPANEL_LIVE: ${{ inputs.live }}
       run: bash "$GITHUB_ACTION_PATH/publish.sh"
