@@ -333,6 +333,7 @@ func TestToolsAndAnnotations(t *testing.T) {
 		"list_site_source_branches":     {readOnly: true, idempotent: true},
 		"link_site_source":              {destructive: true, idempotent: true},
 		"unlink_site_source":            {destructive: true},
+		"list_site_runs":                {readOnly: true, idempotent: true},
 		"list_dns_connections":          {readOnly: true, idempotent: true},
 		"list_dns_records":              {readOnly: true, idempotent: true},
 		"set_dns_record":                {destructive: true, idempotent: true},

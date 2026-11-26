@@ -123,6 +123,9 @@ type Server struct {
 	// back at once. A browser needs it: the panel's page only allows its
 	// form to go to GitHub, and that rule also covers redirects.
 	AskToConfirm bool
+	// Dev serves /_dev/push (see devPush). Set it before the first
+	// request.
+	Dev bool
 
 	mu       sync.Mutex
 	nextID   int64
@@ -393,6 +396,16 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /api/v3/installation/repositories", s.listRepos)
 	mux.HandleFunc("GET /api/v3/repos/{owner}/{repo}/branches", s.listBranches)
 	mux.HandleFunc("GET /api/v3/repos/{owner}/{repo}/branches/{branch...}", s.getBranch)
+	mux.HandleFunc("GET /_dev/push", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		dev := s.Dev
+		s.mu.Unlock()
+		if !dev {
+			http.NotFound(w, r)
+			return
+		}
+		s.devPush(w, r)
+	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := r.Method + " " + r.URL.Path
 		s.mu.Lock()

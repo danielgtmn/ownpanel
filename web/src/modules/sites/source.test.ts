@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { branchChoices, initialBranch, repositoryKey, sourceProblem, type SiteSource } from './source.ts'
+import {
+  branchChoices,
+  initialBranch,
+  repositoryKey,
+  runAuthor,
+  runStatus,
+  sourceProblem,
+  type Run,
+  type SiteSource,
+} from './source.ts'
 
 const source = (patch: Partial<SiteSource>): SiteSource => ({
   kind: 'github',
@@ -44,4 +53,35 @@ describe('branches', () => {
 it('keys repositories by installation and id', () => {
   expect(repositoryKey({ installation_id: 3, id: 7 })).toBe('3:7')
   expect(repositoryKey({ installation_id: 3, repository_id: 7 })).toBe('3:7')
+})
+
+const run = (patch: Partial<Run>): Run => ({
+  id: '1',
+  site: 'blog',
+  trigger: 'push',
+  status: 'queued',
+  repository: 'acme/site',
+  ref: 'refs/heads/main',
+  branch: 'main',
+  commit: '6113728f27ae82c7b1a177c8d03f9e96e0adf246',
+  short_commit: '6113728',
+  message: 'Fix the header',
+  author_name: 'Ann Author',
+  author_login: 'ann',
+  created_at: '2026-11-26T10:00:00Z',
+  ...patch,
+})
+
+describe('runs', () => {
+  it('names every status', () => {
+    expect(runStatus(run({}))).toEqual({ label: 'Waiting', tone: 'neutral' })
+    expect(runStatus(run({ status: 'succeeded' })).tone).toBe('positive')
+    expect(runStatus(run({ status: 'failed' })).tone).toBe('warning')
+    expect(runStatus(run({ status: 'skipped' })).label).toBe('Replaced by a newer push')
+  })
+  it('names the author', () => {
+    expect(runAuthor(run({}))).toBe('Ann Author (ann)')
+    expect(runAuthor(run({ author_name: 'ann' }))).toBe('ann')
+    expect(runAuthor(run({ author_name: '', author_login: undefined, pusher: 'bob' }))).toBe('bob')
+  })
 })

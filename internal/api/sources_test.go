@@ -61,7 +61,7 @@ func TestSiteSourceOverHTTP(t *testing.T) {
 	}
 
 	rec := e.as("GET", "/api/sites/blog/source", "")
-	if rec.Code != 200 || rec.Body.String() != `{"site":"blog","source":null,"publishing_available":false}`+"\n" {
+	if rec.Code != 200 || rec.Body.String() != `{"site":"blog","source":null,"publishing_available":false,"last_run":null}`+"\n" {
 		t.Fatalf("no source: %d %q", rec.Code, rec.Body)
 	}
 	rec = e.as("GET", "/api/sites/blog/source/repositories", "")

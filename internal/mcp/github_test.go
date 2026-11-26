@@ -140,9 +140,34 @@ func TestGitHubTools(t *testing.T) {
 	refused(t, call_(t, wcs, "link_site_source", with(link, "branch", "gone")), "has no branch")
 	refused(t, call_(t, cs, "link_site_source", link), "can only read")
 	ok(t, call_(t, cs, "get_site_source", map[string]any{"site": "blog"}), &src)
-	if src.Source == nil || src.Source.Branch != "main" {
+	if src.Source == nil || src.Source.Branch != "main" || src.LastRun != nil {
 		t.Fatalf("read token sees: %+v", src)
 	}
+
+	// A push to the branch shows up as a run.
+	var runs siteRunsOutput
+	ok(t, call_(t, cs, "list_site_runs", map[string]any{"site": "blog"}), &runs)
+	if len(runs.Runs) != 0 || runs.Kept != panel.RunsKept || runs.PublishingAvailable {
+		t.Fatalf("no runs yet: %+v", runs)
+	}
+	body := gh.PushPayload(githubtest.Push{RepoID: r.RepositoryID, InstallationID: r.InstallationID, Ref: "refs/heads/main",
+		After: "6113728f27ae82c7b1a177c8d03f9e96e0adf246", Message: "Fix it", AuthorName: "Ann", AuthorLogin: "ann", Pusher: "ann"})
+	hd := gh.Headers(app.AppID, "push", "mcp-1", body)
+	res, err := e.svc.ReceiveGitHubDelivery(ctx, panel.GitHubDelivery{ID: "mcp-1", Event: "push", TargetType: github.TargetTypeApp,
+		TargetID: hd.Get(github.HeaderTargetID), Signature: hd.Get(github.HeaderSignature), Body: body})
+	if err != nil || res.Runs != 1 {
+		t.Fatalf("push: %+v %v", res, err)
+	}
+	ok(t, call_(t, cs, "list_site_runs", map[string]any{"site": "blog"}), &runs)
+	if len(runs.Runs) != 1 || runs.Runs[0].ID == "" || runs.Runs[0].Status != "queued" || runs.Runs[0].Message != "Fix it" ||
+		runs.Runs[0].Commit != "6113728f27ae82c7b1a177c8d03f9e96e0adf246" || runs.Runs[0].Waiting == "" || runs.Runs[0].Branch != "main" {
+		t.Fatalf("runs: %+v", runs)
+	}
+	ok(t, call_(t, cs, "get_site_source", map[string]any{"site": "blog"}), &src)
+	if src.LastRun == nil || src.LastRun.ID != runs.Runs[0].ID {
+		t.Fatalf("last run: %+v", src.LastRun)
+	}
+	refused(t, call_(t, bcs, "list_site_runs", map[string]any{"site": "blog"}), "not found")
 	var unlinked unlinkSourceOutput
 	ok(t, call_(t, wcs, "unlink_site_source", map[string]any{"site": "blog"}), &unlinked)
 	refused(t, call_(t, wcs, "unlink_site_source", map[string]any{"site": "blog"}), "no source")
