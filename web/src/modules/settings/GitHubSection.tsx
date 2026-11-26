@@ -8,7 +8,9 @@ import { formatDate, isoTimestamp } from '../../shared/format/index.ts'
 import { useResource } from '../../shared/hooks/index.ts'
 import { clearQuery, useQuery } from '../../shared/routing/index.ts'
 import { EmptyState, ErrorState, ExternalIcon, FormDialog, LoadingState, Section } from '../../shared/ui/index.ts'
+import { hrefFor } from '../../shared/routing/index.ts'
 import { ConnectGitHubDialog } from './ConnectGitHubDialog.tsx'
+import { RepositoriesDialog } from './RepositoriesDialog.tsx'
 import {
   accountLabel,
   finishChoosingRepositories,
@@ -18,8 +20,11 @@ import {
   refreshGitHub,
   removeConnection,
   repositoriesLabel,
+  sitesLabel,
   startChoosingRepositories,
   type GitHubConnection,
+  type GitHubInstallation,
+  type GitHubLinkedSite,
   type GitHubRemoved,
   type GitHubReturn,
 } from './github.ts'
@@ -33,9 +38,13 @@ async function chooseRepositories(connection: GitHubConnection) {
   }
 }
 
-type RowProps = { connection: GitHubConnection; onRemove: (connection: GitHubConnection) => Promise<void> }
+type RowProps = {
+  connection: GitHubConnection
+  onRemove: (connection: GitHubConnection) => Promise<void>
+  onShowRepositories?: (installation: GitHubInstallation) => void
+}
 
-export function ConnectionRow({ connection, onRemove }: RowProps) {
+export function ConnectionRow({ connection, onRemove, onShowRepositories }: RowProps) {
   const installed = connection.installations.length > 0
   return (
     <li className="record-row">
@@ -66,7 +75,18 @@ export function ConnectionRow({ connection, onRemove }: RowProps) {
                     Paused on GitHub, so the panel can't use it.
                   </span>
                 ) : null}
+                {installation.sites.length > 0 ? (
+                  <span className="muted"> · used by {sitesLabel(installation.sites.length)}</span>
+                ) : null}
                 {' · '}
+                {onShowRepositories ? (
+                  <>
+                    <button type="button" className="link-button" onClick={() => onShowRepositories(installation)}>
+                      Show repositories<span className="visually-hidden"> of {installation.account}</span>
+                    </button>
+                    {' · '}
+                  </>
+                ) : null}
                 <a className="inline-link" href={installation.settings_url} target="_blank" rel="noreferrer noopener">
                   Change on GitHub
                   <ExternalIcon />
@@ -123,6 +143,30 @@ function RemovedDialog({ removed, onClose }: { removed: GitHubRemoved | null; on
   )
 }
 
+/** Sites linked to a repository whose connection was removed: nothing is published from them. */
+export function SitesWithoutConnection({ sites }: { sites: GitHubLinkedSite[] }) {
+  if (sites.length === 0) return null
+  return (
+    <div className="notice github-orphans" role="status">
+      <p>
+        {sites.length === 1
+          ? 'This site is linked to a repository whose connection was removed. Nothing is published from it until it is linked again or unlinked on its page:'
+          : 'These sites are linked to repositories whose connection was removed. Nothing is published from them until they are linked again or unlinked on their pages:'}
+      </p>
+      <ul>
+        {sites.map((site) => (
+          <li key={site.site}>
+            <a href={hrefFor('sites', site.site)}>{site.site}</a>{' '}
+            <span className="muted">
+              ({site.repository}, <span className="github-branch">{site.branch}</span>)
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 const sentence = (text: string) => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`)
 
 // GitHub sends people back with codes that work once; StrictMode runs effects twice.
@@ -161,6 +205,7 @@ export function GitHubSection({ onSetPanelDomain }: { onSetPanelDomain?: () => v
   const query = useQuery()
   const [connecting, setConnecting] = useState(false)
   const [removed, setRemoved] = useState<GitHubRemoved | null>(null)
+  const [browsing, setBrowsing] = useState<GitHubInstallation | null>(null)
   const reload = github.reload
 
   const returned = query.has('github') ? query.toString() : ''
@@ -246,10 +291,12 @@ export function GitHubSection({ onSetPanelDomain }: { onSetPanelDomain?: () => v
       {connections.length > 0 ? (
         <ul className="record-list" aria-label="Connected GitHub accounts">
           {connections.map((connection) => (
-            <ConnectionRow key={connection.id} connection={connection} onRemove={remove} />
+            <ConnectionRow key={connection.id} connection={connection} onRemove={remove} onShowRepositories={setBrowsing} />
           ))}
         </ul>
       ) : null}
+      {github.status === 'ready' ? <SitesWithoutConnection sites={github.data.sites_without_connection ?? []} /> : null}
+      <RepositoriesDialog installation={browsing} onClose={() => setBrowsing(null)} />
       <ConnectGitHubDialog
         open={connecting}
         onOpenChange={setConnecting}

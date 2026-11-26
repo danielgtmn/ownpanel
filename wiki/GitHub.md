@@ -1,6 +1,6 @@
 # GitHub
 
-An administrator connects ownpanel to a GitHub account or organisation in a few clicks. Later steps use the connection to publish a site from a repository on every push ([#108](https://github.com/danielgtmn/ownpanel/issues/108), [#109](https://github.com/danielgtmn/ownpanel/issues/109), [#113](https://github.com/danielgtmn/ownpanel/issues/113)). Today the panel connects, shows the accounts and lists their repositories, a site can be linked to a repository and branch ([[Linking a site|Sites-and-Publishing#source-repository-and-branch]]), and GitHub tells the panel about every push, which the panel records as a **run** of the site ([below](#what-happens-on-a-push)). Building and publishing is not available yet: a run waits until building on the server is available ([#113](https://github.com/danielgtmn/ownpanel/issues/113)).
+An administrator connects ownpanel to a GitHub account or organisation in a few clicks. Later steps use the connection to publish a site from a repository on every push ([#108](https://github.com/danielgtmn/ownpanel/issues/108), [#109](https://github.com/danielgtmn/ownpanel/issues/109), [#113](https://github.com/danielgtmn/ownpanel/issues/113)). Today the panel connects, shows the accounts and lists their repositories, a site can be linked to a repository and branch ([[Linking a site|Sites-and-Publishing#source-repository-and-branch]]), and GitHub tells the panel about every push, which the panel records as a **run** of the site and lists on the site page ([below](#what-happens-on-a-push)). Building and publishing is not available yet: a run waits until building on the server is available ([#113](https://github.com/danielgtmn/ownpanel/issues/113)).
 
 To publish from GitHub without connecting anything, use the [[GitHub Action|GitHub-Action]]: it builds in GitHub's CI and uploads the result.
 
@@ -15,7 +15,7 @@ The panel creates **its own GitHub App**, the way Coolify and Dokploy do. There 
 
 A private GitHub App can only be installed on the account that owns it. So **every account or organisation gets its own app**: "Add another account" repeats the steps for the next one. A public app would avoid that, but anyone on GitHub could then install it and send their repositories into your panel.
 
-**Change on GitHub** next to an account opens GitHub's page where you choose other repositories; GitHub then sends you back and the panel updates. **Check again** asks GitHub afresh where the app is installed and how many repositories it may see (for example after changes made directly on GitHub). The list of repositories is kept for a minute.
+Each account in **Settings → GitHub** shows how many repositories the panel may see and how many sites are linked to them. **Show repositories** lists them, with whether each is private or archived, its default branch and the sites linked to it (with their branch); sites can be linked to any of them. **Change on GitHub** next to an account opens GitHub's page where you choose other repositories; GitHub then sends you back and the panel updates. **Check again** asks GitHub afresh where the app is installed and how many repositories it may see (for example after changes made directly on GitHub). The list of repositories is kept for a minute.
 
 ### Requirements
 
@@ -52,7 +52,16 @@ GitHub sends a notice to `https://<panel domain>/api/github/webhook` for every p
 
 - **A push to the linked branch** of a site with **publish on push** on records a **run** for that site: the commit, its message (first line), its author, who pushed, and the time. Several sites linked to the same repository and branch each get their own run. Sites are found by GitHub's numeric ids of the repository and the installation, never by name.
 - A run starts as **waiting** (`queued`). Today it stays that way: building on the server is not there yet ([#113](https://github.com/danielgtmn/ownpanel/issues/113)), and the site page and the API say so. A newer push replaces a run that has not started (it becomes **replaced by a newer push**, `skipped`).
-- The Source section on the site page shows the latest push with its commit, message, author, status and time. The list of runs with logs comes later ([#110](https://github.com/danielgtmn/ownpanel/issues/110), [#115](https://github.com/danielgtmn/ownpanel/issues/115)). The panel keeps the last 30 runs of each site.
+- The **Builds** section on the site page lists the site's runs, newest first: the commit (its short id links to the commit on GitHub), its message, its author, what started it (a push), the status and the time. It looks for new pushes every 20 seconds while the page is open. **Details** opens one run with everything the panel knows about it: who pushed, the repository and branch, when it was received, started and finished, and why it waits, was replaced or failed. The output of the build will be shown there too once builds on the server exist ([#115](https://github.com/danielgtmn/ownpanel/issues/115)). The panel keeps the last 30 runs of each site.
+
+  | Status | Meaning |
+  |---|---|
+  | Waiting | received, not built yet (today: until building on the server is available) |
+  | Building | being built |
+  | Published | built and made live |
+  | Failed | the build did not finish; the details say why |
+  | Cancelled | stopped before it finished |
+  | Replaced by a newer push | a newer push came before this one was built |
 
 **No run** is recorded for: pushes of tags, pushes that delete a branch, pushes to other branches, sites with publish on push off, sites whose connection is missing, whose repository the app no longer sees or whose access is paused on GitHub, and pushes older than seven days.
 
@@ -79,7 +88,7 @@ Members who want to publish from their own repositories use the [[GitHub Action|
 
 ## Removing a connection
 
-**Remove** forgets the app's private key and secrets and its installations. The panel can no longer use the app. Sites keep their published versions. Sites linked to one of its repositories keep the link, marked **connection missing** on the site page (status `connection_missing` in the API): the repository and branch stay visible, nothing is published from them, and an administrator links the site again (after connecting the account again) or unlinks it. The same happens when the app is uninstalled on GitHub and **Check again** notices it.
+**Remove** forgets the app's private key and secrets and its installations. The panel can no longer use the app. Sites keep their published versions. Sites linked to one of its repositories keep the link, marked **connection missing** on the site page (status `connection_missing` in the API): the repository and branch stay visible, nothing is published from them, and an administrator links the site again (after connecting the account again) or unlinks it. **Settings → GitHub** lists such sites under the accounts, with links to their pages. The same happens when the app is uninstalled on GitHub and **Check again** notices it.
 
 The app itself stays on GitHub until you delete it there: the panel shows a link to its settings page, where **Advanced → Delete GitHub App** removes it and all its installations. Do that too; an app whose key exists nowhere any more is harmless but clutters your account.
 
