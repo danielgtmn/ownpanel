@@ -1,6 +1,6 @@
 import { request } from '../api/client.ts'
 import { encodeSegment } from '../api/path.ts'
-import type { Connection, NewConnection, Zone, ZoneList } from './types.ts'
+import type { AddedDomain, Connection, NewConnection, RemovedDomain, Zone, ZoneList } from './types.ts'
 
 export const connectionPath = (id: number) => `/dns/connections/${encodeSegment(String(id))}`
 
@@ -58,3 +58,21 @@ export async function createZone(connectionId: number, name: string): Promise<Zo
 export function deleteZone(connectionId: number, zone: string, confirm: string): Promise<void> {
   return request<void>(zonePath(connectionId, zone), { method: 'DELETE', body: { confirm } })
 }
+
+/** The domains the person added by hand because their DNS is managed elsewhere. */
+export async function listAddedDomains(): Promise<AddedDomain[]> {
+  return ((await request<AddedDomain[] | null>('/domains')) ?? []).map(addedOf)
+}
+
+/** Keeps a domain whose DNS is managed elsewhere in the panel; nothing changes at any provider. Adding again is fine. */
+export async function addDomain(name: string): Promise<AddedDomain> {
+  return addedOf(await request<AddedDomain>('/domains', { method: 'POST', body: { name } }))
+}
+
+/** Removes a domain added by hand. used_by says what of the person still keeps it in the panel. */
+export async function removeAddedDomain(name: string): Promise<RemovedDomain> {
+  const removed = await request<RemovedDomain>(`/domains/${encodeSegment(name)}`, { method: 'DELETE' })
+  return { ...removed, used_by: removed.used_by ?? [] }
+}
+
+const addedOf = (domain: AddedDomain): AddedDomain => ({ ...domain, used_by: domain.used_by ?? [] })

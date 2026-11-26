@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { adoptZone, createZone, listAvailableZones, listZones, releaseZone } from './api.ts'
+import {
+  addDomain,
+  adoptZone,
+  createZone,
+  listAddedDomains,
+  listAvailableZones,
+  listZones,
+  releaseZone,
+  removeAddedDomain,
+} from './api.ts'
 import { connectionHealth, isOwnConnection, ownConnections, validateConnection, zoneCountLabel } from './connections.ts'
 import type { Connection, Zone } from './types.ts'
 import { groupByAccount, staysBecause, zoneKey, zonesNamed } from './zones.ts'
@@ -118,5 +127,28 @@ describe('domain requests', () => {
       'DELETE /api/dns/connections/4/zones/example.com/managed',
       'POST /api/dns/connections/4/zones',
     ])
+  })
+
+  it('adds, lists and removes domains whose DNS is managed elsewhere', async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE') return json({ name: 'example.com', used_by: ['the site blog (blog.example.com)'] })
+      if (init?.method === 'POST') return json({ name: 'example.com', created_at: '2026-01-01T00:00:00Z', used_by: null })
+      return url === '/api/domains' ? json(null) : json({ error: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(listAddedDomains()).resolves.toEqual([])
+    await expect(addDomain('example.com')).resolves.toEqual({
+      name: 'example.com',
+      created_at: '2026-01-01T00:00:00Z',
+      used_by: [],
+    })
+    const removed = await removeAddedDomain('example.com')
+    expect(staysBecause(removed)).toBe('example.com stays here while it is used by the site blog (blog.example.com).')
+    expect(fetchMock.mock.calls.map(([url, init]) => `${init?.method ?? 'GET'} ${url}`)).toEqual([
+      'GET /api/domains',
+      'POST /api/domains',
+      'DELETE /api/domains/example.com',
+    ])
+    expect(fetchMock.mock.calls[1][1]?.body).toBe('{"name":"example.com"}')
   })
 })

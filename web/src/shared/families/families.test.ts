@@ -71,6 +71,22 @@ describe('buildFamilies', () => {
     expect(family.servedDomains).toEqual([])
   })
 
+  it('makes a family of a domain added by hand, whose DNS is managed elsewhere', () => {
+    const families = buildFamilies({
+      ...empty,
+      sites: [{ name: 'blog', domains: ['blog.example.com'], live: true }],
+      domains: ['Elsewhere.ORG.', 'example.com', 'elsewhere.org'],
+    })
+    expect(families.map((family) => [family.domain, family.added])).toEqual([
+      ['elsewhere.org', ['elsewhere.org']],
+      ['example.com', ['example.com']],
+    ])
+    const [alone] = families
+    expect(familyStatus(alone, {})).toBe('idle')
+    expect(familySummary(alone)).toBe('DNS managed elsewhere')
+    expect(families[1].sites.map((site) => site.name)).toEqual(['blog'])
+  })
+
   it('never makes a family of the panel address', () => {
     // Older callers may still hand in the panel's address; it must not create or change a family.
     const sources = { ...empty, panelDomain: 'panel.hosting.io' } as DomainSources
