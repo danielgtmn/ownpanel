@@ -28,8 +28,8 @@ const (
 type dnsEnv struct {
 	*env
 	hz      map[string]*hetznertest.Server
-	rootDNS int64 // root's connection
-	bobDNS  int64 // bob's connection
+	rootDNS string // root's connection
+	bobDNS  string // bob's connection
 	bob     string
 	bobRead string
 	seen    []string // every tool answer, to check that no provider token leaks
@@ -183,7 +183,7 @@ func TestDNSRecordTools(t *testing.T) {
 	// Mistakes read like sentences.
 	refused(t, d.call(t, root, "set_dns_record", www(map[string]any{"values": []string{"not-an-address"}})), "is not an IP address")
 	refused(t, d.call(t, root, "list_dns_records", map[string]any{"connection_id": d.rootDNS, "domain": "other.example"}), "not part of the DNS connection")
-	refused(t, d.call(t, root, "list_dns_records", map[string]any{"connection_id": 9999, "domain": "example.com"}), "not found")
+	refused(t, d.call(t, root, "list_dns_records", map[string]any{"connection_id": "9999", "domain": "example.com"}), "not found")
 
 	// A read-only token reads but never writes.
 	ro := d.connect(t, d.read)

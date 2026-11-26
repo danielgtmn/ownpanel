@@ -116,7 +116,7 @@ func addDNSTools(s *sdk.Server, p *panel.Service) {
 }
 
 type dnsConnectionInfo struct {
-	ID            int64  `json:"id" jsonschema:"connection id; pass it as connection_id to the other DNS tools"`
+	ID            string `json:"id" jsonschema:"connection id; pass it as connection_id to the other DNS tools"`
 	Provider      string `json:"provider" jsonschema:"the DNS provider, e.g. hetzner"`
 	Name          string `json:"name" jsonschema:"name the user gave the connection"`
 	Owner         string `json:"owner" jsonschema:"user who added the connection; only that user can use it"`
@@ -148,7 +148,7 @@ type dnsRecordsOutput struct {
 }
 
 type setDNSRecordInput struct {
-	ConnectionID int64    `json:"connection_id" jsonschema:"id of your DNS connection that holds the domain, from list_dns_domains"`
+	ConnectionID string   `json:"connection_id" jsonschema:"id of your DNS connection that holds the domain, from list_dns_domains"`
 	Domain       string   `json:"domain" jsonschema:"the domain (zone) as shown by list_dns_domains, e.g. example.com"`
 	Name         string   `json:"name" jsonschema:"name relative to the domain: @ for the domain itself, www for www.example.com"`
 	Type         string   `json:"type" jsonschema:"record type: A, AAAA, CNAME, MX, TXT, CAA, SRV, NS, ..."`
@@ -161,7 +161,7 @@ type dnsRecordOutput struct {
 }
 
 type dnsRecordKeyInput struct {
-	ConnectionID int64  `json:"connection_id" jsonschema:"id of your DNS connection that holds the domain, from list_dns_domains"`
+	ConnectionID string `json:"connection_id" jsonschema:"id of your DNS connection that holds the domain, from list_dns_domains"`
 	Domain       string `json:"domain" jsonschema:"the domain (zone) as shown by list_dns_domains, e.g. example.com"`
 	Name         string `json:"name" jsonschema:"name relative to the domain, as shown by list_dns_records: @ for the domain itself"`
 	Type         string `json:"type" jsonschema:"record type, e.g. A or TXT"`
@@ -176,7 +176,7 @@ type domainInput struct {
 }
 
 type domainZoneInfo struct {
-	ConnectionID   int64  `json:"connection_id" jsonschema:"id of your DNS connection that holds the domain"`
+	ConnectionID   string `json:"connection_id" jsonschema:"id of your DNS connection that holds the domain"`
 	ConnectionName string `json:"connection_name" jsonschema:"name of that DNS connection"`
 	Zone           string `json:"zone" jsonschema:"the DNS domain (zone) the records are in"`
 	RecordName     string `json:"record_name" jsonschema:"name of the records within that zone, @ for the zone itself"`
