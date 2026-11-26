@@ -103,14 +103,14 @@ func needMailWrite(a Actor) error {
 	if err := needWrite(a); err != nil {
 		return err
 	}
-	if a.Via == ViaSystem || a.UserID == 0 {
+	if a.Via == ViaSystem || a.UserID == "" {
 		return errorf(Forbidden, "e-mail must be managed by a person")
 	}
 	return nil
 }
 
-func (a Actor) canSeeMail(ownerID int64) bool {
-	return a.authenticated() && a.Sites == nil && (a.Admin || (a.UserID != 0 && ownerID == a.UserID))
+func (a Actor) canSeeMail(ownerID string) bool {
+	return a.authenticated() && a.Sites == nil && (a.Admin || (a.UserID != "" && ownerID == a.UserID))
 }
 
 // visibleMailDomain returns a mail domain the actor may see; others answer

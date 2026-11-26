@@ -2,6 +2,7 @@ package panel
 
 import (
 	"github.com/danielgtmn/sesam"
+	"strconv"
 
 	"archive/tar"
 	"bytes"
@@ -73,7 +74,7 @@ func TestMain(m *testing.M) {
 }
 
 // admin is the signed-in first user of every test service.
-var admin = Actor{UserID: 1, Name: "root", Admin: true, Via: ViaSession}
+var admin = Actor{UserID: "1", Name: "root", Admin: true, Via: ViaSession}
 
 func newService(t *testing.T) (*Service, *fakeWeb, string) {
 	t.Helper()
@@ -130,6 +131,7 @@ func newEmptyService(t *testing.T) (*Service, *fakeWeb, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
+	st.NewUserID = countingIDs()
 	sites := filepath.Join(dir, "sites")
 	web := &fakeWeb{}
 	svc, err := New(Config{
@@ -587,11 +589,12 @@ func mustSites(t *testing.T, svc *Service) []Site {
 	return list
 }
 
-// mustStoreID is the store key of a public id in tests.
-func mustStoreID(id string) int64 {
-	n, err := storeID(id, "record")
-	if err != nil {
-		panic(err)
+// countingIDs makes the ids "1", "2", … for the users of a test service,
+// so the actors above can name them.
+func countingIDs() func() string {
+	n := 0
+	return func() string {
+		n++
+		return strconv.Itoa(n)
 	}
-	return n
 }

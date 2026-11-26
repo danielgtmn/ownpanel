@@ -67,7 +67,7 @@ type RedirectInput struct {
 
 func redirectView(r store.Redirect) Redirect {
 	return Redirect{
-		ID: idString(r.ID), Owner: r.Owner, SourceDomain: r.SourceDomain, SourcePath: r.SourcePath, Target: r.Target,
+		ID: r.ID, Owner: r.Owner, SourceDomain: r.SourceDomain, SourcePath: r.SourcePath, Target: r.Target,
 		Code: r.Code, KeepPath: r.KeepPath, KeepQuery: r.KeepQuery, CreatedAt: r.CreatedAt,
 	}
 }
@@ -100,7 +100,7 @@ func (a Actor) canSeeRedirect(r store.Redirect, sites map[string]store.Site) boo
 		site, ok := sites[r.SiteName]
 		return ok && a.canSee(site)
 	}
-	return a.Sites == nil && (a.Admin || (a.UserID != 0 && r.OwnerID == a.UserID))
+	return a.Sites == nil && (a.Admin || (a.UserID != "" && r.OwnerID == a.UserID))
 }
 
 // needRedirectWrite: changing redirects needs write access and a person.
@@ -111,7 +111,7 @@ func needRedirectWrite(a Actor) error {
 	if err := needWrite(a); err != nil {
 		return err
 	}
-	if a.Via == ViaSystem || a.UserID == 0 {
+	if a.Via == ViaSystem || a.UserID == "" {
 		return errorf(Forbidden, "redirects must be changed by a person")
 	}
 	return nil
@@ -123,10 +123,7 @@ func (s *Service) visibleRedirect(ctx context.Context, a Actor, redirectID strin
 	if err := needAuth(a); err != nil {
 		return store.Redirect{}, nil, err
 	}
-	id, err := storeID(redirectID, "redirect")
-	if err != nil {
-		return store.Redirect{}, nil, err
-	}
+	id := redirectID
 	r, err := s.store.Redirect(ctx, id)
 	if err != nil {
 		return store.Redirect{}, nil, storeError(err)
@@ -301,7 +298,7 @@ func (s *Service) validRedirect(in RedirectInput) (store.Redirect, error) {
 
 // placeRedirect completes a validated redirect with its site and owner and
 // checks that the actor may have it there.
-func (s *Service) placeRedirect(a Actor, r *store.Redirect, sites map[string]store.Site, owner int64) error {
+func (s *Service) placeRedirect(a Actor, r *store.Redirect, sites map[string]store.Site, owner string) error {
 	if r.SourcePath == "" {
 		if a.Sites != nil {
 			return errorf(Forbidden, "this access token is limited to certain sites and cannot manage domain redirects")

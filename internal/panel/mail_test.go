@@ -206,9 +206,9 @@ type mailWorld struct {
 	mail     *fakeMail
 	mx       *fakeMX
 	now      time.Time
-	bobBox   int64 // info@bobsite.example.com
-	rootBox  int64 // root@rootsite.example.com
-	bobAlias int64 // sales@bobsite.example.com
+	bobBox   string // info@bobsite.example.com
+	rootBox  string // root@rootsite.example.com
+	bobAlias string // sales@bobsite.example.com
 }
 
 // newMailWorld: the permission world with mail. bob has the active mail
@@ -242,7 +242,7 @@ func newMailWorld(t *testing.T) *mailWorld {
 			t.Fatalf("enable %s: %+v %v", c.d, d, err)
 		}
 	}
-	add := func(domain, local string) int64 {
+	add := func(domain, local string) string {
 		m, err := svc.store.CreateMailbox(ctx, store.Mailbox{StorageID: newStorageID(), Domain: domain, LocalPart: local,
 			PasswordHash: testHash(), QuotaBytes: DefaultQuotaBytes, SendPerHour: 100, SendPerDay: 500}, 0)
 		if err != nil {
@@ -255,7 +255,7 @@ func newMailWorld(t *testing.T) *mailWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.bobAlias = mustStoreID(a.ID)
+	w.bobAlias = a.ID
 	return w
 }
 
@@ -302,7 +302,7 @@ func TestMailPermissionMatrix(t *testing.T) {
 			return w.svc.DeleteMailDomain(ctx, a, "rootsite.example.com", "rootsite.example.com")
 		}, []Kind{ok, ok, N, N, F, F, F, U, F}},
 		{"list mailboxes", func(w *mailWorld, a Actor) error { _, err := w.svc.Mailboxes(ctx, a, ""); return err }, read},
-		{"get admin's mailbox", func(w *mailWorld, a Actor) error { _, err := w.svc.MailboxOf(ctx, a, idString(w.rootBox)); return err },
+		{"get admin's mailbox", func(w *mailWorld, a Actor) error { _, err := w.svc.MailboxOf(ctx, a, w.rootBox); return err },
 			[]Kind{ok, ok, N, N, F, ok, F, U, ok}},
 		{"create mailbox", func(w *mailWorld, a Actor) error {
 			_, err := w.svc.CreateMailbox(ctx, a, "bobsite.example.com", MailboxInput{LocalPart: "new", Password: "short"})
@@ -312,33 +312,33 @@ func TestMailPermissionMatrix(t *testing.T) {
 			return err
 		}, write},
 		{"set mailbox password", func(w *mailWorld, a Actor) error {
-			err := w.svc.SetMailboxPassword(ctx, a, idString(w.bobBox), "x")
+			err := w.svc.SetMailboxPassword(ctx, a, w.bobBox, "x")
 			if KindOf(err) == Invalid { // permitted; the password is too short
 				return nil
 			}
 			return err
 		}, write},
 		{"lower limits", func(w *mailWorld, a Actor) error {
-			_, err := w.svc.SetMailboxLimits(ctx, a, idString(w.bobBox), MailboxLimits{SendPerHour: n(10)})
+			_, err := w.svc.SetMailboxLimits(ctx, a, w.bobBox, MailboxLimits{SendPerHour: n(10)})
 			return err
 		}, write},
 		{"raise limits", func(w *mailWorld, a Actor) error {
-			_, err := w.svc.SetMailboxLimits(ctx, a, idString(w.bobBox), MailboxLimits{SendPerHour: n(1000)})
+			_, err := w.svc.SetMailboxLimits(ctx, a, w.bobBox, MailboxLimits{SendPerHour: n(1000)})
 			return err
 		}, []Kind{ok, ok, F, F, F, F, F, U, F}},
-		{"unblock", func(w *mailWorld, a Actor) error { return w.svc.UnblockMailbox(ctx, a, idString(w.bobBox)) },
+		{"unblock", func(w *mailWorld, a Actor) error { return w.svc.UnblockMailbox(ctx, a, w.bobBox) },
 			[]Kind{ok, ok, F, F, F, F, F, U, ok}},
-		{"delete mailbox", func(w *mailWorld, a Actor) error { return w.svc.DeleteMailbox(ctx, a, idString(w.bobBox)) }, write},
+		{"delete mailbox", func(w *mailWorld, a Actor) error { return w.svc.DeleteMailbox(ctx, a, w.bobBox) }, write},
 		{"list aliases", func(w *mailWorld, a Actor) error { _, err := w.svc.MailAliases(ctx, a, ""); return err }, read},
 		{"create alias", func(w *mailWorld, a Actor) error {
 			_, err := w.svc.CreateMailAlias(ctx, a, "bobsite.example.com", "team", []string{"a@example.org"})
 			return err
 		}, write},
 		{"update alias", func(w *mailWorld, a Actor) error {
-			_, err := w.svc.UpdateMailAlias(ctx, a, idString(w.bobAlias), "sales", []string{"b@example.org"})
+			_, err := w.svc.UpdateMailAlias(ctx, a, w.bobAlias, "sales", []string{"b@example.org"})
 			return err
 		}, write},
-		{"delete alias", func(w *mailWorld, a Actor) error { return w.svc.DeleteMailAlias(ctx, a, idString(w.bobAlias)) }, write},
+		{"delete alias", func(w *mailWorld, a Actor) error { return w.svc.DeleteMailAlias(ctx, a, w.bobAlias) }, write},
 		{"status", func(w *mailWorld, a Actor) error { _, err := w.svc.MailStatus(ctx, a); return err }, read},
 		{"outbound check", func(w *mailWorld, a Actor) error { _, err := w.svc.CheckMailOutbound(ctx, a); return err },
 			[]Kind{ok, ok, F, F, F, ok, F, U, ok}},
@@ -437,7 +437,7 @@ func TestEnableMailDomainRules(t *testing.T) {
 	}
 	// Per-person cap.
 	for i := 1; i < MaxMailDomainsPerUser; i++ {
-		if _, err := svc.store.CreateMailDomain(ctx, "x"+string(rune('a'+i))+".other.org", 2, store.DKIMKey{Selector: "s", PrivateKey: []byte("k"), PublicKey: "p", State: store.DKIMActive}, 0); err != nil {
+		if _, err := svc.store.CreateMailDomain(ctx, "x"+string(rune('a'+i))+".other.org", "2", store.DKIMKey{Selector: "s", PrivateKey: []byte("k"), PublicKey: "p", State: store.DKIMActive}, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -615,7 +615,7 @@ func TestMailSync(t *testing.T) {
 		t.Fatalf("pushed although in sync: %v", err)
 	}
 	// A change is pushed once.
-	if _, err := svc.SetMailboxLimits(ctx, bob, idString(w.bobBox), MailboxLimits{SendPerDay: func(i int) *int { return &i }(50)}); err != nil {
+	if _, err := svc.SetMailboxLimits(ctx, bob, w.bobBox, MailboxLimits{SendPerDay: func(i int) *int { return &i }(50)}); err != nil {
 		t.Fatal(err)
 	}
 	if w.mail.loadCount() != n+1 || w.mail.last().Mailboxes[0].SendPerDay != 50 {
@@ -642,7 +642,7 @@ func TestMailSync(t *testing.T) {
 	}
 	// Deleting while it is down: the data is deleted once it is back.
 	box, _ := svc.store.Mailbox(ctx, w.bobBox)
-	wantKind(t, svc.DeleteMailbox(ctx, bob, idString(w.bobBox)), NotSynced)
+	wantKind(t, svc.DeleteMailbox(ctx, bob, w.bobBox), NotSynced)
 	if p, _ := svc.store.PendingMailDeletes(ctx); !slices.Equal(p, []string{box.StorageID}) {
 		t.Fatalf("pending %v", p)
 	}
@@ -693,7 +693,7 @@ func TestMailWithoutService(t *testing.T) {
 	if err != nil || st.ServiceSetUp || !strings.Contains(st.Problem, "not set up") || st.MailHost != testMailHost || st.Client.IMAPPort != 993 {
 		t.Fatalf("%+v %v", st, err)
 	}
-	wantKind(t, svc.UnblockMailbox(ctx, admin, idString(w.bobBox)), Conflict)
+	wantKind(t, svc.UnblockMailbox(ctx, admin, w.bobBox), Conflict)
 	if err := svc.mailSync(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -749,20 +749,20 @@ func TestMailboxLimitsAndValidation(t *testing.T) {
 	i64 := func(v int64) *int64 { return &v }
 	n := func(v int) *int { return &v }
 
-	m, err := svc.SetMailboxLimits(ctx, bob, idString(w.bobBox), MailboxLimits{QuotaBytes: i64(1 << 30), SendPerHour: n(10), SendPerDay: n(20)})
+	m, err := svc.SetMailboxLimits(ctx, bob, w.bobBox, MailboxLimits{QuotaBytes: i64(1 << 30), SendPerHour: n(10), SendPerDay: n(20)})
 	if err != nil || m.QuotaBytes != 1<<30 || m.SendPerHour != 10 || m.SendPerDay != 20 {
 		t.Fatalf("%+v %v", m, err)
 	}
-	_, err = svc.SetMailboxLimits(ctx, bob, idString(w.bobBox), MailboxLimits{QuotaBytes: i64(2 << 30)})
+	_, err = svc.SetMailboxLimits(ctx, bob, w.bobBox, MailboxLimits{QuotaBytes: i64(2 << 30)})
 	wantKind(t, err, Forbidden)
-	_, err = svc.SetMailboxLimits(ctx, bob, idString(w.bobBox), MailboxLimits{QuotaBytes: i64(0)})
+	_, err = svc.SetMailboxLimits(ctx, bob, w.bobBox, MailboxLimits{QuotaBytes: i64(0)})
 	wantKind(t, err, Invalid)
-	_, err = svc.SetMailboxLimits(ctx, bob, idString(w.bobBox), MailboxLimits{SendPerHour: n(0)})
+	_, err = svc.SetMailboxLimits(ctx, bob, w.bobBox, MailboxLimits{SendPerHour: n(0)})
 	wantKind(t, err, Invalid)
-	if m, err = svc.SetMailboxLimits(ctx, admin, idString(w.bobBox), MailboxLimits{QuotaBytes: i64(0), SendPerDay: n(5000)}); err != nil || m.QuotaBytes != 0 {
+	if m, err = svc.SetMailboxLimits(ctx, admin, w.bobBox, MailboxLimits{QuotaBytes: i64(0), SendPerDay: n(5000)}); err != nil || m.QuotaBytes != 0 {
 		t.Fatalf("admin: %+v %v", m, err)
 	}
-	_, err = svc.SetMailboxLimits(ctx, admin, idString(w.bobBox), MailboxLimits{SendPerDay: n(maxSendPerDay + 1)})
+	_, err = svc.SetMailboxLimits(ctx, admin, w.bobBox, MailboxLimits{SendPerDay: n(maxSendPerDay + 1)})
 	wantKind(t, err, Invalid)
 	// Created with lower limits; higher ones only by admins.
 	_, err = svc.CreateMailbox(ctx, bob, "bobsite.example.com", MailboxInput{LocalPart: "big", Password: "mailbox-password-1", QuotaBytes: i64(10 << 30)})
@@ -794,9 +794,9 @@ func TestMailboxLimitsAndValidation(t *testing.T) {
 	}
 
 	// Password: validated, hashed, pushed; never logged.
-	wantKind(t, svc.SetMailboxPassword(ctx, bob, idString(w.bobBox), "short"), Invalid)
+	wantKind(t, svc.SetMailboxPassword(ctx, bob, w.bobBox, "short"), Invalid)
 	before := w.mail.last().Mailboxes[0].PasswordHash
-	if err := svc.SetMailboxPassword(ctx, bob, idString(w.bobBox), "a-new-mailbox-password"); err != nil {
+	if err := svc.SetMailboxPassword(ctx, bob, w.bobBox, "a-new-mailbox-password"); err != nil {
 		t.Fatal(err)
 	}
 	after := w.mail.last().Mailboxes[0].PasswordHash
@@ -806,14 +806,14 @@ func TestMailboxLimitsAndValidation(t *testing.T) {
 
 	// Unblock reaches the service with the storage id.
 	box, _ := svc.store.Mailbox(ctx, w.bobBox)
-	if err := svc.UnblockMailbox(ctx, admin, idString(w.bobBox)); err != nil || !slices.Equal(w.mail.unblocked, []string{box.StorageID}) {
+	if err := svc.UnblockMailbox(ctx, admin, w.bobBox); err != nil || !slices.Equal(w.mail.unblocked, []string{box.StorageID}) {
 		t.Fatalf("unblock %v %v", w.mail.unblocked, err)
 	}
 	// Usage and block state come from the service.
 	w.mail.set(func(f *fakeMail) {
 		f.usage = []config.MailboxStatus{{StorageID: box.StorageID, UsedBytes: 42, Messages: 3, Blocked: true, BlockedReason: "too many sign-ins"}}
 	})
-	got, _ := svc.MailboxOf(ctx, bob, idString(w.bobBox))
+	got, _ := svc.MailboxOf(ctx, bob, w.bobBox)
 	if got.Usage == nil || got.Usage.UsedBytes != 42 || !got.Usage.Blocked || got.Usage.BlockedReason != "too many sign-ins" {
 		t.Fatalf("usage %+v", got.Usage)
 	}

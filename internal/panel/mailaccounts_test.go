@@ -178,7 +178,7 @@ func TestDisplayNameAndAppPasswordsOnly(t *testing.T) {
 	w := newMailWorld(t)
 	svc := w.svc
 	on := true
-	m, err := svc.SetMailboxAccount(ctx, bob, idString(w.bobBox), MailboxAccount{DisplayName: strp(" Info  Team "), AppPasswordsOnly: &on})
+	m, err := svc.SetMailboxAccount(ctx, bob, w.bobBox, MailboxAccount{DisplayName: strp(" Info  Team "), AppPasswordsOnly: &on})
 	if err != nil || m.DisplayName != "Info Team" || !m.AppPasswordsOnly {
 		t.Fatalf("%+v %v", m, err)
 	}
@@ -187,14 +187,14 @@ func TestDisplayNameAndAppPasswordsOnly(t *testing.T) {
 		t.Fatalf("pushed %+v", pm)
 	}
 	for _, bad := range []string{"a\r\nBcc: x@example.org", "<x>", `"q"`, strings.Repeat("x", 65)} {
-		if _, err := svc.SetMailboxAccount(ctx, bob, idString(w.bobBox), MailboxAccount{DisplayName: &bad}); KindOf(err) != Invalid {
+		if _, err := svc.SetMailboxAccount(ctx, bob, w.bobBox, MailboxAccount{DisplayName: &bad}); KindOf(err) != Invalid {
 			t.Errorf("%q: %v", bad, err)
 		}
 	}
-	if _, err := svc.SetMailboxAccount(ctx, bob, idString(w.rootBox), MailboxAccount{DisplayName: strp("x")}); KindOf(err) != NotFound {
+	if _, err := svc.SetMailboxAccount(ctx, bob, w.rootBox, MailboxAccount{DisplayName: strp("x")}); KindOf(err) != NotFound {
 		t.Fatalf("other's mailbox: %v", err)
 	}
-	if _, err := svc.SetMailboxAccount(ctx, bobRead, idString(w.bobBox), MailboxAccount{DisplayName: strp("x")}); KindOf(err) != Forbidden {
+	if _, err := svc.SetMailboxAccount(ctx, bobRead, w.bobBox, MailboxAccount{DisplayName: strp("x")}); KindOf(err) != Forbidden {
 		t.Fatalf("read token: %v", err)
 	}
 	created, err := svc.CreateMailbox(ctx, bob, "bobsite.example.com", MailboxInput{LocalPart: "anna", Password: "mailbox-password-2", DisplayName: "Anna"})
@@ -204,7 +204,7 @@ func TestDisplayNameAndAppPasswordsOnly(t *testing.T) {
 	// A main password that looks like an app password is refused: mail
 	// programs would only ever check it as an app password.
 	_, _, token := config.NewAppPassword()
-	if err := svc.SetMailboxPassword(ctx, bob, idString(w.bobBox), token); KindOf(err) != Invalid {
+	if err := svc.SetMailboxPassword(ctx, bob, w.bobBox, token); KindOf(err) != Invalid {
 		t.Fatalf("app-password-like password: %v", err)
 	}
 }
@@ -218,7 +218,7 @@ func TestAppPasswords(t *testing.T) {
 
 	w := newMailWorld(t)
 	svc := w.svc
-	ap, err := svc.CreateAppPassword(ctx, bob, idString(w.bobBox), " Phone ")
+	ap, err := svc.CreateAppPassword(ctx, bob, w.bobBox, " Phone ")
 	if err != nil || ap.Name != "Phone" || !config.LooksLikeAppPassword(ap.Password) || ap.LastUsedAt != nil {
 		t.Fatalf("create %+v %v", ap, err)
 	}
@@ -239,12 +239,12 @@ func TestAppPasswords(t *testing.T) {
 	}
 
 	// The token is never shown again, logged or recorded.
-	list, err := svc.AppPasswords(ctx, bob, idString(w.bobBox))
+	list, err := svc.AppPasswords(ctx, bob, w.bobBox)
 	if err != nil || len(list) != 1 || list[0].ID != ap.ID {
 		t.Fatalf("list %+v %v", list, err)
 	}
 	b, _ := json.Marshal(list)
-	mb, _ := svc.MailboxOf(ctx, bob, idString(w.bobBox))
+	mb, _ := svc.MailboxOf(ctx, bob, w.bobBox)
 	b2, _ := json.Marshal(mb)
 	for what, s := range map[string]string{"list": string(b), "mailbox": string(b2), "activity": activityText(t, w), "logs": logs.String()} {
 		if strings.Contains(s, secret) || strings.Contains(s, pm.AppPasswords[0].MAC) {
@@ -257,32 +257,32 @@ func TestAppPasswords(t *testing.T) {
 
 	// Permissions: others' mailboxes are not found; read-only tokens and
 	// the system cannot create.
-	if _, err := svc.CreateAppPassword(ctx, bob, idString(w.rootBox), "x"); KindOf(err) != NotFound {
+	if _, err := svc.CreateAppPassword(ctx, bob, w.rootBox, "x"); KindOf(err) != NotFound {
 		t.Fatalf("other's mailbox: %v", err)
 	}
-	if _, err := svc.AppPasswords(ctx, bob, idString(w.rootBox)); KindOf(err) != NotFound {
+	if _, err := svc.AppPasswords(ctx, bob, w.rootBox); KindOf(err) != NotFound {
 		t.Fatalf("list other's: %v", err)
 	}
 	for _, a := range []Actor{bobRead, bobLimited, System} {
-		if _, err := svc.CreateAppPassword(ctx, a, idString(w.bobBox), "x"); KindOf(err) != Forbidden {
+		if _, err := svc.CreateAppPassword(ctx, a, w.bobBox, "x"); KindOf(err) != Forbidden {
 			t.Errorf("%s: %v", a.Name, err)
 		}
 	}
-	if _, err := svc.CreateAppPassword(ctx, bob, idString(w.bobBox), ""); KindOf(err) != Invalid {
+	if _, err := svc.CreateAppPassword(ctx, bob, w.bobBox, ""); KindOf(err) != Invalid {
 		t.Fatalf("empty name: %v", err)
 	}
 
 	// Revoke.
-	if err := svc.RevokeAppPassword(ctx, bob, idString(w.rootBox), ap.ID); KindOf(err) != NotFound {
+	if err := svc.RevokeAppPassword(ctx, bob, w.rootBox, ap.ID); KindOf(err) != NotFound {
 		t.Fatalf("revoke via other mailbox: %v", err)
 	}
-	if err := svc.RevokeAppPassword(ctx, bob, idString(w.bobBox), ap.ID); err != nil {
+	if err := svc.RevokeAppPassword(ctx, bob, w.bobBox, ap.ID); err != nil {
 		t.Fatal(err)
 	}
 	if pm := pushedMailbox(t, w.mail.last(), "info@bobsite.example.com"); len(pm.AppPasswords) != 0 {
 		t.Fatalf("still pushed %+v", pm.AppPasswords)
 	}
-	if err := svc.RevokeAppPassword(ctx, bob, idString(w.bobBox), ap.ID); KindOf(err) != NotFound {
+	if err := svc.RevokeAppPassword(ctx, bob, w.bobBox, ap.ID); KindOf(err) != NotFound {
 		t.Fatalf("revoke twice: %v", err)
 	}
 }
@@ -328,7 +328,7 @@ func TestAccountEvents(t *testing.T) {
 	if got.DisplayName != name || !got.AppPasswordsOnly || got.PasswordHash != newHash || got.Revision != 4 {
 		t.Fatalf("mailbox %+v", got)
 	}
-	aps, _ := svc.AppPasswords(ctx, bob, idString(w.bobBox))
+	aps, _ := svc.AppPasswords(ctx, bob, w.bobBox)
 	if len(aps) != 1 || aps[0].Name != "Laptop" || aps[0].LastUsedNetwork != "192.0.2.0/24" || aps[0].LastUsedAt == nil {
 		t.Fatalf("app passwords %+v", aps)
 	}
@@ -346,7 +346,7 @@ func TestAccountEvents(t *testing.T) {
 	// (but reported later) does not override it, though its revision is
 	// recorded so the mail service drops its copy.
 	w.now = w.now.Add(time.Minute)
-	if err := svc.SetMailboxPassword(ctx, bob, idString(w.bobBox), "admin-password-1"); err != nil {
+	if err := svc.SetMailboxPassword(ctx, bob, w.bobBox, "admin-password-1"); err != nil {
 		t.Fatal(err)
 	}
 	adminHash, _ := svc.store.Mailbox(ctx, w.bobBox)
@@ -365,7 +365,7 @@ func TestAccountEvents(t *testing.T) {
 	if got.PasswordHash != adminHash.PasswordHash || got.Revision != 6 {
 		t.Fatalf("admin reset overridden: %+v", got)
 	}
-	if aps, _ := svc.AppPasswords(ctx, bob, idString(w.bobBox)); len(aps) != 0 {
+	if aps, _ := svc.AppPasswords(ctx, bob, w.bobBox); len(aps) != 0 {
 		t.Fatalf("revoked still there %+v", aps)
 	}
 	if !strings.Contains(activityText(t, w), "not taken: changed in the panel at the same time") {
@@ -409,7 +409,7 @@ func TestAppPasswordEventOverLimit(t *testing.T) {
 	svc := w.svc
 	box, _ := svc.store.Mailbox(ctx, w.bobBox)
 	for i := 0; i < config.MaxAppPasswords; i++ {
-		if _, err := svc.CreateAppPassword(ctx, bob, idString(w.bobBox), "Device"); err != nil {
+		if _, err := svc.CreateAppPassword(ctx, bob, w.bobBox, "Device"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -500,11 +500,11 @@ func TestAdminChangeKeepsOtherFields(t *testing.T) {
 	w.now = w.now.Add(time.Minute)
 	// The admin renames the mailbox and turns the switch on, after the
 	// mailbox changed its password and its display name.
-	if _, err := svc.SetMailboxAccount(ctx, bob, idString(w.bobBox), MailboxAccount{DisplayName: strp("Team")}); err != nil {
+	if _, err := svc.SetMailboxAccount(ctx, bob, w.bobBox, MailboxAccount{DisplayName: strp("Team")}); err != nil {
 		t.Fatal(err)
 	}
 	on := true
-	if _, err := svc.SetMailboxAccount(ctx, bob, idString(w.bobBox), MailboxAccount{AppPasswordsOnly: &on}); err != nil {
+	if _, err := svc.SetMailboxAccount(ctx, bob, w.bobBox, MailboxAccount{AppPasswordsOnly: &on}); err != nil {
 		t.Fatal(err)
 	}
 	newHash, err := hashPassword("the-mailbox-replaced-it")
@@ -545,7 +545,7 @@ func TestAdminResetCatchesUpEvents(t *testing.T) {
 		f.events = []config.Event{{ID: 1, At: w.now.Add(-time.Minute), Kind: config.EventPasswordChanged, StorageID: box.StorageID,
 			Account: &config.AccountChange{Revision: 3, PasswordHash: selfHash}}}
 	})
-	if err := svc.SetMailboxPassword(ctx, bob, idString(w.bobBox), "admin-password-1"); err != nil {
+	if err := svc.SetMailboxPassword(ctx, bob, w.bobBox, "admin-password-1"); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := svc.store.Mailbox(ctx, w.bobBox)

@@ -21,8 +21,8 @@ import (
 // Signing in is done by sesam: its users, password hashes, sessions,
 // attempt counters and reset links live in the auth_* tables of the panel's
 // database. A panel user (users table: id, name, role) points at its sesam
-// user with auth_user_id; the panel's own foreign keys keep using the
-// integer id. The panel calls sesam's Go API from its own handlers and
+// user with auth_user_id; the panel's own references use the panel user's
+// id. Both share one database connection (see store.Open). The panel calls sesam's Go API from its own handlers and
 // keeps its own cookie and request checks (internal/api), because it is
 // served on the panel domain and on the server's addresses, and the panel
 // domain changes at runtime.

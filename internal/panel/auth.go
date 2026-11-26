@@ -58,7 +58,7 @@ type User struct {
 }
 
 func userView(u store.User, au sesam.User) User {
-	return User{ID: idString(u.ID), Name: u.Name, Email: au.Email, Role: u.Role, CreatedAt: u.CreatedAt}
+	return User{ID: u.ID, Name: u.Name, Email: au.Email, Role: u.Role, CreatedAt: u.CreatedAt}
 }
 
 // Credentials are a sign-in attempt. Name is the user name or the e-mail

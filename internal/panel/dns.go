@@ -70,15 +70,15 @@ type checkEntry struct {
 
 type dnsCache struct {
 	mu     sync.Mutex
-	zones  map[int64]zonesEntry
+	zones  map[string]zonesEntry
 	checks map[string]checkEntry
 }
 
 func newDNSCache() *dnsCache {
-	return &dnsCache{zones: map[int64]zonesEntry{}, checks: map[string]checkEntry{}}
+	return &dnsCache{zones: map[string]zonesEntry{}, checks: map[string]checkEntry{}}
 }
 
-func (c *dnsCache) getZones(id int64, now time.Time) ([]dns.Zone, bool) {
+func (c *dnsCache) getZones(id string, now time.Time) ([]dns.Zone, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.zones[id]
@@ -88,13 +88,13 @@ func (c *dnsCache) getZones(id int64, now time.Time) ([]dns.Zone, bool) {
 	return slices.Clone(e.zones), true
 }
 
-func (c *dnsCache) putZones(id int64, zones []dns.Zone, now time.Time) {
+func (c *dnsCache) putZones(id string, zones []dns.Zone, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.zones[id] = zonesEntry{zones: slices.Clone(zones), at: now}
 }
 
-func (c *dnsCache) dropZones(id int64) {
+func (c *dnsCache) dropZones(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.zones, id)
@@ -146,7 +146,7 @@ type DNSConnection struct {
 
 func connectionView(c store.DNSConnection) DNSConnection {
 	return DNSConnection{
-		ID: idString(c.ID), Provider: c.Provider, Name: c.Name, Owner: c.Owner, CreatedAt: c.CreatedAt,
+		ID: c.ID, Provider: c.Provider, Name: c.Name, Owner: c.Owner, CreatedAt: c.CreatedAt,
 		LastCheckedAt: c.LastCheckedAt, LastError: c.LastError, CanWrite: c.CanWrite, ZoneCount: c.ZoneCount,
 	}
 }
@@ -173,7 +173,7 @@ func zoneView(c store.DNSConnection, z dns.Zone) DNSZone {
 	if ns == nil {
 		ns = []string{}
 	}
-	return DNSZone{ConnectionID: idString(c.ID), ConnectionName: c.Name, Name: z.Name, ReadOnly: z.ReadOnly, Nameservers: ns, UsedBy: []string{}}
+	return DNSZone{ConnectionID: c.ID, ConnectionName: c.Name, Name: z.Name, ReadOnly: z.ReadOnly, Nameservers: ns, UsedBy: []string{}}
 }
 
 // DNSProblem says why the zones of a connection could not be listed.
@@ -249,7 +249,7 @@ func needDNS(a Actor) error {
 	if err := needAuth(a); err != nil {
 		return err
 	}
-	if a.Via == ViaSystem || a.UserID == 0 {
+	if a.Via == ViaSystem || a.UserID == "" {
 		return errorf(Forbidden, "DNS can only be used by a person")
 	}
 	if a.Sites != nil {
@@ -278,7 +278,7 @@ func (s *Service) DNSConnections(ctx context.Context, a Actor) ([]DNSConnection,
 	}
 	owner := a.UserID
 	if a.Admin {
-		owner = 0
+		owner = ""
 	}
 	list, err := s.store.DNSConnections(ctx, owner)
 	if err != nil {
@@ -294,7 +294,7 @@ func (s *Service) DNSConnections(ctx context.Context, a Actor) ([]DNSConnection,
 // ownConnections are the connections the actor may use (none for actors
 // that are not a person).
 func (s *Service) ownConnections(ctx context.Context, a Actor) ([]store.DNSConnection, error) {
-	if a.UserID == 0 {
+	if a.UserID == "" {
 		return nil, nil
 	}
 	list, err := s.store.DNSConnections(ctx, a.UserID)
@@ -306,10 +306,7 @@ func (s *Service) ownConnections(ctx context.Context, a Actor) ([]store.DNSConne
 
 // usableConnection returns one of the actor's own connections.
 func (s *Service) usableConnection(ctx context.Context, a Actor, connID string) (store.DNSConnection, error) {
-	id, err := storeID(connID, "DNS connection")
-	if err != nil {
-		return store.DNSConnection{}, err
-	}
+	id := connID
 	c, err := s.store.DNSConnection(ctx, id)
 	if err != nil {
 		return store.DNSConnection{}, storeError(err)
@@ -420,10 +417,7 @@ func (s *Service) DeleteDNSConnection(ctx context.Context, a Actor, connID strin
 	if err := needAuth(a); err != nil {
 		return err
 	}
-	id, err := storeID(connID, "DNS connection")
-	if err != nil {
-		return err
-	}
+	id := connID
 	c, err := s.store.DNSConnection(ctx, id)
 	if err != nil {
 		return storeError(err)
@@ -635,7 +629,7 @@ func (s *Service) listZones(ctx context.Context, a Actor, inPanel bool) (DNSZone
 				msg = "something went wrong on the server"
 				slog.Error("listing DNS zones failed", "connection", c.ID, "err", err)
 			}
-			out.Problems = append(out.Problems, DNSProblem{ConnectionID: idString(c.ID), ConnectionName: c.Name, Error: msg})
+			out.Problems = append(out.Problems, DNSProblem{ConnectionID: c.ID, ConnectionName: c.Name, Error: msg})
 			continue
 		}
 		for _, z := range zones {
@@ -946,7 +940,7 @@ func (s *Service) domainStatuses(ctx context.Context, a Actor, domains []string)
 	wg.Wait()
 	for i, m := range matches {
 		if len(m) == 1 {
-			out[i].Zone = &DomainZone{ConnectionID: idString(m[0].conn.ID), ConnectionName: m[0].conn.Name, Zone: m[0].zone.Name, RecordName: m[0].name}
+			out[i].Zone = &DomainZone{ConnectionID: m[0].conn.ID, ConnectionName: m[0].conn.Name, Zone: m[0].zone.Name, RecordName: m[0].name}
 		}
 	}
 	return out, nil

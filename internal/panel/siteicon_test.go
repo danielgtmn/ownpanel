@@ -134,6 +134,6 @@ func TestSiteIconOfUnpublishedOrHiddenSite(t *testing.T) {
 	wantKind(t, err, NotFound)
 	_, err = svc.SiteIcon(ctx, Actor{}, "draft")
 	wantKind(t, err, Unauthenticated)
-	_, err = svc.SiteIcon(ctx, Actor{UserID: 1, Name: "root", Admin: true, Via: ViaToken, ReadOnly: true, Sites: []string{"other"}}, "draft")
+	_, err = svc.SiteIcon(ctx, Actor{UserID: "1", Name: "root", Admin: true, Via: ViaToken, ReadOnly: true, Sites: []string{"other"}}, "draft")
 	wantKind(t, err, NotFound)
 }

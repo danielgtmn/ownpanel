@@ -192,7 +192,7 @@ func (s *Service) mailSetupCaddy(ctx context.Context, o *caddy.Options, sites []
 		return err
 	}
 	reserved := map[string]bool{host: true, o.PanelDomain: true}
-	claimedBy := map[string]int64{} // name -> owner of the site or domain redirect
+	claimedBy := map[string]string{} // name -> owner of the site or domain redirect
 	for _, site := range sites {
 		for _, d := range site.Domains {
 			claimedBy[d] = site.OwnerID

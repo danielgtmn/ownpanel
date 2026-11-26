@@ -134,18 +134,18 @@ func TestLastAdminProtection(t *testing.T) {
 	svc, _, _ := newService(t)
 	ctx := context.Background()
 	member := "member"
-	_, err := svc.UpdateUser(ctx, admin, idString(admin.UserID), UserUpdate{Role: &member})
+	_, err := svc.UpdateUser(ctx, admin, admin.UserID, UserUpdate{Role: &member})
 	wantKind(t, err, Conflict)
-	wantKind(t, svc.DeleteUser(ctx, admin, idString(admin.UserID)), Conflict)
+	wantKind(t, svc.DeleteUser(ctx, admin, admin.UserID), Conflict)
 
 	second, _ := svc.CreateUser(ctx, admin, NewUser{Name: "second", Password: "second-password", Role: "admin"})
-	if _, err := svc.UpdateUser(ctx, admin, idString(admin.UserID), UserUpdate{Role: &member}); err != nil {
+	if _, err := svc.UpdateUser(ctx, admin, admin.UserID, UserUpdate{Role: &member}); err != nil {
 		t.Fatal(err)
 	}
-	other := Actor{UserID: mustStoreID(second.ID), Name: "second", Admin: true, Via: ViaSession}
+	other := Actor{UserID: second.ID, Name: "second", Admin: true, Via: ViaSession}
 	wantKind(t, svc.DeleteUser(ctx, other, second.ID), Conflict)
 	bad := "owner"
-	_, err = svc.UpdateUser(ctx, other, idString(admin.UserID), UserUpdate{Role: &bad})
+	_, err = svc.UpdateUser(ctx, other, admin.UserID, UserUpdate{Role: &bad})
 	wantKind(t, err, Invalid)
 	_, err = svc.UpdateUser(ctx, other, "999", UserUpdate{Role: &member})
 	wantKind(t, err, NotFound)
@@ -261,7 +261,7 @@ func TestPasswordChecksAreBounded(t *testing.T) {
 	}
 	_, _, err := svc.Login(ctx, Credentials{Name: "alice", Password: "alice-password-1", ClientIP: "1.2.3.4"})
 	wantKind(t, err, Throttled)
-	a := Actor{UserID: 2, Name: "alice", Via: ViaSession}
+	a := Actor{UserID: "2", Name: "alice", Via: ViaSession}
 	wantKind(t, svc.ChangePassword(ctx, a, "alice-password-1", "alice-password-2"), Throttled)
 	wantKind(t, svc.ResetPassword(ctx, "token", "alice-password-2"), Throttled)
 	<-svc.passwordChecks
@@ -464,7 +464,7 @@ func TestTokenLifecycle(t *testing.T) {
 
 	// A token follows its user's current role.
 	second, _ := svc.CreateUser(ctx, admin, NewUser{Name: "second", Password: "second-password", Role: "admin"})
-	secondSession := Actor{UserID: mustStoreID(second.ID), Name: "second", Admin: true, Via: ViaSession}
+	secondSession := Actor{UserID: second.ID, Name: "second", Admin: true, Via: ViaSession}
 	st, _ := svc.CreateToken(ctx, secondSession, "ci", "write", nil, 0)
 	member := "member"
 	svc.UpdateUser(ctx, admin, second.ID, UserUpdate{Role: &member})

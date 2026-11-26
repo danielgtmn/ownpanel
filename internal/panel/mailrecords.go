@@ -646,7 +646,7 @@ func (s *Service) MailRecords(ctx context.Context, a Actor, domain string) (Mail
 		}
 		out.ApplyNote = note
 		if note == "" {
-			out.CanApply, out.ConnectionID, out.Zone = true, idString(m.conn.ID), m.zone.Name
+			out.CanApply, out.ConnectionID, out.Zone = true, m.conn.ID, m.zone.Name
 		}
 	}
 	wg.Wait()
@@ -904,7 +904,7 @@ func (s *Service) SetUpMailRecords(ctx context.Context, a Actor, domain string, 
 	if err != nil {
 		return MailRecordChanges{}, err
 	}
-	if note != "" && m.conn.ID == 0 {
+	if note != "" && m.conn.ID == "" {
 		return MailRecordChanges{}, errorf(Conflict, "%s", strings.TrimSuffix(note, "."))
 	}
 	specs, err := s.mailRecordSpecs(ctx, md.Domain, host)
@@ -946,7 +946,7 @@ func (s *Service) SetUpMailHostSPF(ctx context.Context, a Actor) (MailRecordChan
 	if err != nil {
 		return MailRecordChanges{}, err
 	}
-	if note != "" && m.conn.ID == 0 {
+	if note != "" && m.conn.ID == "" {
 		return MailRecordChanges{}, errorf(Conflict, "%s", strings.TrimSuffix(strings.Replace(note, "The domain's zone", "The zone of the mail server's name", 1), "."))
 	}
 	res, _, err := s.writeMailRecords(ctx, a, m, []mailRecordSpec{hostSPFSpec}, host, host, true, "mail.host-spf.set", host)
@@ -959,7 +959,7 @@ func (s *Service) SetUpMailHostSPF(ctx context.Context, a Actor) (MailRecordChan
 // connection, a primary zone). Without confirm nothing is written when a
 // change needs confirmation. It returns the kinds written.
 func (s *Service) writeMailRecords(ctx context.Context, a Actor, m zoneMatch, specs []mailRecordSpec, host, domain string, confirm bool, action, target string) (MailRecordChanges, []string, error) {
-	c, z, err := s.writableZone(ctx, a, idString(m.conn.ID), m.zone.Name)
+	c, z, err := s.writableZone(ctx, a, m.conn.ID, m.zone.Name)
 	if err != nil {
 		return MailRecordChanges{}, nil, err
 	}

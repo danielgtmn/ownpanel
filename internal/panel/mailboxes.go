@@ -93,7 +93,7 @@ type MailAlias struct {
 
 func mailboxView(m store.Mailbox, usage map[string]config.MailboxStatus) Mailbox {
 	v := Mailbox{
-		ID: idString(m.ID), Address: m.LocalPart + "@" + m.Domain, Domain: m.Domain, LocalPart: m.LocalPart, Owner: m.Owner,
+		ID: m.ID, Address: m.LocalPart + "@" + m.Domain, Domain: m.Domain, LocalPart: m.LocalPart, Owner: m.Owner,
 		QuotaBytes: m.QuotaBytes, SendPerHour: m.SendPerHour, SendPerDay: m.SendPerDay, CreatedAt: m.CreatedAt,
 		DisplayName: m.DisplayName, AppPasswordsOnly: m.AppPasswordsOnly,
 		Kind: m.Kind, KeepSentCopy: m.KeepSentCopy, SharedWith: []MailboxGrant{}, AccessTo: []MailboxAccess{},
@@ -117,7 +117,7 @@ func mailboxView(m store.Mailbox, usage map[string]config.MailboxStatus) Mailbox
 
 func aliasView(a store.MailAlias) MailAlias {
 	return MailAlias{
-		ID: idString(a.ID), Address: a.LocalPart + "@" + a.Domain, Domain: a.Domain, LocalPart: a.LocalPart, CatchAll: a.LocalPart == "*",
+		ID: a.ID, Address: a.LocalPart + "@" + a.Domain, Domain: a.Domain, LocalPart: a.LocalPart, CatchAll: a.LocalPart == "*",
 		Targets: slices.Clone(a.Targets), Owner: a.Owner, CreatedAt: a.CreatedAt,
 		SenderPolicy: a.SenderPolicy, HideFromDirectory: a.HideFromDirectory,
 	}
@@ -148,10 +148,7 @@ func (s *Service) visibleMailbox(ctx context.Context, a Actor, mailboxID string)
 	if err := needMailRead(a); err != nil {
 		return store.Mailbox{}, err
 	}
-	id, err := storeID(mailboxID, "mailbox")
-	if err != nil {
-		return store.Mailbox{}, err
-	}
+	id := mailboxID
 	m, err := s.store.Mailbox(ctx, id)
 	if err != nil {
 		return store.Mailbox{}, storeError(err)
@@ -456,10 +453,7 @@ func (s *Service) visibleAlias(ctx context.Context, a Actor, aliasID string) (st
 	if err := needMailRead(a); err != nil {
 		return store.MailAlias{}, err
 	}
-	id, err := storeID(aliasID, "alias")
-	if err != nil {
-		return store.MailAlias{}, err
-	}
+	id := aliasID
 	al, err := s.store.MailAlias(ctx, id)
 	if err != nil {
 		return store.MailAlias{}, storeError(err)
