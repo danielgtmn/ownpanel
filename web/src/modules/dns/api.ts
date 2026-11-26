@@ -1,6 +1,6 @@
 import { encodeSegment, request } from '../../shared/api/index.ts'
 import { connectionPath } from '../../shared/dns/index.ts'
-import type { RecordBody, RecordSet } from './types.ts'
+import type { RecordBody, RecordSet, RecordTemplate, TemplateResult } from './types.ts'
 
 export {
   addDomain,
@@ -35,4 +35,22 @@ export function saveRecord(
 
 export function deleteRecord(connectionId: string, zone: string, name: string, type: string): Promise<void> {
   return request<void>(recordPath(connectionId, zone, name, type), { method: 'DELETE' })
+}
+
+export function listTemplates(): Promise<RecordTemplate[]> {
+  return request<RecordTemplate[]>('/dns/templates')
+}
+
+export const templatePath = (connectionId: string, zone: string, template: string) =>
+  `${connectionPath(connectionId)}/zones/${encodeSegment(zone)}/templates/${encodeSegment(template)}`
+
+// Without confirm nothing is written: the answer is the preview.
+export function applyTemplate(
+  connectionId: string,
+  zone: string,
+  template: string,
+  params: Record<string, string>,
+  confirm: boolean,
+): Promise<TemplateResult> {
+  return request<TemplateResult>(templatePath(connectionId, zone, template), { method: 'POST', body: { params, confirm } })
 }

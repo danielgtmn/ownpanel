@@ -391,3 +391,46 @@ func TestDNSRoutesWithoutServerIP(t *testing.T) {
 	wantStatus(t, d.root("GET", "/api/sites/blog/domains/status", ""), 409, msg)
 	wantStatus(t, d.root("POST", "/api/sites/blog/domains/blog.example.com/point", ""), 409, msg)
 }
+
+func TestDNSTemplateRoutes(t *testing.T) {
+	d := newDNSEnv(t, "203.0.113.5")
+	id := d.connect(d.root, "main", hzToken)
+
+	rec := d.root("GET", "/api/dns/templates", "")
+	wantStatus(t, rec, 200, "")
+	list := decode[[]json.RawMessage](t, rec)
+	if len(list) < 2 {
+		t.Fatalf("%s", rec.Body)
+	}
+	wantKeys(t, list[0], "id", "title", "description", "params", "own_mail")
+
+	path := fmt.Sprintf("/api/dns/connections/%s/zones/example.com/templates/", id)
+	rec = d.root("POST", path+"domain-verification", `{"params":{"value":"verify=1"}}`)
+	wantStatus(t, rec, 200, "")
+	res := decode[map[string]json.RawMessage](t, rec)
+	wantKeys(t, mustJSON(t, res), "template", "zone", "changes", "applied")
+	if string(res["applied"]) != "false" {
+		t.Fatalf("%s", rec.Body)
+	}
+	if _, ok := d.hz[hzToken].RRSet("example.com", "@", "TXT"); ok {
+		t.Fatal("the preview wrote")
+	}
+	rec = d.root("POST", path+"domain-verification", `{"params":{"value":"verify=1"},"confirm":true}`)
+	wantStatus(t, rec, 200, "")
+	if rs, ok := d.hz[hzToken].RRSet("example.com", "@", "TXT"); !ok || !reflect.DeepEqual(rs.Records, []string{`"verify=1"`}) {
+		t.Fatalf("%+v", rs)
+	}
+	wantStatus(t, d.root("POST", path+"domain-verification", ""), 400, "confirmation text")
+	wantStatus(t, d.root("POST", path+"nope", ""), 404, "")
+	// Bob cannot use root's connection.
+	wantStatus(t, d.bob("POST", path+"google-workspace", ""), 404, "")
+}
+
+func mustJSON(t *testing.T, v any) json.RawMessage {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
