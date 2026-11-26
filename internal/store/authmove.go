@@ -2,8 +2,9 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"time"
+
+	"github.com/danielgtmn/ablage"
 )
 
 // Moving sign-in to the auth tables: panel users created before it have a
@@ -14,27 +15,25 @@ import (
 // UnmovedUser is a user without an auth user yet, with the password hash
 // still kept here.
 type UnmovedUser struct {
-	ID           int64
+	ID           string
 	Name         string
 	PasswordHash string
 }
 
-// UnmovedUsers lists users that have no auth user yet.
+// UnmovedUsers lists users that have no auth user yet, oldest first.
 func (s *Store) UnmovedUsers(ctx context.Context) ([]UnmovedUser, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, password_hash FROM users WHERE auth_user_id IS NULL ORDER BY id`)
+	list, err := s.r.users.Find(ctx, ablage.Query{
+		Where:   ablage.Null("auth_user_id"),
+		OrderBy: []ablage.Order{ablage.Asc("created_at")},
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []UnmovedUser
-	for rows.Next() {
-		var u UnmovedUser
-		if err := rows.Scan(&u.ID, &u.Name, &u.PasswordHash); err != nil {
-			return nil, err
-		}
-		out = append(out, u)
+	for _, u := range list {
+		out = append(out, UnmovedUser{ID: u.ID, Name: u.Name, PasswordHash: u.PasswordHash})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // OldSession is a session kept here before sign-in moved. ID is the hex
@@ -46,62 +45,64 @@ type OldSession struct {
 }
 
 // OldSessions lists a user's sessions here that have not expired at now.
-func (s *Store) OldSessions(ctx context.Context, userID int64, now time.Time) ([]OldSession, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, created_at, expires_at FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY created_at`,
-		userID, now.Unix())
+func (s *Store) OldSessions(ctx context.Context, userID string, now time.Time) ([]OldSession, error) {
+	list, err := s.r.sessions.Find(ctx, ablage.Query{
+		Where:   ablage.And(ablage.Eq("user_id", userID), ablage.Gt("expires_at", seconds(now))),
+		OrderBy: []ablage.Order{ablage.Asc("created_at")},
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []OldSession
-	for rows.Next() {
-		var o OldSession
-		var created, expires int64
-		if err := rows.Scan(&o.ID, &created, &expires); err != nil {
-			return nil, err
-		}
-		o.CreatedAt, o.ExpiresAt = unix(created), unix(expires)
-		out = append(out, o)
+	for _, o := range list {
+		out = append(out, OldSession{ID: o.ID, CreatedAt: o.CreatedAt, ExpiresAt: o.ExpiresAt})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // LinkAuthUser links a user to its auth user, forgets the password hash
 // kept here and removes the user's sessions here (they were copied). It
 // fails with ErrConflict when the user is linked already.
-func (s *Store) LinkAuthUser(ctx context.Context, id int64, authUserID string) error {
-	return s.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.Exec(`UPDATE users SET auth_user_id = ?, password_hash = '' WHERE id = ? AND auth_user_id IS NULL`, authUserID, id)
+func (s *Store) LinkAuthUser(ctx context.Context, id, authUserID string) error {
+	return s.tx(ctx, func(r repos) error {
+		n, err := r.users.UpdateWhere(ctx, ablage.And(ablage.Eq("id", id), ablage.Null("auth_user_id")),
+			ablage.Row{"auth_user_id": authUserID, "password_hash": ""})
 		if err != nil {
 			return err
 		}
-		if n, _ := res.RowsAffected(); n == 0 {
+		if n == 0 {
 			return conflictf("the user is linked already")
 		}
-		_, err = tx.Exec(`DELETE FROM sessions WHERE user_id = ?`, id)
+		_, err = r.sessions.DeleteWhere(ctx, ablage.Eq("user_id", id))
 		return err
 	})
 }
 
 // AuthUserIDs returns the auth user ids that panel users are linked to.
 func (s *Store) AuthUserIDs(ctx context.Context) (map[string]bool, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT auth_user_id FROM users WHERE auth_user_id IS NOT NULL`)
+	list, err := s.r.users.Find(ctx, ablage.Query{Where: ablage.NotNull("auth_user_id")})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := map[string]bool{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out[id] = true
+	for _, u := range list {
+		out[*u.AuthUserID] = true
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-// DB is the database, for the sign-in tables (auth_*) that live next to
-// the panel's own. The store allows one connection at a time: never use
-// the store while a transaction on DB is open, or the other way round.
-func (s *Store) DB() *sql.DB { return s.db }
+// AddOldSession stores a session as kept before sign-in moved. Only for
+// tests of the move (a database from before has them already).
+func (s *Store) AddOldSession(ctx context.Context, userID string, o OldSession) error {
+	return s.r.sessions.Create(ctx, &sessionRow{ID: o.ID, UserID: userID, CreatedAt: seconds(o.CreatedAt), ExpiresAt: seconds(o.ExpiresAt)})
+}
+
+// AddUnmovedUser stores a user as created before sign-in moved, with a
+// password hash here and no auth user. Only for tests of the move.
+func (s *Store) AddUnmovedUser(ctx context.Context, name, passwordHash, role string) (User, error) {
+	row := userRow{ID: s.NewUserID(), Name: name, PasswordHash: passwordHash, Role: role, CreatedAt: s.now()}
+	if err := s.r.users.Create(ctx, &row); err != nil {
+		return User{}, dup(err, conflictf("the user name %q is already taken", name))
+	}
+	return userOf(row), nil
+}

@@ -26,13 +26,13 @@ describe('loading the addresses of a domain', () => {
       '/api/dns/zones': () => json({ zones: [] }),
       '/api/redirects': () =>
         json([
-          { id: 1, source_domain: 'go.example.com', source_path: '', target: 'https://example.org' },
-          { id: 2, source_domain: 'docs.example.com', source_path: '/old', target: '/new' },
-          { id: 3, source_domain: 'docs.example.com', source_path: '/a/*', target: '/b' },
+          { id: '1', source_domain: 'go.example.com', source_path: '', target: 'https://example.org' },
+          { id: '2', source_domain: 'docs.example.com', source_path: '/old', target: '/new' },
+          { id: '3', source_domain: 'docs.example.com', source_path: '/a/*', target: '/b' },
         ]),
     })
     const sources = await loadSources()
-    expect(sources.redirects).toEqual([{ id: 1, source: 'go.example.com', target: 'https://example.org' }])
+    expect(sources.redirects).toEqual([{ id: '1', source: 'go.example.com', target: 'https://example.org' }])
     expect(sources.pathRedirectHosts).toEqual(['docs.example.com'])
   })
 
@@ -76,8 +76,8 @@ describe('loading the addresses of a domain', () => {
       '/api/dns/connections/2/zones/example.com/records': () => json({ error: 'token expired' }, 502),
     })
     const result = await loadZoneRecords([
-      { connectionId: 1, connectionName: 'Hetzner', name: 'example.com' },
-      { connectionId: 2, connectionName: 'Old', name: 'example.com' },
+      { connectionId: '1', connectionName: 'Hetzner', name: 'example.com' },
+      { connectionId: '2', connectionName: 'Old', name: 'example.com' },
     ])
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(result.failed).toEqual(['example.com'])

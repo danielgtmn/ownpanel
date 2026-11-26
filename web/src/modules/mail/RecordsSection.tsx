@@ -205,10 +205,10 @@ export function RecordsSection({ domain, onApplied }: { domain: string; onApplie
           ) : data.can_apply ? (
             <p>
               {data.zone} is managed through one of your DNS connections
-              {data.connection_id !== null ? (
+              {data.connection_id ? (
                 <>
                   {' '}
-                  (<a href={hrefFor('dns', String(data.connection_id), data.zone)}>show its records</a>)
+                  (<a href={hrefFor('dns', data.connection_id, data.zone)}>show its records</a>)
                 </>
               ) : null}
               . The panel can set up the {open === 1 ? 'missing record' : `${open} missing records`} for you.

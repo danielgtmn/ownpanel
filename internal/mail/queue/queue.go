@@ -126,7 +126,7 @@ type Queue struct {
 }
 
 type groupKey struct {
-	id     int64
+	id     string
 	domain string
 }
 
@@ -358,7 +358,7 @@ func (q *Queue) work(key groupKey, m storage.QueuedMessage, rcpts []storage.Queu
 	// Claim the recipients first: the list may be stale (another attempt
 	// finished after it was read), and a recipient must never be
 	// delivered by two attempts.
-	ids := make([]int64, len(rcpts))
+	ids := make([]string, len(rcpts))
 	for i, r := range rcpts {
 		ids[i] = r.ID
 	}

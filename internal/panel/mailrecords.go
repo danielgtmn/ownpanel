@@ -126,7 +126,7 @@ type MailRecords struct {
 	MailHost     string       `json:"mail_host"`
 	Records      []MailRecord `json:"records"`
 	CanApply     bool         `json:"can_apply"`
-	ConnectionID int64        `json:"connection_id"`
+	ConnectionID string       `json:"connection_id"`
 	Zone         string       `json:"zone"`
 	// ApplyNote says why the records cannot be applied here; empty when
 	// they can.
@@ -904,7 +904,7 @@ func (s *Service) SetUpMailRecords(ctx context.Context, a Actor, domain string, 
 	if err != nil {
 		return MailRecordChanges{}, err
 	}
-	if note != "" && m.conn.ID == 0 {
+	if note != "" && m.conn.ID == "" {
 		return MailRecordChanges{}, errorf(Conflict, "%s", strings.TrimSuffix(note, "."))
 	}
 	specs, err := s.mailRecordSpecs(ctx, md.Domain, host)
@@ -946,7 +946,7 @@ func (s *Service) SetUpMailHostSPF(ctx context.Context, a Actor) (MailRecordChan
 	if err != nil {
 		return MailRecordChanges{}, err
 	}
-	if note != "" && m.conn.ID == 0 {
+	if note != "" && m.conn.ID == "" {
 		return MailRecordChanges{}, errorf(Conflict, "%s", strings.TrimSuffix(strings.Replace(note, "The domain's zone", "The zone of the mail server's name", 1), "."))
 	}
 	res, _, err := s.writeMailRecords(ctx, a, m, []mailRecordSpec{hostSPFSpec}, host, host, true, "mail.host-spf.set", host)

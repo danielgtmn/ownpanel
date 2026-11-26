@@ -33,7 +33,7 @@ function Overview() {
     const adopted = await adoptZone(zone.connection_id, zone.name)
     close()
     toast.success(`${adopted.name} is now managed here.`)
-    navigate('dns', String(adopted.connection_id), adopted.name)
+    navigate('dns', adopted.connection_id, adopted.name)
   }
 
   async function create(connection: Connection, name: string): Promise<Zone> {

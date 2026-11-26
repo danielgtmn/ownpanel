@@ -240,7 +240,7 @@ type recordsWorld struct {
 	*mailWorld
 	bobDNS, rootDNS *memDNS
 	look            *zoneLookups
-	bobConn         int64
+	bobConn         string
 }
 
 // newRecordsWorld: the mail world where bob's DNS connection holds the
@@ -345,7 +345,7 @@ func TestMailRecordStatuses(t *testing.T) {
 	// without a connection of their own for the zone.
 	for _, a := range []Actor{bobRead, admin, rootRead} {
 		r, err := w.svc.MailRecords(ctx, a, "bobzone.org")
-		if err != nil || r.CanApply || r.ConnectionID != 0 || r.Zone != "" || r.ApplyNote == "" {
+		if err != nil || r.CanApply || r.ConnectionID != "" || r.Zone != "" || r.ApplyNote == "" {
 			t.Fatalf("%s: %+v %v", a.Name, r, err)
 		}
 		if d := recordOf(t, r, MailRecordDKIM); !strings.Contains(d.Note, "split") {

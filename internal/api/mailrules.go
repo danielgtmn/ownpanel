@@ -16,19 +16,13 @@ func (s *Server) mailRulesRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) getMailboxRules(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "mailbox")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	v, err := s.Panel.MailboxRulesOf(r.Context(), actorOf(r), id)
 	answer(w, http.StatusOK, v, err)
 }
 
 func (s *Server) setMailboxOutOfOffice(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "mailbox")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	var body struct {
 		Enabled bool   `json:"enabled"`
 		Subject string `json:"subject"`
@@ -50,10 +44,7 @@ func (s *Server) setMailboxOutOfOffice(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setMailboxForwarding(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "mailbox")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	var body struct {
 		Enabled  bool   `json:"enabled"`
 		To       string `json:"to"`
@@ -70,10 +61,7 @@ func (s *Server) setMailboxForwarding(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setMailboxMayForward(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "mailbox")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	var body struct {
 		Allowed bool `json:"allowed"`
 	}

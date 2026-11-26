@@ -380,6 +380,7 @@ func TestFileJobResumesAfterRestart(t *testing.T) {
 	// Leftovers: a spool without a job and a stray file.
 	must(t, os.WriteFile(filepath.Join(e.store.ImportsDir(), "999.spool"), []byte("x"), 0o600))
 	must(t, os.WriteFile(filepath.Join(e.store.ImportsDir(), "stray"), []byte("x"), 0o600))
+	must(t, os.WriteFile(filepath.Join(e.store.ImportsDir(), "Not-An-ID.spool"), []byte("x"), 0o600))
 	e.m = e.manager()
 	j = e.wait(idAlice, j.ID, config.ImportDone)
 	if s := subjects(e.messages(idAlice)["box"]); !slices.Equal(s, []string{"n2", "n3", "n4"}) || j.Copied != 5 {

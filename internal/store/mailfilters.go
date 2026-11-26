@@ -1,48 +1,47 @@
 package store
 
-import "context"
+import (
+	"context"
+
+	"github.com/danielgtmn/ablage"
+)
 
 // Forwarding by filters (G2): mailboxes listed in mailbox_no_forwarding
 // may not forward mail.
 
 // MailboxesNoForwarding returns the ids of mailboxes that may not forward.
-func (s *Store) MailboxesNoForwarding(ctx context.Context) (map[int64]bool, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT mailbox_id FROM mailbox_no_forwarding`)
+func (s *Store) MailboxesNoForwarding(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.r.noForwarding.Find(ctx, ablage.Query{})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := map[int64]bool{}
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out[id] = true
+	out := map[string]bool{}
+	for _, r := range rows {
+		out[r.MailboxID] = true
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // MailboxMayForward tells whether a mailbox's filters may forward mail.
-func (s *Store) MailboxMayForward(ctx context.Context, id int64) (bool, error) {
-	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM mailbox_no_forwarding WHERE mailbox_id = ?`, id).Scan(&n)
+func (s *Store) MailboxMayForward(ctx context.Context, id string) (bool, error) {
+	n, err := s.r.noForwarding.Count(ctx, ablage.Eq("mailbox_id", id))
 	return n == 0, err
 }
 
 // SetMailboxMayForward allows or forbids forwarding for a mailbox.
-func (s *Store) SetMailboxMayForward(ctx context.Context, id int64, allowed bool) error {
+func (s *Store) SetMailboxMayForward(ctx context.Context, id string, allowed bool) error {
 	if allowed {
-		_, err := s.db.ExecContext(ctx, `DELETE FROM mailbox_no_forwarding WHERE mailbox_id = ?`, id)
+		_, err := s.r.noForwarding.DeleteWhere(ctx, ablage.Eq("mailbox_id", id))
 		return err
 	}
-	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM mailboxes WHERE id = ?`, id).Scan(&n); err != nil {
-		return err
-	}
-	if n == 0 {
-		return notFoundf("mailbox not found")
-	}
-	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO mailbox_no_forwarding (mailbox_id) VALUES (?)`, id)
-	return err
+	return s.tx(ctx, func(r repos) error {
+		ok, err := r.mailboxes.Exists(ctx, id)
+		if err != nil {
+			return err
+		}
+		if id == "" || !ok {
+			return errMailboxNotFound
+		}
+		return ignoreDup(r.noForwarding.Create(ctx, &noForwardingRow{MailboxID: id}))
+	})
 }

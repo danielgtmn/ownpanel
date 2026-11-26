@@ -44,7 +44,7 @@ func TestDAVCollectionIDsNeverReused(t *testing.T) {
 		t.Fatal(err)
 	}
 	if fresh.ID == old.ID {
-		t.Fatalf("id %d reused", fresh.ID)
+		t.Fatalf("id %s reused", fresh.ID)
 	}
 	if _, _, err := s.DAVChanges(ctx, fresh, oldToken); !errors.Is(err, ErrInvalidSyncToken) {
 		t.Fatalf("old token accepted: %v", err)

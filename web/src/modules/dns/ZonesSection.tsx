@@ -51,7 +51,7 @@ export function ZonesSection({ zones, hasAccounts, onAdd }: Props) {
             <li className="record-row" key={row.key}>
               <div className="record-main">
                 <h3 className="record-title">
-                  <a href={hrefFor('dns', String(row.connectionId), row.name)}>{row.name}</a>
+                  <a href={hrefFor('dns', row.connectionId, row.name)}>{row.name}</a>
                 </h3>
                 <ul className="record-facts">
                   <li>{row.connectionName}</li>

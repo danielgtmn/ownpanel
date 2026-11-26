@@ -9,9 +9,9 @@ export function zoneRows(family: Family): FamilyRow[] {
     key: `zone:${zone.connectionId}/${zone.name}`,
     label: 'DNS records',
     hint: family.zones.length > 1 ? zone.connectionName : undefined,
-    href: hrefFor('dns', String(zone.connectionId), zone.name),
+    href: hrefFor('dns', zone.connectionId, zone.name),
     icon: RecordsIcon,
-    isCurrent: (route) => startsWith(route.segments, ['dns', String(zone.connectionId), zone.name]),
+    isCurrent: (route) => startsWith(route.segments, ['dns', zone.connectionId, zone.name]),
   }))
 }
 

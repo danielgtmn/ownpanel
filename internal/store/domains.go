@@ -2,7 +2,10 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
+
+	"github.com/danielgtmn/ablage"
 )
 
 // Domain is a domain a person entered by hand; its DNS is managed elsewhere.
@@ -13,44 +16,40 @@ type Domain struct {
 
 // AddDomain records a domain for a user. It reports whether the domain was
 // new; adding it again changes nothing.
-func (s *Store) AddDomain(ctx context.Context, userID int64, domain string) (bool, error) {
-	res, err := s.db.ExecContext(ctx, `INSERT INTO domains (user_id, domain, created_at) VALUES (?, ?, ?)
-		ON CONFLICT (user_id, domain) DO NOTHING`, userID, domain, s.now())
-	if err != nil {
-		return false, err
+func (s *Store) AddDomain(ctx context.Context, userID, domain string) (bool, error) {
+	err := s.r.domains.Create(ctx, &domainRow{UserID: userID, Domain: domain, CreatedAt: s.now()})
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, ablage.ErrDuplicate):
+		return false, nil
+	case errors.Is(err, ablage.ErrReference):
+		return false, errUserNotFound
 	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
+	return false, err
 }
 
 // RemoveDomain forgets a domain of a user.
-func (s *Store) RemoveDomain(ctx context.Context, userID int64, domain string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM domains WHERE user_id = ? AND domain = ?`, userID, domain)
+func (s *Store) RemoveDomain(ctx context.Context, userID, domain string) error {
+	n, err := s.r.domains.DeleteWhere(ctx, ablage.And(ablage.Eq("user_id", userID), ablage.Eq("domain", domain)))
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if n == 0 {
 		return notFoundf("the domain %s is not in your panel", domain)
 	}
 	return nil
 }
 
 // Domains lists the domains of one user, ordered by name.
-func (s *Store) Domains(ctx context.Context, userID int64) ([]Domain, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT domain, created_at FROM domains WHERE user_id = ? ORDER BY domain`, userID)
+func (s *Store) Domains(ctx context.Context, userID string) ([]Domain, error) {
+	rows, err := s.r.domains.Find(ctx, ablage.Query{Where: ablage.Eq("user_id", userID), OrderBy: []ablage.Order{ablage.Asc("domain")}})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []Domain{}
-	for rows.Next() {
-		var d Domain
-		var created int64
-		if err := rows.Scan(&d.Domain, &created); err != nil {
-			return nil, err
-		}
-		d.CreatedAt = unix(created)
-		out = append(out, d)
+	out := make([]Domain, len(rows))
+	for i, d := range rows {
+		out[i] = Domain{Domain: d.Domain, CreatedAt: d.CreatedAt}
 	}
-	return out, rows.Err()
+	return out, nil
 }

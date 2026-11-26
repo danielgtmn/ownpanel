@@ -42,6 +42,9 @@ import (
 //	DELETE /mailboxes/{sid}/imports/{id}          204: cancels an unfinished job, removes a finished one
 //	GET    /mailboxes/{sid}/export                application/zip, streamed
 //
+// {id} is the job's ImportJob.ID, an opaque string (see ValidImportID);
+// one that does not have that form is an unknown job (404).
+//
 // Answers that are not a success carry a plain-text reason meant for
 // people (never a password): 400 invalid input, 404 unknown mailbox or job,
 // 409 not possible in the job's state, another import of the mailbox not
@@ -263,7 +266,7 @@ type ImportFailure struct {
 
 // ImportJob is an import into a mailbox. It never holds a password.
 type ImportJob struct {
-	ID        int64  `json:"id"`
+	ID        string `json:"id"` // opaque, see ValidImportID
 	StorageID string `json:"storage_id"`
 	Kind      string `json:"kind"` // ImportIMAP or ImportFile
 	State     string `json:"state"`
@@ -612,15 +615,15 @@ func mailboxPath(storageID string) (string, error) {
 	return PathMailbox + url.PathEscape(storageID), nil
 }
 
-func jobPath(storageID string, id int64, under string) (string, error) {
+func jobPath(storageID, id, under string) (string, error) {
 	p, err := mailboxPath(storageID)
 	if err != nil {
 		return "", err
 	}
-	if id <= 0 {
+	if !ValidImportID(id) {
 		return "", errors.New("invalid job id")
 	}
-	return p + under + "/" + strconv.FormatInt(id, 10), nil
+	return p + under + "/" + url.PathEscape(id), nil
 }
 
 // CheckImport signs in to another account and reports its folders and
@@ -665,7 +668,7 @@ func (c *Client) CreateUpload(ctx context.Context, storageID string, req UploadR
 // there). It returns how many bytes the service has now. After the last
 // part the job moves on to checking by itself. Not bounded by the 30 s
 // timeout: ctx and an idle timeout end it.
-func (c *Client) UploadPart(ctx context.Context, storageID string, id, offset int64, part io.Reader, size int64) (int64, error) {
+func (c *Client) UploadPart(ctx context.Context, storageID, id string, offset int64, part io.Reader, size int64) (int64, error) {
 	p, err := jobPath(storageID, id, PathUploads)
 	if err != nil {
 		return 0, err
@@ -691,7 +694,7 @@ func (c *Client) UploadPart(ctx context.Context, storageID string, id, offset in
 
 // ResumeImport starts a file job that is ready, or continues a paused or
 // interrupted IMAP job with the password.
-func (c *Client) ResumeImport(ctx context.Context, storageID string, id int64, r ImportResume) (ImportJob, error) {
+func (c *Client) ResumeImport(ctx context.Context, storageID, id string, r ImportResume) (ImportJob, error) {
 	var j ImportJob
 	p, err := jobPath(storageID, id, PathImports)
 	if err != nil {
@@ -714,7 +717,7 @@ func (c *Client) ImportJobs(ctx context.Context, storageID string) ([]ImportJob,
 }
 
 // ImportJob returns one job with its failures.
-func (c *Client) ImportJob(ctx context.Context, storageID string, id int64) (ImportJob, error) {
+func (c *Client) ImportJob(ctx context.Context, storageID, id string) (ImportJob, error) {
 	var j ImportJob
 	p, err := jobPath(storageID, id, PathImports)
 	if err != nil {
@@ -727,7 +730,7 @@ func (c *Client) ImportJob(ctx context.Context, storageID string, id int64) (Imp
 // CancelImport cancels a job that has not finished (it ends cancelled;
 // what was copied stays) and waits for it to stop, or removes a finished
 // job from the list.
-func (c *Client) CancelImport(ctx context.Context, storageID string, id int64) error {
+func (c *Client) CancelImport(ctx context.Context, storageID, id string) error {
 	p, err := jobPath(storageID, id, PathImports)
 	if err != nil {
 		return err

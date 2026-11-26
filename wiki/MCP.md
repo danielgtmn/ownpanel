@@ -25,7 +25,7 @@ Other clients need the same two things: the address and the header `Authorizatio
 
 ## Tools
 
-Version ids come from `get_site`; a version id starts with a UTC timestamp. Errors are returned as tool errors with a readable sentence.
+Version ids come from `get_site`; a version id starts with a UTC timestamp. Other ids (`id`, `connection_id`, `mailbox_id`, `grantee_id`) and mail import ids (`import_id`) are strings such as `"42"`: pass them on exactly as a list returned them. Errors are returned as tool errors with a readable sentence.
 
 | Tool | Arguments | What it does |
 |---|---|---|

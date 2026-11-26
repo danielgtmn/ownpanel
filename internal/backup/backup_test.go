@@ -21,7 +21,7 @@ func TestCreate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close() // stays open: backups run next to the daemon
-	if _, err := st.CreateSite(context.Background(), "blog", []string{"blog.example.com"}, 0); err != nil {
+	if _, err := st.CreateSite(context.Background(), "blog", []string{"blog.example.com"}, ""); err != nil {
 		t.Fatal(err)
 	}
 	rel := filepath.Join(data, "sites", "blog", "releases", "r1")

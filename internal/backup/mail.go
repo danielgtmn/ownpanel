@@ -89,6 +89,10 @@ func WriteMail(w io.Writer, dir string) error {
 		switch {
 		case rel == mailDB || strings.HasPrefix(rel, mailDB+"-") || rel == RestoredMarker:
 			return nil
+		case strings.HasPrefix(rel, mailDB+".pre-ablage-"):
+			// The copy the service kept of an index before its conversion
+			// (internal/mail/storage): the archive has the index itself.
+			return nil
 		case rel == "tmp" || rel == "trash":
 			return fs.SkipDir
 		}

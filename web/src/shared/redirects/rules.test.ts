@@ -26,7 +26,7 @@ const draft = (overrides: Partial<RedirectDraft> = {}): RedirectDraft => ({
   ...overrides,
 })
 
-function redirect(id: number, domain: string, path: string): Redirect {
+function redirect(id: string, domain: string, path: string): Redirect {
   return {
     id,
     owner: 'anna',
@@ -130,7 +130,7 @@ describe('codes', () => {
     expect(codeFor(false, false)).toBe(302)
     expect(codeFor(false, true)).toBe(307)
     expect(codeFor(true, true)).toBe(308)
-    const back = draftFrom({ ...redirect(1, 'a.com', '/x'), code: 307 })
+    const back = draftFrom({ ...redirect('1', 'a.com', '/x'), code: 307 })
     expect([back.permanent, back.keepMethod]).toEqual([false, true])
   })
 })
@@ -150,13 +150,13 @@ describe('inputFrom', () => {
 
 describe('lists', () => {
   it('sorts by domain, then path', () => {
-    const list = [redirect(3, 'b.com', '/z'), redirect(2, 'a.com', '/b'), redirect(1, 'a.com', ''), redirect(4, 'a.com', '/b')]
-    expect(sortRedirects(list).map((item) => item.id)).toEqual([1, 2, 4, 3])
-    expect(list.map((item) => item.id)).toEqual([3, 2, 1, 4])
+    const list = [redirect('3', 'b.com', '/z'), redirect('2', 'a.com', '/b'), redirect('1', 'a.com', ''), redirect('4', 'a.com', '/b')]
+    expect(sortRedirects(list).map((item) => item.id)).toEqual(['1', '2', '4', '3'])
+    expect(list.map((item) => item.id)).toEqual(['3', '2', '1', '4'])
   })
 
   it('keeps only domain redirects', () => {
-    expect(domainRedirects([redirect(1, 'a.com', ''), redirect(2, 'a.com', '/x')]).map((item) => item.id)).toEqual([1])
+    expect(domainRedirects([redirect('1', 'a.com', ''), redirect('2', 'a.com', '/x')]).map((item) => item.id)).toEqual(['1'])
   })
 
   it('says what is kept, only where it matters', () => {
@@ -188,8 +188,8 @@ describe('redirect requests', () => {
     vi.stubGlobal('fetch', fetchMock)
     const input = inputFrom(draft(), 'path')
     await createRedirect(input)
-    await updateRedirect(5, input)
-    await deleteRedirect(5)
+    await updateRedirect('5', input)
+    await deleteRedirect('5')
     expect(await listSiteRedirects('my site')).toEqual([])
     expect(fetchMock.mock.calls.map(([url, init]) => `${init?.method} ${url}`)).toEqual([
       'POST /api/redirects',

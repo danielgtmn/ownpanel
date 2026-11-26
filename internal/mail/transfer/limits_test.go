@@ -209,11 +209,11 @@ func TestScansLimitedAndNotRepeatedForever(t *testing.T) {
 	cancel()
 	// As if the service had been killed while scanning three uploads: the
 	// first was started once, the second maxScans times, the third never.
-	var ids []int64
+	var ids []string
 	for i, n := range []int{1, maxScans, 0} {
 		j := first
 		if i > 0 {
-			j.ID = 0
+			j.ID = ""
 			must(t, e.store.CreateImport(ctx, &j))
 			must(t, os.Link(e.m.spoolPath(first.ID), e.m.spoolPath(j.ID)))
 		}
