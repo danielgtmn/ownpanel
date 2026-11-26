@@ -16,12 +16,16 @@ import (
 const (
 	maxPktData = 65516
 	// Limits on what the server announces before the pack.
-	maxRefs         = 100_000
-	maxAdvertBytes  = 32 << 20
-	maxServerTexts  = 4 << 10
-	sidebandData    = 1
-	sidebandMessage = 2
-	sidebandError   = 3
+	maxRefs        = 100_000
+	maxAdvertBytes = 32 << 20
+	maxServerTexts = 4 << 10
+	// What a server may send between the request and the pack (a depth
+	// of 1 for one commit needs a single shallow line).
+	maxLinesBeforePack = 1000
+	maxBytesBeforePack = 256 << 10
+	sidebandData       = 1
+	sidebandMessage    = 2
+	sidebandError      = 3
 )
 
 var errFlush = errors.New("flush")
@@ -222,13 +226,17 @@ func fetchRequest(ad advert, want string) []byte {
 // readUntilPack reads the server's answer to fetchRequest up to the pack:
 // shallow lines (and their flush), then NAK or ACK.
 func readUntilPack(p *pktReader) error {
-	for range 1 << 20 {
+	total := 0
+	for range maxLinesBeforePack {
 		line, err := p.next()
 		if errors.Is(err, errFlush) {
 			continue
 		}
 		if err != nil {
 			return err
+		}
+		if total += len(line) + 4; total > maxBytesBeforePack {
+			break
 		}
 		s := strings.TrimSuffix(string(line), "\n")
 		switch {

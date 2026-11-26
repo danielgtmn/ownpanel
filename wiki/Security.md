@@ -167,6 +167,7 @@ Sites can take their code from any Git repository by its address ([[Git reposito
 - **The first fingerprint is only as good as the person's comparison.** The panel shows it; checking it against what the Git host publishes is up to the person.
 - **Members may make the panel connect to any public SSH or HTTPS server** of their choosing (within the rate limit), as they may make it fetch any public repository.
 - **A fetch writes up to 3 GB of temporary files** (objects and the tar.gz) in the panel's temporary directory, at most two at a time.
+- **Memory:** a fetch holds one object at a time, but resolving a delta needs the base, the delta and the result together, up to about 300 MB with the limit of 100 MB per object; two fetches may run at once. Before the pack, the panel reads at most 32 MB of branch and tag names and 256 KB of other lines.
 - **SHA-256 repositories** are not supported (refused, not misread).
 
 ### E-mail

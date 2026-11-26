@@ -2,6 +2,7 @@ package gitsource
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/ed25519"
@@ -362,4 +363,22 @@ func rsaKey(t *testing.T) (ssh.PublicKey, ssh.Signer) {
 		t.Fatal(err)
 	}
 	return s.PublicKey(), s
+}
+
+func TestReadUntilPackIsBounded(t *testing.T) {
+	var b bytes.Buffer
+	for range 5000 {
+		writePkt(&b, "shallow "+strings.Repeat("a", 40)+"\n")
+	}
+	writePkt(&b, "NAK\n")
+	if err := readUntilPack(newPktReader(&b)); err == nil {
+		t.Fatal("read endless lines before the pack")
+	}
+	b.Reset()
+	writePkt(&b, "shallow "+strings.Repeat("a", 40)+"\n")
+	writeFlush(&b)
+	writePkt(&b, "NAK\n")
+	if err := readUntilPack(newPktReader(&b)); err != nil {
+		t.Fatal(err)
+	}
 }
