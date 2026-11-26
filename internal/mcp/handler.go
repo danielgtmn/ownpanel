@@ -31,7 +31,8 @@ const instructions = "ownpanel is a hosting panel for static web sites: each sit
 	"can be made live again with make_version_live. Use publish_files for small sites you write " +
 	"yourself and create_upload_link for large archives. It also hosts e-mail: mail domains, " +
 	"mailboxes and aliases (mailbox passwords are only set in the web interface, never through " +
-	"these tools). Destructive tools such as delete_site require an explicit confirmation."
+	"these tools). GitHub connections can be looked at here but are made in the web interface. " +
+	"Destructive tools such as delete_site require an explicit confirmation."
 
 type config struct {
 	panelDomain func() string
@@ -89,6 +90,7 @@ func Handler(p *panel.Service, version string, opts ...Option) http.Handler {
 	addMailRulesTools(srv, p)
 	addDNSTools(srv, p)
 	addDomainTools(srv, p)
+	addGitHubTools(srv, p)
 	// Stateless: every request carries its own token, so there is no session
 	// to remember or to hijack.
 	sdkHandler := sdk.NewStreamableHTTPHandler(
