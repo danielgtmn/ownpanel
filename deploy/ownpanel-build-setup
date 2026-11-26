@@ -1,0 +1,351 @@
+#!/usr/bin/env bash
+# The root side of builds, run by ownpanel-build-setup.service before the
+# build service (ownpanel-build.service, user ownpanel-build) starts, and
+# stopped after it. Builds run code nobody reviewed; what keeps them in
+# their place and must not be in the hands of the build user is set up
+# here, by root:
+#
+# 1. The build disk. Everything a build writes (its workspace, its site's
+#    cache, the images, logs and outputs) lives on a file system of its own:
+#    a file of fixed size, reserved in full when it is made, mounted with
+#    nosuid, nodev and project quotas. Builds together can never use more
+#    of the server's disk than this file, and each area has a quota of its
+#    own (the numbers below match internal/build/worker):
+#      project 2         images        OWNPANEL_BUILD_IMAGES_SIZE
+#      project 3         results       OWNPANEL_BUILD_RESULTS_SIZE
+#      project 4         sources       OWNPANEL_BUILD_SOURCES_SIZE
+#      project 100+N     slot N        OWNPANEL_BUILD_WORKSPACE_SIZE
+#      project 1000+N    cache N       OWNPANEL_BUILD_CACHE_SIZE
+#    The build user may give its own folders a project; only root sets the
+#    quotas, and nothing inside a container can change a file's project.
+#    The file and the mount point belong to root, in a folder of root's, so
+#    the build user can neither swap the file nor move the mount.
+#
+# 2. The network limits. Builds need the Internet (package registries) but
+#    must not reach this server's own services or the networks behind it.
+#    Every connection a build opens leaves through a process of
+#    ownpanel-build (or of an id in its subordinate range), and for those
+#    ids the table below refuses
+#      - every address of this server (loopback and all its own addresses),
+#      - private, link-local (cloud metadata), carrier-grade NAT, multicast
+#        and reserved ranges, IPv4 and IPv6,
+#      - outgoing mail (port 25), so a build cannot send mail as this server.
+#    The only exception: DNS (port 53) to the resolvers this server itself
+#    uses, when they are not loopback addresses; they are written to
+#    $RUN/resolvers for the build service to hand to its containers.
+#    The table is ownpanel's own (inet ownpanel_build): it does not touch
+#    ufw, firewalld or other rules, and those cannot open what it refuses. A
+#    command that flushes the whole ruleset removes it; the build service
+#    tests before and during every build that it is in place and builds
+#    nothing without it, and nftables.service puts it back after a restart
+#    (install.sh adds that to it).
+#
+#   ownpanel-build-setup start|stop|firewall|status
+set -euo pipefail
+
+BUILD_USER=${OWNPANEL_BUILD_USER:-ownpanel-build}
+CONF=${OWNPANEL_BUILD_CONF:-/etc/ownpanel/build.env}
+# Root's (0755); the build user's home and the mount point are in it.
+BASE=${OWNPANEL_BUILD_BASE:-/var/lib/ownpanel-build}
+IMAGE=$BASE/disk.img
+WORK=$BASE/work
+TABLE=ownpanel_build
+# Root's own runtime directory (the unit's RuntimeDirectory).
+RUN=${OWNPANEL_BUILD_SETUP_RUN:-/run/ownpanel-build-setup}
+MAX_RESOLVERS=3
+MAX_SLOTS=16
+MAX_CACHES=1000
+# Free space the server keeps besides the build disk when it is made.
+KEEP_FREE_KB=$((2 * 1024 * 1024))
+
+log() { printf '%s\n' "$*" >&2; }
+die() { log "ownpanel-build-setup: $*"; exit 1; }
+
+# size_kb <value>: "4G", "512M", "1T" or a number of bytes, in KiB.
+size_kb() {
+  local v=$1 n unit
+  [[ $v =~ ^([0-9]{1,12})([KMGT]?)$ ]] || return 1
+  n=${BASH_REMATCH[1]}
+  unit=${BASH_REMATCH[2]}
+  case $unit in
+    "") echo $((n / 1024)) ;;
+    K) echo "$n" ;;
+    M) echo $((n * 1024)) ;;
+    G) echo $((n * 1024 * 1024)) ;;
+    T) echo $((n * 1024 * 1024 * 1024)) ;;
+  esac
+}
+
+# read_conf: the settings, each checked; the file is root's and read as
+# data, never sourced.
+read_conf() {
+  [ -f "$CONF" ] && [ ! -L "$CONF" ] || die "$CONF is missing"
+  local key value
+  disk_size="" slots="" workspace_size="" cache_size="" caches="" images_size="" sources_size="" results_size=""
+  while IFS='=' read -r key value; do
+    case $key in
+      OWNPANEL_BUILD_DISK_SIZE) disk_size=$value ;;
+      OWNPANEL_BUILD_SLOTS) slots=$value ;;
+      OWNPANEL_BUILD_WORKSPACE_SIZE) workspace_size=$value ;;
+      OWNPANEL_BUILD_CACHE_SIZE) cache_size=$value ;;
+      OWNPANEL_BUILD_CACHES) caches=$value ;;
+      OWNPANEL_BUILD_IMAGES_SIZE) images_size=$value ;;
+      OWNPANEL_BUILD_SOURCES_SIZE) sources_size=$value ;;
+      OWNPANEL_BUILD_RESULTS_SIZE) results_size=$value ;;
+    esac
+  done < <(grep -E '^OWNPANEL_BUILD_[A-Z_]+=' "$CONF")
+  disk_kb=$(size_kb "$disk_size") || die "OWNPANEL_BUILD_DISK_SIZE in $CONF is not a size"
+  workspace_kb=$(size_kb "$workspace_size") || die "OWNPANEL_BUILD_WORKSPACE_SIZE in $CONF is not a size"
+  cache_kb=$(size_kb "$cache_size") || die "OWNPANEL_BUILD_CACHE_SIZE in $CONF is not a size"
+  images_kb=$(size_kb "$images_size") || die "OWNPANEL_BUILD_IMAGES_SIZE in $CONF is not a size"
+  sources_kb=$(size_kb "$sources_size") || die "OWNPANEL_BUILD_SOURCES_SIZE in $CONF is not a size"
+  results_kb=$(size_kb "$results_size") || die "OWNPANEL_BUILD_RESULTS_SIZE in $CONF is not a size"
+  [[ $slots =~ ^[0-9]{1,2}$ ]] && [ "$slots" -ge 1 ] && [ "$slots" -le "$MAX_SLOTS" ] ||
+    die "OWNPANEL_BUILD_SLOTS in $CONF must be between 1 and $MAX_SLOTS"
+  [[ $caches =~ ^[0-9]{1,4}$ ]] && [ "$caches" -ge 1 ] && [ "$caches" -le "$MAX_CACHES" ] ||
+    die "OWNPANEL_BUILD_CACHES in $CONF must be between 1 and $MAX_CACHES"
+  [ "$workspace_kb" -ge $((64 * 1024)) ] || die "OWNPANEL_BUILD_WORKSPACE_SIZE must be at least 64M"
+  [ "$cache_kb" -ge $((16 * 1024)) ] || die "OWNPANEL_BUILD_CACHE_SIZE must be at least 16M"
+  # Every slot, the images, the waiting sources and the results must fit at
+  # once, with at least one cache's worth to spare.
+  local need=$((slots * workspace_kb + images_kb + sources_kb + results_kb + cache_kb))
+  [ "$disk_kb" -ge "$need" ] ||
+    die "OWNPANEL_BUILD_DISK_SIZE ($disk_size) is smaller than the slots, images, sources, results and one cache need together ($((need / 1024)) MB)"
+}
+
+build_ids() {
+  uid=$(id -u "$BUILD_USER" 2>/dev/null) || die "the user $BUILD_USER does not exist"
+  gid=$(id -g "$BUILD_USER")
+  [[ $uid =~ ^[0-9]+$ ]] && [ "$uid" -gt 0 ] || die "$BUILD_USER has no usable user id"
+}
+
+# root_dir <path>: path is a real directory of root's, nobody else may write.
+root_dir() {
+  [ -d "$1" ] && [ ! -L "$1" ] || die "$1 is missing or not a directory"
+  [ "$(stat -c %u:%a "$1")" = 0:755 ] || die "$1 must belong to root with mode 0755"
+}
+
+# ---------------------------------------------------------------------------
+# The build disk.
+
+image_bytes() { stat -c %s "$IMAGE" 2>/dev/null || echo 0; }
+
+# reserve: every block of the file is allocated on the server's disk, so
+# builds can never take space from anything else. fallocate fills holes
+# (punched by a discard, or a copy) without changing the content.
+reserve() {
+  local size alloc missing avail
+  size=$(image_bytes)
+  fallocate -l "$size" -- "$IMAGE" 2>/dev/null || true
+  alloc=$(($(stat -c '%b * %B' "$IMAGE")))
+  [ "$alloc" -lt "$size" ] || return 0
+  # A file system that cannot reserve (e.g. with compression): the build
+  # disk may still use up to its size, so that much must be free.
+  missing=$(((size - alloc) / 1024))
+  avail=$(df -Pk "$BASE" | awk 'NR == 2 { print $4 }')
+  [ "$avail" -ge $((missing + KEEP_FREE_KB)) ] ||
+    die "the build disk is not fully reserved ($((missing / 1024)) MB missing) and the server has only $((avail / 1024)) MB free"
+  log "warning: the file system of $BASE does not reserve the build disk; $((missing / 1024)) MB of it are taken from free space as builds write"
+}
+
+# no_discard: the loop device passes no discard on to the file (fstrim of
+# the mounted build disk would punch holes into it otherwise).
+no_discard() {
+  local dev q
+  dev=$(findmnt -n -o SOURCE --target "$WORK")
+  q=/sys/block/${dev#/dev/}/queue/discard_max_bytes
+  if [ -w "$q" ]; then
+    echo 0 >"$q" 2>/dev/null || log "warning: discard could not be turned off for $dev"
+  fi
+}
+
+make_image() {
+  local avail
+  rm -f -- "$IMAGE"
+  avail=$(df -Pk "$BASE" | awk 'NR == 2 { print $4 }')
+  [ "$avail" -ge $((disk_kb + KEEP_FREE_KB)) ] ||
+    die "not enough free space for the build disk: $((disk_kb / 1024)) MB plus $((KEEP_FREE_KB / 1024)) MB to spare are needed in $BASE, $((avail / 1024)) MB are free (lower OWNPANEL_BUILD_DISK_SIZE in $CONF)"
+  log "making the build disk ($((disk_kb / 1024)) MB)"
+  # Reserved in full now, so the space is there for builds later and builds
+  # never take it from anything else.
+  (umask 077 && fallocate -l "$((disk_kb * 1024))" -- "$IMAGE") || {
+    rm -f -- "$IMAGE"
+    die "the space for the build disk could not be reserved (fallocate failed: does this file system support it?)"
+  }
+  # One inode per 8 KB: node_modules are many small files. nodiscard: a
+  # discard would punch holes into the file and give the reserved space back.
+  mkfs.ext4 -q -F -m 0 -i 8192 -L ownpanel-build -O quota,project -E "root_owner=$uid:$gid,nodiscard" -- "$IMAGE" ||
+    { rm -f -- "$IMAGE"; die "the build disk could not be formatted"; }
+}
+
+mount_disk() {
+  local want_bytes=$((disk_kb * 1024)) rc=0 dev back
+  root_dir "$BASE"
+  if [ -L "$WORK" ] || { [ -e "$WORK" ] && [ ! -d "$WORK" ]; }; then die "$WORK is not a directory"; fi
+  install -d -m 0755 -o root -g root "$WORK"
+  if mountpoint -q -- "$WORK"; then
+    dev=$(findmnt -n -o SOURCE --target "$WORK")
+    back=$(losetup -n -O BACK-FILE -- "$dev" 2>/dev/null | sed 's/ *$//')
+    if [ "$back" != "$IMAGE" ] || [ "$(image_bytes)" != "$want_bytes" ]; then
+      log "remounting the build disk"
+      umount -- "$WORK"
+    fi
+  fi
+  if ! mountpoint -q -- "$WORK"; then
+    if [ "$(image_bytes)" != "$want_bytes" ]; then
+      # New, or its size was changed in $CONF: the old one only held caches.
+      make_image
+    else
+      e2fsck -p -- "$IMAGE" >/dev/null 2>&1 || rc=$?
+      if [ "$rc" -ge 4 ]; then
+        log "the build disk is damaged (e2fsck exit $rc); making a new one (only caches are lost)"
+        make_image
+      fi
+    fi
+    chmod 0600 -- "$IMAGE"
+    reserve
+    mount -o loop,nosuid,nodev,noatime,prjquota -- "$IMAGE" "$WORK" || die "the build disk could not be mounted (are loop devices available?)"
+  fi
+  no_discard
+  # The root of the mounted file system is the build user's; nothing below
+  # it is touched by root.
+  chown --no-dereference "$uid:$gid" -- "$WORK"
+  chmod 0700 -- "$WORK"
+}
+
+set_quotas() {
+  local n lines=""
+  # setquota takes 1 KB blocks: id block-soft block-hard inode-soft inode-hard
+  lines+="2 0 $images_kb 0 2000000"$'\n'
+  lines+="3 0 $results_kb 0 1000"$'\n'
+  lines+="4 0 $sources_kb 0 1000"$'\n'
+  for ((n = 0; n < slots; n++)); do
+    lines+="$((100 + n)) 0 $workspace_kb 0 1000000"$'\n'
+  done
+  for ((n = 0; n < caches; n++)); do
+    lines+="$((1000 + n)) 0 $cache_kb 0 500000"$'\n'
+  done
+  printf '%s' "$lines" | setquota -P -b -- "$WORK" || die "the quotas of the build disk could not be set"
+}
+
+# ---------------------------------------------------------------------------
+# The network limits.
+
+# resolvers: the name servers this server uses, one per line, loopback and
+# other unusable ones left out. systemd-resolved lists the real ones in its
+# own file; /etc/resolv.conf then only names its local stub.
+resolvers() {
+  local f=/etc/resolv.conf addr n=0
+  [ -r /run/systemd/resolve/resolv.conf ] && f=/run/systemd/resolve/resolv.conf
+  [ -r "$f" ] || return 0
+  while read -r addr; do
+    addr=${addr%%%*} # an interface suffix (fe80::1%eth0) cannot be used in a container
+    case $addr in
+      127.* | ::1 | 0.0.0.0 | :: | fe80:* | "") continue ;;
+    esac
+    [[ $addr =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ || $addr =~ ^[0-9A-Fa-f:.]+:[0-9A-Fa-f:.]*$ ]] || continue
+    printf '%s\n' "$addr"
+    n=$((n + 1))
+    [ "$n" -lt "$MAX_RESOLVERS" ] || break
+  done < <(awk '$1 == "nameserver" { print $2 }' "$f")
+}
+
+join() { paste -sd, - | sed 's/,/, /g'; }
+
+firewall() {
+  command -v nft >/dev/null || die "the nft command is missing (apt-get install nftables)"
+  local ids sub count dns4 dns6 rules
+  build_ids
+  ids=$uid
+  # Its subordinate ids (the other users inside a container).
+  while IFS=: read -r _ sub count; do
+    [[ $sub =~ ^[0-9]+$ && $count =~ ^[0-9]+$ ]] && [ "$sub" -gt 0 ] && [ "$count" -gt 0 ] || continue
+    ids="$ids, $sub-$((sub + count - 1))"
+  done < <(grep "^$BUILD_USER:" /etc/subuid 2>/dev/null || true)
+
+  install -d -m 0755 -o root -g root "$RUN"
+  resolvers >"$RUN/.resolvers.new"
+  dns4=$(grep -v : "$RUN/.resolvers.new" | join || true)
+  dns6=$(grep : "$RUN/.resolvers.new" | join || true)
+
+  rules=$(
+    cat <<EOF
+table inet $TABLE
+delete table inet $TABLE
+table inet $TABLE {
+	chain output {
+		type filter hook output priority filter; policy accept;
+		meta skuid { $ids } jump builds
+	}
+	chain builds {
+EOF
+    if [ -n "$dns4" ]; then
+      printf '\t\tip daddr { %s } udp dport 53 accept\n' "$dns4"
+      printf '\t\tip daddr { %s } tcp dport 53 accept\n' "$dns4"
+    fi
+    if [ -n "$dns6" ]; then
+      printf '\t\tip6 daddr { %s } udp dport 53 accept\n' "$dns6"
+      printf '\t\tip6 daddr { %s } tcp dport 53 accept\n' "$dns6"
+    fi
+    cat <<'EOF'
+		fib daddr type { local, broadcast, anycast, multicast } goto refuse
+		ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/3 } goto refuse
+		ip6 daddr { ::/127, ::ffff:0:0/96, 64:ff9b::/96, 64:ff9b:1::/48, fc00::/7, fe80::/10, fec0::/10, ff00::/8 } goto refuse
+		tcp dport 25 goto refuse
+	}
+	chain refuse {
+		meta l4proto tcp counter reject with tcp reset
+		counter reject with icmpx type admin-prohibited
+	}
+}
+EOF
+  )
+  # One transaction: the old table goes and the new one comes at the same
+  # moment, so there is never a time without it.
+  printf '%s\n' "$rules" | nft -f - || die "the packet filter refused the rules (is nftables supported by this kernel?)"
+  chmod 0644 "$RUN/.resolvers.new"
+  mv -f "$RUN/.resolvers.new" "$RUN/resolvers"
+  log "network limits for builds are in place (user ids: $ids; resolvers: ${dns4:-none}${dns6:+, $dns6})"
+}
+
+# ---------------------------------------------------------------------------
+
+start() {
+  local cmd
+  for cmd in nft setquota mkfs.ext4 e2fsck losetup fallocate findmnt mountpoint; do
+    command -v "$cmd" >/dev/null || die "the command '$cmd' is missing (run install.sh again)"
+  done
+  read_conf
+  build_ids
+  mount_disk
+  set_quotas
+  firewall
+  log "the build disk is in place: $((disk_kb / 1024)) MB, $slots slots of $((workspace_kb / 1024)) MB, $caches caches of $((cache_kb / 1024)) MB"
+}
+
+stop() {
+  if command -v nft >/dev/null; then nft delete table inet "$TABLE" 2>/dev/null || true; fi
+  rm -f "$RUN/resolvers"
+  if mountpoint -q -- "$WORK" 2>/dev/null; then
+    umount -- "$WORK" || log "the build disk is still in use and stays mounted"
+  fi
+}
+
+status() {
+  if nft list table inet "$TABLE" >/dev/null 2>&1; then echo "network limits: active"; else echo "network limits: MISSING"; fi
+  if mountpoint -q -- "$WORK"; then
+    echo "build disk: mounted ($(findmnt -n -o OPTIONS --target "$WORK"))"
+    repquota -P -s -- "$WORK" 2>/dev/null | sed -n '1,40p' || true
+  else
+    echo "build disk: not mounted"
+  fi
+}
+
+[ "$(id -u)" = 0 ] || die "must run as root"
+case ${1:-} in
+  start) start ;;
+  stop) stop ;;
+  firewall) firewall ;;
+  status) status ;;
+  *) die "usage: ownpanel-build-setup start|stop|firewall|status" ;;
+esac

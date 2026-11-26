@@ -43,12 +43,13 @@ actions/publish/publish_test.sh  # the GitHub Action against a real ownpaneld
 
 ### Live tests
 
-Two tests talk to real services and are behind the `live` build tag, so `go test ./...` never runs them:
+These tests talk to real services and are behind build tags, so `go test ./...` never runs them:
 
 | Test | Command | Needs |
 |---|---|---|
 | Hetzner Cloud API: lists zones, creates and removes records named `_ownpanel-live-test*` in the given zone, leaves nothing else changed | `HETZNER_TOKEN=… HETZNER_TEST_ZONE=example.com go test -tags live -run Live -v ./internal/dns/hetzner` | `HETZNER_TOKEN`: a Read & Write token; `HETZNER_TEST_ZONE`: a primary zone in that project. Skipped if either is unset |
 | Authoritative DNS lookups: read-only, logs what a few names resolve to | `go test -tags live -run Live -v ./internal/dns` | network access; no environment variables (the names it looks up are written in the test file) |
+| Build isolation: hostile builds against the real build service (reading the secret key, reaching the panel and private addresses, fork bomb, filling the disk, links in the output, ignoring the time limit, leaking secrets, a restart in the middle, the packet filter going away) | `GOOS=linux go test -c -tags podman -o isolation.test ./internal/build`, then on the server `sudo OWNPANEL_PANEL_ADDR=127.0.0.1:8600 ./isolation.test -test.v` | a server (or a systemd container with loop devices) where `install.sh` set builds up; runs as root, briefly removes and restores the packet filter and restarts the build service |
 
 ## Conventions
 
