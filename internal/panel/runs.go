@@ -2,6 +2,7 @@ package panel
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"time"
 	"unicode"
@@ -65,6 +66,9 @@ type Run struct {
 	Branch       string `json:"branch,omitempty"`
 	Commit       string `json:"commit"`
 	ShortCommit  string `json:"short_commit"`
+	// CommitURL is the commit's page on GitHub, "" if the repository's
+	// name is not a plain owner/name.
+	CommitURL string `json:"commit_url,omitempty"`
 	Message      string `json:"message"`
 	AuthorName   string `json:"author_name"`
 	AuthorLogin  string `json:"author_login,omitempty"`
@@ -111,6 +115,16 @@ func runView(r store.Run) Run {
 	return v
 }
 
+// runViewFor is runView with the commit's page on GitHub.
+func (s *Service) runViewFor(r store.Run) Run {
+	v := runView(r)
+	owner, name, ok := strings.Cut(r.Repository, "/")
+	if ok && owner != "" && name != "" && !strings.Contains(name, "/") && v.Commit != "" {
+		v.CommitURL = s.github.WebURL() + "/" + url.PathEscape(owner) + "/" + url.PathEscape(name) + "/commit/" + url.PathEscape(v.Commit)
+	}
+	return v
+}
+
 // ListSiteRuns returns the runs of a site the actor may see.
 func (s *Service) ListSiteRuns(ctx context.Context, a Actor, site string) (SiteRuns, error) {
 	st, err := s.visibleSite(ctx, a, site)
@@ -123,7 +137,7 @@ func (s *Service) ListSiteRuns(ctx context.Context, a Actor, site string) (SiteR
 	}
 	out := SiteRuns{Site: st.Name, Runs: make([]Run, 0, len(list)), Kept: RunsKept, PublishingAvailable: PublishingAvailable}
 	for _, r := range list {
-		out.Runs = append(out.Runs, runView(r))
+		out.Runs = append(out.Runs, s.runViewFor(r))
 	}
 	return out, nil
 }
@@ -134,7 +148,7 @@ func (s *Service) lastRun(ctx context.Context, site string) (*Run, error) {
 	if err != nil || len(list) == 0 {
 		return nil, err
 	}
-	v := runView(list[0])
+	v := s.runViewFor(list[0])
 	return &v, nil
 }
 
