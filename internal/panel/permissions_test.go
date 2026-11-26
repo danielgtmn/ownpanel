@@ -116,7 +116,13 @@ func TestPermissionMatrix(t *testing.T) {
 			}
 			return err
 		}, []Kind{ok, Forbidden, ok, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
-		{"set own e-mail address", func(w world, a Actor) error { _, err := w.svc.SetOwnEmail(ctx, a, "me@example.org"); return err },
+		{"set own e-mail address", func(w world, a Actor) error {
+			_, err := w.svc.SetOwnEmail(ctx, a, "wrong", "me@example.org")
+			if KindOf(err) == Invalid { // permitted; the current password is wrong
+				return nil
+			}
+			return err
+		},
 			[]Kind{ok, Forbidden, ok, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
 		{"set another person's e-mail address", func(w world, a Actor) error {
 			e := "bob@example.org"

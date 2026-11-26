@@ -299,6 +299,19 @@ func TestSessionLifecycleOverHTTP(t *testing.T) {
 		t.Fatalf("secure cookie over https: %d", rec.Code)
 	}
 
+	rec = e.as("PUT", "/api/account/email", `{"email":"root@example.org"}`)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "current password") {
+		t.Fatalf("e-mail without password: %d %s", rec.Code, rec.Body)
+	}
+	rec = e.as("PUT", "/api/account/email", `{"email":"root@example.org","current":"wrong-password-1"}`)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "current password is wrong") {
+		t.Fatalf("e-mail with a wrong password: %d %s", rec.Code, rec.Body)
+	}
+	rec = e.as("PUT", "/api/account/email", `{"email":"root@example.org","current":"root-password-1"}`)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"email":"root@example.org"`) {
+		t.Fatalf("e-mail: %d %s", rec.Code, rec.Body)
+	}
+
 	rec = e.as("PUT", "/api/account/password", `{"current":"root-password-1","new":"root-password-2"}`)
 	if rec.Code != 204 {
 		t.Fatalf("password: %d %s", rec.Code, rec.Body)

@@ -241,8 +241,9 @@ describe('forgotten passwords and e-mail addresses', () => {
     mockFetch(json({ setup_required: false, setup_complete: true, user: anna, via: 'session' }))
     await loadSession()
     const changed = { ...anna, email: 'anna@example.com' }
-    mockFetch(json(changed))
-    await setOwnEmail('anna@example.com')
+    const fn = mockFetch(json(changed))
+    await setOwnEmail('anna@example.com', 'anna-password-1')
+    expect(JSON.parse(String(call(fn, 0)[1].body))).toEqual({ email: 'anna@example.com', current: 'anna-password-1' })
     expect(getSessionState()).toMatchObject({ status: 'signedIn', user: changed })
   })
 })
