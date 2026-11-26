@@ -2,92 +2,86 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"slices"
+
+	"github.com/danielgtmn/ablage"
 )
 
 // Site is one hosted static site.
 type Site struct {
 	Name    string
 	Domains []string
-	OwnerID int64  // 0 while nobody owns it (imported before the first admin)
+	OwnerID string // "" while nobody owns it (imported before the first admin)
 	Owner   string // the owner's user name, "" if none
 }
 
+var errSiteNotFound = notFoundf("site not found")
+
 // Sites returns all sites sorted by name.
 func (s *Store) Sites(ctx context.Context) ([]Site, error) {
-	return querySites(ctx, s.db, "")
+	return querySites(ctx, s.r, ablage.All)
 }
 
 // Site returns one site.
 func (s *Store) Site(ctx context.Context, name string) (Site, error) {
-	return siteIn(ctx, s.db, name)
+	return siteIn(ctx, s.r, name)
 }
 
-type querier interface {
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-}
-
-func siteIn(ctx context.Context, q querier, name string) (Site, error) {
-	list, err := querySites(ctx, q, name)
+func siteIn(ctx context.Context, r repos, name string) (Site, error) {
+	list, err := querySites(ctx, r, ablage.Eq("id", name))
 	if err != nil {
 		return Site{}, err
 	}
 	if len(list) == 0 {
-		return Site{}, notFoundf("site not found")
+		return Site{}, errSiteNotFound
 	}
 	return list[0], nil
 }
 
-// querySites lists all sites, or only the named one if name is not empty.
-func querySites(ctx context.Context, q querier, name string) ([]Site, error) {
-	rows, err := q.QueryContext(ctx, `SELECT s.name, coalesce(s.owner_id, 0), coalesce(u.name, '')
-		FROM sites s LEFT JOIN users u ON u.id = s.owner_id
-		WHERE ? = '' OR s.name = ? ORDER BY s.name`, name, name)
+// querySites lists the sites matching where, with their domains and owner
+// names (one query each).
+func querySites(ctx context.Context, r repos, where ablage.Cond) ([]Site, error) {
+	rows, err := r.sites.Find(ctx, ablage.Query{Where: where})
 	if err != nil {
 		return nil, err
 	}
-	out := []Site{}
+	out := make([]Site, len(rows))
 	index := map[string]int{}
-	for rows.Next() {
-		var site Site
-		if err := rows.Scan(&site.Name, &site.OwnerID, &site.Owner); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		site.Domains = []string{}
-		index[site.Name] = len(out)
-		out = append(out, site)
+	names := make([]string, len(rows))
+	owners := make([]string, 0, len(rows))
+	for i, row := range rows {
+		out[i] = Site{Name: row.ID, Domains: []string{}, OwnerID: deref(row.OwnerID)}
+		index[row.ID] = i
+		names[i] = row.ID
+		owners = append(owners, out[i].OwnerID)
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
+	if len(rows) == 0 {
+		return out, nil
 	}
-	rows, err = q.QueryContext(ctx, `SELECT site_name, domain FROM site_domains
-		WHERE ? = '' OR site_name = ? ORDER BY domain`, name, name)
+	users, err := userNames(ctx, r, owners)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var site, domain string
-		if err := rows.Scan(&site, &domain); err != nil {
-			return nil, err
-		}
-		if i, ok := index[site]; ok {
-			out[i].Domains = append(out[i].Domains, domain)
-		}
+	for i := range out {
+		out[i].Owner = users[out[i].OwnerID]
 	}
-	return out, rows.Err()
+	domains, err := r.siteDomains.Find(ctx, ablage.Query{Where: ablage.In("site_name", names...)})
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range domains {
+		i := index[d.SiteName]
+		out[i].Domains = append(out[i].Domains, d.ID)
+	}
+	return out, nil
 }
 
-// CreateSite adds a site owned by ownerID (0 for nobody). Domains are
+// CreateSite adds a site owned by ownerID ("" for nobody). Domains are
 // normalized and must not belong to another site.
-func (s *Store) CreateSite(ctx context.Context, name string, domains []string, ownerID int64) (Site, error) {
+func (s *Store) CreateSite(ctx context.Context, name string, domains []string, ownerID string) (Site, error) {
 	if err := ValidateName(name); err != nil {
 		return Site{}, err
 	}
@@ -96,19 +90,17 @@ func (s *Store) CreateSite(ctx context.Context, name string, domains []string, o
 		return Site{}, err
 	}
 	var site Site
-	err = s.tx(ctx, func(tx *sql.Tx) error {
-		owner := sql.NullInt64{Int64: ownerID, Valid: ownerID != 0}
-		_, err := tx.Exec(`INSERT INTO sites (name, owner_id, created_at) VALUES (?, ?, ?)`, name, owner, s.now())
-		if isUnique(err) {
-			return conflictf("the site name %q is already taken", name)
+	err = s.tx(ctx, func(r repos) error {
+		if err := r.sites.Create(ctx, &siteRow{ID: name, OwnerID: optional(ownerID), CreatedAt: s.now()}); err != nil {
+			if errors.Is(err, ablage.ErrReference) {
+				return errUserNotFound
+			}
+			return dup(err, conflictf("the site name %q is already taken", name))
 		}
-		if err != nil {
+		if err := replaceDomains(ctx, r, name, clean); err != nil {
 			return err
 		}
-		if err := replaceDomains(tx, name, clean); err != nil {
-			return err
-		}
-		site, err = siteIn(ctx, tx, name)
+		site, err = siteIn(ctx, r, name)
 		return err
 	})
 	return site, err
@@ -121,88 +113,51 @@ func (s *Store) SetDomains(ctx context.Context, name string, domains []string) (
 		return Site{}, err
 	}
 	var site Site
-	err = s.tx(ctx, func(tx *sql.Tx) error {
-		if _, err := siteIn(ctx, tx, name); err != nil {
+	err = s.tx(ctx, func(r repos) error {
+		if _, err := siteIn(ctx, r, name); err != nil {
 			return err
 		}
-		if err := replaceDomains(tx, name, clean); err != nil {
+		if err := replaceDomains(ctx, r, name, clean); err != nil {
 			return err
 		}
-		site, err = siteIn(ctx, tx, name)
+		site, err = siteIn(ctx, r, name)
 		return err
 	})
 	return site, err
 }
 
-func replaceDomains(tx *sql.Tx, name string, domains []string) error {
-	for _, d := range domains {
-		var other string
-		err := tx.QueryRow(`SELECT site_name FROM site_domains WHERE domain = ? AND site_name != ?`, d, name).Scan(&other)
-		if err == nil {
-			return &DomainTakenError{Domain: d, Site: other}
-		}
-		if !noRows(err) {
-			return err
-		}
-		if err := domainRedirects(tx, d); err != nil {
-			return err
-		}
+func replaceDomains(ctx context.Context, r repos, name string, domains []string) error {
+	taken, err := r.siteDomains.Find(ctx, ablage.Query{Where: ablage.And(ablage.In("id", domains...), ablage.Ne("site_name", name))})
+	if err != nil {
+		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM site_domains WHERE site_name = ?`, name); err != nil {
+	if len(taken) > 0 {
+		// The first in the list, as the domains are sorted.
+		return &DomainTakenError{Domain: taken[0].ID, Site: taken[0].SiteName}
+	}
+	if err := domainRedirects(ctx, r, domains); err != nil {
+		return err
+	}
+	if _, err := r.siteDomains.DeleteWhere(ctx, ablage.Eq("site_name", name)); err != nil {
 		return err
 	}
 	for _, d := range domains {
-		if _, err := tx.Exec(`INSERT INTO site_domains (domain, site_name) VALUES (?, ?)`, d, name); err != nil {
+		if err := r.siteDomains.Create(ctx, &siteDomainRow{ID: d, SiteName: name}); err != nil {
 			return err
 		}
 	}
-	return dropStrayPathRedirects(tx, name)
+	return dropStrayPathRedirects(ctx, r, name, domains)
 }
 
 // DeleteSite removes a site and its domains, and drops it from the site
 // lists of access tokens, so a later site with the same name is not covered
 // by an old token.
 func (s *Store) DeleteSite(ctx context.Context, name string) error {
-	return s.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.Exec(`DELETE FROM sites WHERE name = ?`, name)
-		if err != nil {
-			return err
+	return s.tx(ctx, func(r repos) error {
+		if err := r.sites.Delete(ctx, name); err != nil {
+			return missing(err, errSiteNotFound)
 		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return notFoundf("site not found")
-		}
-		rows, err := tx.Query(`SELECT id, sites FROM tokens WHERE sites IS NOT NULL`)
-		if err != nil {
-			return err
-		}
-		updates := map[int64]string{}
-		for rows.Next() {
-			var id int64
-			var raw string
-			if err := rows.Scan(&id, &raw); err != nil {
-				rows.Close()
-				return err
-			}
-			var list []string
-			if err := json.Unmarshal([]byte(raw), &list); err != nil {
-				rows.Close()
-				return err
-			}
-			if i := slices.Index(list, name); i >= 0 {
-				b, _ := json.Marshal(slices.Delete(list, i, i+1))
-				updates[id] = string(b)
-			}
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		for id, list := range updates {
-			if _, err := tx.Exec(`UPDATE tokens SET sites = ? WHERE id = ?`, list, id); err != nil {
-				return err
-			}
-		}
-		return nil
+		return dropSiteFromTokens(ctx, r, name)
 	})
 }
 
@@ -225,19 +180,22 @@ func (s *Store) ImportStateFile(ctx context.Context, file string) (int, error) {
 	if err := json.Unmarshal(b, &list); err != nil {
 		return 0, fmt.Errorf("parse %s: %w", file, err)
 	}
-	existing, err := s.Sites(ctx)
+	n, err := s.r.sites.Count(ctx, ablage.All)
 	if err != nil {
 		return 0, err
 	}
-	if len(existing) > 0 {
+	if n > 0 {
 		return 0, nil
 	}
-	var admin int64
-	err = s.db.QueryRowContext(ctx, `SELECT id FROM users WHERE role = ? ORDER BY id LIMIT 1`, RoleAdmin).Scan(&admin)
-	if err != nil && !noRows(err) {
-		return 0, err
-	}
-	err = s.tx(ctx, func(tx *sql.Tx) error {
+	err = s.tx(ctx, func(r repos) error {
+		var owner *string
+		admin, err := r.users.First(ctx, ablage.Query{Where: ablage.Eq("role", RoleAdmin), OrderBy: []ablage.Order{ablage.Asc("created_at")}})
+		switch {
+		case err == nil:
+			owner = &admin.ID
+		case !errors.Is(err, ablage.ErrNotFound):
+			return err
+		}
 		for _, site := range list {
 			if err := ValidateName(site.Name); err != nil {
 				return err
@@ -246,11 +204,10 @@ func (s *Store) ImportStateFile(ctx context.Context, file string) (int, error) {
 			if err != nil {
 				return err
 			}
-			owner := sql.NullInt64{Int64: admin, Valid: admin != 0}
-			if _, err := tx.Exec(`INSERT INTO sites (name, owner_id, created_at) VALUES (?, ?, ?)`, site.Name, owner, s.now()); err != nil {
+			if err := r.sites.Create(ctx, &siteRow{ID: site.Name, OwnerID: owner, CreatedAt: s.now()}); err != nil {
 				return err
 			}
-			if err := replaceDomains(tx, site.Name, clean); err != nil {
+			if err := replaceDomains(ctx, r, site.Name, clean); err != nil {
 				return err
 			}
 		}

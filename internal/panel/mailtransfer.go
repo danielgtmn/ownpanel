@@ -75,14 +75,14 @@ func mailImportView(m store.Mailbox, j config.ImportJob) MailImport {
 // mailbox stays.
 type importRate struct {
 	mu   sync.Mutex
-	seen map[int64][]time.Time
+	seen map[string][]time.Time
 }
 
-func (r *importRate) allow(user int64, now time.Time) bool {
+func (r *importRate) allow(user string, now time.Time) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.seen == nil {
-		r.seen = map[int64][]time.Time{}
+		r.seen = map[string][]time.Time{}
 	}
 	keep := r.seen[user][:0]
 	for _, t := range r.seen[user] {
@@ -112,7 +112,7 @@ func (s *Service) MailboxByAddress(ctx context.Context, a Actor, domain, local s
 	}
 	for _, m := range list {
 		if m.LocalPart == l && a.canSeeMail(m.OwnerID) {
-			return idString(m.ID), nil
+			return m.ID, nil
 		}
 	}
 	return "", errorf(NotFound, "mailbox not found")

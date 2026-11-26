@@ -36,7 +36,7 @@ type NewToken struct {
 }
 
 func (s *Service) tokenView(t store.Token) Token {
-	return Token{ID: idString(t.ID), Name: t.Name, Access: t.Access, Sites: t.Sites, CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt,
+	return Token{ID: t.ID, Name: t.Name, Access: t.Access, Sites: t.Sites, CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt,
 		ExpiresAt: t.ExpiresAt, Expired: tokenExpired(t, s.now())}
 }
 
@@ -130,7 +130,7 @@ func (s *Service) DeleteToken(ctx context.Context, a Actor, id string) error {
 	if err != nil {
 		return storeError(err)
 	}
-	i := slices.IndexFunc(list, func(t store.Token) bool { return idString(t.ID) == id })
+	i := slices.IndexFunc(list, func(t store.Token) bool { return t.ID == id })
 	if i < 0 {
 		return errorf(NotFound, "access token not found")
 	}

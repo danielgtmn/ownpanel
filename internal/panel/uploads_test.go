@@ -8,7 +8,7 @@ import (
 
 // tokenActor creates a real write token for the test admin, so upload links
 // can re-check it when they are used.
-func tokenActor(t *testing.T, svc *Service, name string) (Actor, int64) {
+func tokenActor(t *testing.T, svc *Service, name string) (Actor, string) {
 	t.Helper()
 	ctx := context.Background()
 	nt, err := svc.CreateToken(ctx, admin, name, "write", nil, 0)
@@ -19,7 +19,7 @@ func tokenActor(t *testing.T, svc *Service, name string) (Actor, int64) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return a, mustStoreID(nt.ID)
+	return a, nt.ID
 }
 
 func TestUploadLinkSingleUseAndExpiry(t *testing.T) {
@@ -69,10 +69,10 @@ func TestUploadLinkRequiresWriteAccessToTheSite(t *testing.T) {
 	if _, err := svc.SaveSite(ctx, admin, "blog", nil); err != nil {
 		t.Fatal(err)
 	}
-	reader := Actor{UserID: 1, Name: "root", Admin: true, ReadOnly: true, Via: ViaToken, tokenName: "r"}
+	reader := Actor{UserID: "1", Name: "root", Admin: true, ReadOnly: true, Via: ViaToken, tokenName: "r"}
 	_, err := svc.CreateUploadLink(ctx, reader, "blog")
 	wantKind(t, err, Forbidden)
-	other := Actor{UserID: 1, Name: "root", Admin: true, Sites: []string{"x"}, Via: ViaToken, tokenName: "o"}
+	other := Actor{UserID: "1", Name: "root", Admin: true, Sites: []string{"x"}, Via: ViaToken, tokenName: "o"}
 	_, err = svc.CreateUploadLink(ctx, other, "blog")
 	wantKind(t, err, NotFound)
 	_, err = svc.CreateUploadLink(ctx, Actor{}, "blog")
@@ -134,7 +134,7 @@ func TestUploadLinkEndsWithItsToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.DeleteToken(ctx, admin, idString(id)); err != nil {
+	if err := svc.DeleteToken(ctx, admin, id); err != nil {
 		t.Fatal(err)
 	}
 	_, err = svc.PublishWithUploadLink(ctx, link.ID, tarGz(t, map[string]string{"index.html": "x"}))

@@ -148,7 +148,7 @@ func newTransferWorld(t *testing.T) (*mailWorld, *transferMail) {
 	return w, tm
 }
 
-func storageIDOf(t *testing.T, w *mailWorld, id int64) string {
+func storageIDOf(t *testing.T, w *mailWorld, id string) string {
 	t.Helper()
 	m, err := w.svc.store.Mailbox(context.Background(), id)
 	if err != nil {
@@ -175,49 +175,49 @@ func TestMailTransferPermissions(t *testing.T) {
 	write := []Kind{ok, ok, ok, F, F, F, F, U, F}
 	writeOther := []Kind{ok, ok, N, N, F, F, F, U, F}
 	// A job of each mailbox, made directly in the service.
-	job := func(w *mailWorld, tm *transferMail, box int64) string {
+	job := func(w *mailWorld, tm *transferMail, box string) string {
 		tm.mu.Lock()
 		defer tm.mu.Unlock()
 		return tm.add(config.ImportJob{StorageID: storageIDOf(t, w, box), Kind: config.ImportFile, State: config.ImportReady, FileName: "a.mbox"}).ID
 	}
 	type op struct {
 		name string
-		run  func(w *mailWorld, tm *transferMail, a Actor, box int64) error
+		run  func(w *mailWorld, tm *transferMail, a Actor, box string) error
 	}
 	ops := []op{
-		{"list imports", func(w *mailWorld, tm *transferMail, a Actor, box int64) error {
-			_, err := w.svc.MailImports(ctx, a, idString(box))
+		{"list imports", func(w *mailWorld, tm *transferMail, a Actor, box string) error {
+			_, err := w.svc.MailImports(ctx, a, box)
 			return err
 		}},
-		{"get import", func(w *mailWorld, tm *transferMail, a Actor, box int64) error {
-			_, err := w.svc.MailImportOf(ctx, a, idString(box), job(w, tm, box))
+		{"get import", func(w *mailWorld, tm *transferMail, a Actor, box string) error {
+			_, err := w.svc.MailImportOf(ctx, a, box, job(w, tm, box))
 			return err
 		}},
-		{"check", func(w *mailWorld, tm *transferMail, a Actor, box int64) error {
-			_, err := w.svc.CheckMailImport(ctx, a, idString(box), testSource)
+		{"check", func(w *mailWorld, tm *transferMail, a Actor, box string) error {
+			_, err := w.svc.CheckMailImport(ctx, a, box, testSource)
 			return err
 		}},
-		{"start", func(w *mailWorld, tm *transferMail, a Actor, box int64) error {
-			_, err := w.svc.StartMailImport(ctx, a, idString(box), config.ImportStart{Source: testSource})
+		{"start", func(w *mailWorld, tm *transferMail, a Actor, box string) error {
+			_, err := w.svc.StartMailImport(ctx, a, box, config.ImportStart{Source: testSource})
 			return err
 		}},
-		{"upload", func(w *mailWorld, tm *transferMail, a Actor, box int64) error {
-			_, err := w.svc.CreateMailUpload(ctx, a, idString(box), config.UploadRequest{Name: "a.mbox", Size: 3})
+		{"upload", func(w *mailWorld, tm *transferMail, a Actor, box string) error {
+			_, err := w.svc.CreateMailUpload(ctx, a, box, config.UploadRequest{Name: "a.mbox", Size: 3})
 			return err
 		}},
-		{"upload part", func(w *mailWorld, tm *transferMail, a Actor, box int64) error {
-			_, err := w.svc.UploadMailPart(ctx, a, idString(box), job(w, tm, box), 0, strings.NewReader("abc"), 3)
+		{"upload part", func(w *mailWorld, tm *transferMail, a Actor, box string) error {
+			_, err := w.svc.UploadMailPart(ctx, a, box, job(w, tm, box), 0, strings.NewReader("abc"), 3)
 			return err
 		}},
-		{"start file", func(w *mailWorld, tm *transferMail, a Actor, box int64) error {
-			_, err := w.svc.ResumeMailImport(ctx, a, idString(box), job(w, tm, box), config.ImportResume{})
+		{"start file", func(w *mailWorld, tm *transferMail, a Actor, box string) error {
+			_, err := w.svc.ResumeMailImport(ctx, a, box, job(w, tm, box), config.ImportResume{})
 			return err
 		}},
-		{"cancel", func(w *mailWorld, tm *transferMail, a Actor, box int64) error {
-			return w.svc.CancelMailImport(ctx, a, idString(box), job(w, tm, box))
+		{"cancel", func(w *mailWorld, tm *transferMail, a Actor, box string) error {
+			return w.svc.CancelMailImport(ctx, a, box, job(w, tm, box))
 		}},
-		{"export", func(w *mailWorld, tm *transferMail, a Actor, box int64) error {
-			ex, err := w.svc.ExportMailbox(ctx, a, idString(box))
+		{"export", func(w *mailWorld, tm *transferMail, a Actor, box string) error {
+			ex, err := w.svc.ExportMailbox(ctx, a, box)
 			if err == nil {
 				ex.Body.Close()
 			}
@@ -265,7 +265,7 @@ func TestMailImportByAddress(t *testing.T) {
 	w, _ := newTransferWorld(t)
 	ctx := context.Background()
 	id, err := w.svc.MailboxByAddress(ctx, bobRead, "BobSite.example.com", "Info")
-	if err != nil || id != idString(w.bobBox) {
+	if err != nil || id != w.bobBox {
 		t.Fatalf("got %s %v", id, err)
 	}
 	// Another person's mailbox is not found, like a missing one.
@@ -280,7 +280,7 @@ func TestMailImportByAddress(t *testing.T) {
 func TestMailImportKeepsPasswordsOut(t *testing.T) {
 	w, tm := newTransferWorld(t)
 	ctx := context.Background()
-	j, err := w.svc.StartMailImport(ctx, bob, idString(w.bobBox), config.ImportStart{Source: config.ImportSource{
+	j, err := w.svc.StartMailImport(ctx, bob, w.bobBox, config.ImportStart{Source: config.ImportSource{
 		Host: " IMAP.Example.org. ", Username: " me@example.org ", Password: "other-secret-pw"}})
 	if err != nil {
 		t.Fatal(err)
@@ -298,16 +298,16 @@ func TestMailImportKeepsPasswordsOut(t *testing.T) {
 	jj.State = config.ImportInterrupted
 	tm.jobs[j.ID] = jj
 	tm.mu.Unlock()
-	if _, err := w.svc.ResumeMailImport(ctx, bob, idString(w.bobBox), j.ID, config.ImportResume{}); KindOf(err) != Invalid {
+	if _, err := w.svc.ResumeMailImport(ctx, bob, w.bobBox, j.ID, config.ImportResume{}); KindOf(err) != Invalid {
 		t.Fatalf("continue without password: %v", err)
 	}
-	if _, err := w.svc.ResumeMailImport(ctx, bob, idString(w.bobBox), j.ID, config.ImportResume{Password: "other-secret-pw"}); err != nil {
+	if _, err := w.svc.ResumeMailImport(ctx, bob, w.bobBox, j.ID, config.ImportResume{Password: "other-secret-pw"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.svc.CancelMailImport(ctx, bob, idString(w.bobBox), j.ID); err != nil {
+	if err := w.svc.CancelMailImport(ctx, bob, w.bobBox, j.ID); err != nil {
 		t.Fatal(err)
 	}
-	ex, err := w.svc.ExportMailbox(ctx, bob, idString(w.bobBox))
+	ex, err := w.svc.ExportMailbox(ctx, bob, w.bobBox)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,29 +346,29 @@ func TestMailImportInputAndErrors(t *testing.T) {
 		{Host: "h.example", Port: 993, Password: "p"},
 		{Host: "h.example", Port: 993, Username: "u"},
 	} {
-		if _, err := w.svc.CheckMailImport(ctx, bob, idString(w.bobBox), src); KindOf(err) != Invalid {
+		if _, err := w.svc.CheckMailImport(ctx, bob, w.bobBox, src); KindOf(err) != Invalid {
 			t.Fatalf("%v: %v", src, err)
 		}
 	}
-	if _, err := w.svc.CreateMailUpload(ctx, bob, idString(w.bobBox), config.UploadRequest{Name: "big.zip", Size: config.MaxImportBytes + 1}); KindOf(err) != TooLarge {
+	if _, err := w.svc.CreateMailUpload(ctx, bob, w.bobBox, config.UploadRequest{Name: "big.zip", Size: config.MaxImportBytes + 1}); KindOf(err) != TooLarge {
 		t.Fatalf("too large: %v", err)
 	}
-	if _, err := w.svc.UploadMailPart(ctx, bob, idString(w.bobBox), "1", 0, bytes.NewReader(nil), config.MaxUploadPart+1); KindOf(err) != TooLarge {
+	if _, err := w.svc.UploadMailPart(ctx, bob, w.bobBox, "1", 0, bytes.NewReader(nil), config.MaxUploadPart+1); KindOf(err) != TooLarge {
 		t.Fatalf("part too large: %v", err)
 	}
 	// An id that cannot be one answers like an unknown import, before the
 	// service is asked.
 	for _, bad := range []string{"", "../x", "A1", "1.spool"} {
-		if _, err := w.svc.MailImportOf(ctx, bob, idString(w.bobBox), bad); KindOf(err) != NotFound {
+		if _, err := w.svc.MailImportOf(ctx, bob, w.bobBox, bad); KindOf(err) != NotFound {
 			t.Fatalf("get %q: %v", bad, err)
 		}
-		if _, err := w.svc.UploadMailPart(ctx, bob, idString(w.bobBox), bad, 0, strings.NewReader("abc"), 3); KindOf(err) != NotFound {
+		if _, err := w.svc.UploadMailPart(ctx, bob, w.bobBox, bad, 0, strings.NewReader("abc"), 3); KindOf(err) != NotFound {
 			t.Fatalf("part %q: %v", bad, err)
 		}
-		if _, err := w.svc.ResumeMailImport(ctx, bob, idString(w.bobBox), bad, config.ImportResume{}); KindOf(err) != NotFound {
+		if _, err := w.svc.ResumeMailImport(ctx, bob, w.bobBox, bad, config.ImportResume{}); KindOf(err) != NotFound {
 			t.Fatalf("start %q: %v", bad, err)
 		}
-		if err := w.svc.CancelMailImport(ctx, bob, idString(w.bobBox), bad); KindOf(err) != NotFound {
+		if err := w.svc.CancelMailImport(ctx, bob, w.bobBox, bad); KindOf(err) != NotFound {
 			t.Fatalf("cancel %q: %v", bad, err)
 		}
 	}
@@ -376,7 +376,7 @@ func TestMailImportInputAndErrors(t *testing.T) {
 		tm.mu.Lock()
 		tm.err = &config.Error{Status: status, Msg: "reason from the service"}
 		tm.mu.Unlock()
-		_, err := w.svc.MailImports(ctx, bob, idString(w.bobBox))
+		_, err := w.svc.MailImports(ctx, bob, w.bobBox)
 		if KindOf(err) != kind {
 			t.Fatalf("%d: %v %v", status, KindOf(err), err)
 		}
@@ -390,19 +390,19 @@ func TestMailImportRateLimitPerPerson(t *testing.T) {
 	w, _ := newTransferWorld(t)
 	ctx := context.Background()
 	for i := range importsPerPerson {
-		if _, err := w.svc.CheckMailImport(ctx, bob, idString(w.bobBox), testSource); err != nil {
+		if _, err := w.svc.CheckMailImport(ctx, bob, w.bobBox, testSource); err != nil {
 			t.Fatalf("%d: %v", i, err)
 		}
 	}
-	if _, err := w.svc.CheckMailImport(ctx, bob, idString(w.bobBox), testSource); KindOf(err) != Throttled {
+	if _, err := w.svc.CheckMailImport(ctx, bob, w.bobBox, testSource); KindOf(err) != Throttled {
 		t.Fatalf("over the limit: %v", err)
 	}
 	// Others are not affected, and an hour later bob may again.
-	if _, err := w.svc.CheckMailImport(ctx, admin, idString(w.bobBox), testSource); err != nil {
+	if _, err := w.svc.CheckMailImport(ctx, admin, w.bobBox, testSource); err != nil {
 		t.Fatal(err)
 	}
 	w.now = w.now.Add(time.Hour)
-	if _, err := w.svc.CheckMailImport(ctx, bob, idString(w.bobBox), testSource); err != nil {
+	if _, err := w.svc.CheckMailImport(ctx, bob, w.bobBox, testSource); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -436,7 +436,7 @@ func TestMailImportEventsGoToTheActivityLog(t *testing.T) {
 
 func TestMailTransferWithoutService(t *testing.T) {
 	w := newMailWorld(t) // the fake has no import and export
-	if _, err := w.svc.MailImports(context.Background(), bob, idString(w.bobBox)); KindOf(err) != Conflict {
+	if _, err := w.svc.MailImports(context.Background(), bob, w.bobBox); KindOf(err) != Conflict {
 		t.Fatalf("got %v", err)
 	}
 }

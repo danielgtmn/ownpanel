@@ -6,7 +6,7 @@ require (
 	blitiri.com.ar/go/spf v1.6.0
 	github.com/danielgtmn/ablage v0.3.0
 	github.com/danielgtmn/panzerschrank v0.1.0
-	github.com/danielgtmn/sesam v1.0.0
+	github.com/danielgtmn/sesam/v2 v2.0.0
 	github.com/emersion/go-ical v0.0.0-20261112170022-46c5b53a1723
 	github.com/emersion/go-imap/v2 v2.0.0-beta.9
 	github.com/emersion/go-message v0.18.2

@@ -8,31 +8,30 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danielgtmn/sesam"
+	"github.com/danielgtmn/sesam/v2"
 
 	"github.com/danielgtmn/ownpanel/internal/store"
 )
 
 // oldUser writes a user and a session the way the panel stored them before
 // sesam: password hash and sessions in its own tables, no auth user.
-func oldUser(t *testing.T, st *store.Store, name, password string, sessionSecret string, now time.Time) int64 {
+func oldUser(t *testing.T, st *store.Store, name, password string, sessionSecret string, now time.Time) string {
 	t.Helper()
 	hash, err := hashPassword(password) // same argon2id format as before
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := st.DB().Exec(`INSERT INTO users (name, password_hash, role, created_at) VALUES (?, ?, 'admin', ?)`, name, hash, now.Unix())
+	u, err := st.AddUnmovedUser(context.Background(), name, hash, store.RoleAdmin)
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, _ := res.LastInsertId()
 	if sessionSecret != "" {
-		if _, err := st.DB().Exec(`INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
-			sha256Hex(sessionSecret), id, now.Add(-time.Hour).Unix(), now.Add(SessionIdleTimeout).Unix()); err != nil {
+		if err := st.AddOldSession(context.Background(), u.ID, store.OldSession{
+			ID: sha256Hex(sessionSecret), CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(SessionIdleTimeout)}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	return id
+	return u.ID
 }
 
 func TestMoveUsersToAuth(t *testing.T) {
@@ -41,7 +40,7 @@ func TestMoveUsersToAuth(t *testing.T) {
 	ctx := context.Background()
 	st := svc.store
 	rootID := oldUser(t, st, "root", "root-password-1", "root-cookie", clk.t)
-	oldUser(t, st, "anna", "anna-password-1", "", clk.t)
+	annaID := oldUser(t, st, "anna", "anna-password-1", "", clk.t)
 	tok, err := svc.CreateToken(ctx, Actor{UserID: rootID, Name: "root", Admin: true, Via: ViaSession}, "ci", "write", nil, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -83,11 +82,10 @@ func TestMoveUsersToAuth(t *testing.T) {
 	if un, _ := st.UnmovedUsers(ctx); len(un) != 0 {
 		t.Fatalf("unmoved: %+v", un)
 	}
-	var hashes, oldSessions int
-	st.DB().QueryRow(`SELECT count(*) FROM users WHERE password_hash != ''`).Scan(&hashes)
-	st.DB().QueryRow(`SELECT count(*) FROM sessions`).Scan(&oldSessions)
-	if hashes != 0 || oldSessions != 0 {
-		t.Fatalf("%d hashes and %d sessions left in the old tables", hashes, oldSessions)
+	for _, id := range []string{rootID, annaID} {
+		if old, err := st.OldSessions(ctx, id, time.Time{}); err != nil || len(old) != 0 {
+			t.Fatalf("sessions left in the old table: %+v %v", old, err)
+		}
 	}
 	if _, err := svc.auth.User(ctx, stray.ID); !errors.Is(err, sesam.ErrNotFound) {
 		t.Fatalf("leftover sesam user kept: %v", err)
@@ -112,7 +110,7 @@ func TestMoveUsersToAuth(t *testing.T) {
 func TestMoveUserWithUnusableHash(t *testing.T) {
 	svc, _, _ := newEmptyService(t)
 	ctx := context.Background()
-	if _, err := svc.store.DB().Exec(`INSERT INTO users (name, password_hash, role, created_at) VALUES ('root', 'not-a-hash', 'admin', 1)`); err != nil {
+	if _, err := svc.store.AddUnmovedUser(ctx, "root", "not-a-hash", store.RoleAdmin); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.moveUsersToAuth(ctx); err != nil {
@@ -384,7 +382,7 @@ func TestOwnEmailNeedsThePassword(t *testing.T) {
 
 	// Admins change other people's addresses without a password.
 	e := "alice@example.org"
-	if _, err := svc.UpdateUser(ctx, admin, idString(a.UserID), UserUpdate{Email: &e}); err != nil {
+	if _, err := svc.UpdateUser(ctx, admin, a.UserID, UserUpdate{Email: &e}); err != nil {
 		t.Fatal(err)
 	}
 }

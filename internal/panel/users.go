@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danielgtmn/sesam"
+	"github.com/danielgtmn/sesam/v2"
 
 	"github.com/danielgtmn/ownpanel/internal/store"
 )
@@ -99,10 +99,7 @@ func (s *Service) UpdateUser(ctx context.Context, a Actor, userID string, up Use
 	if err := needAdmin(a); err != nil {
 		return User{}, err
 	}
-	id, err := storeID(userID, "user")
-	if err != nil {
-		return User{}, err
-	}
+	id := userID
 	u, err := s.store.User(ctx, id)
 	if err != nil {
 		return User{}, storeError(err)
@@ -176,10 +173,7 @@ func (s *Service) DeleteUser(ctx context.Context, a Actor, userID string) error 
 	if err := needAdmin(a); err != nil {
 		return err
 	}
-	id, err := storeID(userID, "user")
-	if err != nil {
-		return err
-	}
+	id := userID
 	u, err := s.store.User(ctx, id)
 	if err != nil {
 		return storeError(err)
@@ -224,7 +218,7 @@ func (s *Service) Activities(ctx context.Context, a Actor, limit int) ([]Activit
 	}
 	out := make([]Activity, 0, len(list))
 	for _, e := range list {
-		out = append(out, Activity{ID: idString(e.ID), At: e.At, Actor: e.Actor, Action: e.Action, Target: e.Target, Detail: e.Detail})
+		out = append(out, Activity{ID: e.ID, At: e.At, Actor: e.Actor, Action: e.Action, Target: e.Target, Detail: e.Detail})
 	}
 	return out, nil
 }

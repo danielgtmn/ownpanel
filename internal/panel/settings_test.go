@@ -52,6 +52,7 @@ func newSettingsEnv(t *testing.T, opts caddy.Options, ips ...netip.Addr) *settin
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
+	st.NewUserID = countingIDs()
 	if _, err := st.CreateUser(context.Background(), admin.Name, "", store.RoleAdmin, true); err != nil {
 		t.Fatal(err)
 	}

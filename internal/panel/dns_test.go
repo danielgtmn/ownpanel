@@ -68,8 +68,8 @@ type dnsWorld struct {
 	reject   *hetznertest.Server            // answers every unknown token with 401
 	res      *fakeResolver
 	now      time.Time
-	rootConn int64
-	bobConn  int64
+	rootConn string
+	bobConn  string
 }
 
 func newDNSWorld(t *testing.T) *dnsWorld {
@@ -114,7 +114,7 @@ func newDNSWorld(t *testing.T) *dnsWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.rootConn, d.bobConn = mustStoreID(rc.ID), mustStoreID(bc.ID)
+	d.rootConn, d.bobConn = rc.ID, bc.ID
 	return d
 }
 
@@ -127,21 +127,21 @@ func (d *dnsWorld) addHetzner(token string, zones ...string) *hetznertest.Server
 	return srv
 }
 
-func (d *dnsWorld) ownConn(a Actor) int64 {
-	if a.UserID == 1 {
+func (d *dnsWorld) ownConn(a Actor) string {
+	if a.UserID == "1" {
 		return d.rootConn
 	}
 	return d.bobConn
 }
 
-func (d *dnsWorld) otherConn(a Actor) int64 {
-	if a.UserID == 1 {
+func (d *dnsWorld) otherConn(a Actor) string {
+	if a.UserID == "1" {
 		return d.bobConn
 	}
 	return d.rootConn
 }
 
-func (d *dnsWorld) conn(id int64) DNSConnection {
+func (d *dnsWorld) conn(id string) DNSConnection {
 	d.t.Helper()
 	c, err := d.svc.store.DNSConnection(context.Background(), id)
 	if err != nil {
@@ -185,62 +185,62 @@ func TestDNSPermissionMatrix(t *testing.T) {
 			return err
 		}, []Kind{ok, ok, ok, F, F, F, F, U}},
 		{"check own connection", func(d *dnsWorld, a Actor) error {
-			_, err := d.svc.CheckDNSConnection(ctx, a, idString(d.ownConn(a)))
+			_, err := d.svc.CheckDNSConnection(ctx, a, d.ownConn(a))
 			return err
 		}, []Kind{ok, ok, ok, F, F, F, F, U}},
 		{"check other's connection", func(d *dnsWorld, a Actor) error {
-			_, err := d.svc.CheckDNSConnection(ctx, a, idString(d.otherConn(a)))
+			_, err := d.svc.CheckDNSConnection(ctx, a, d.otherConn(a))
 			return err
 		}, []Kind{F, F, N, F, F, F, F, U}},
-		{"delete own connection", func(d *dnsWorld, a Actor) error { return d.svc.DeleteDNSConnection(ctx, a, idString(d.ownConn(a))) },
+		{"delete own connection", func(d *dnsWorld, a Actor) error { return d.svc.DeleteDNSConnection(ctx, a, d.ownConn(a)) },
 			[]Kind{ok, ok, ok, F, F, F, F, U}},
-		{"delete other's connection", func(d *dnsWorld, a Actor) error { return d.svc.DeleteDNSConnection(ctx, a, idString(d.otherConn(a))) },
+		{"delete other's connection", func(d *dnsWorld, a Actor) error { return d.svc.DeleteDNSConnection(ctx, a, d.otherConn(a)) },
 			[]Kind{ok, ok, N, N, N, F, N, U}},
 		{"list zones", func(d *dnsWorld, a Actor) error { _, err := d.svc.DNSZones(ctx, a); return err },
 			[]Kind{ok, ok, ok, ok, F, ok, F, U}},
 		{"list available zones", func(d *dnsWorld, a Actor) error { _, err := d.svc.AvailableDNSZones(ctx, a); return err },
 			[]Kind{ok, ok, ok, ok, F, ok, F, U}},
 		{"adopt own zone", func(d *dnsWorld, a Actor) error {
-			_, err := d.svc.AdoptDNSZone(ctx, a, idString(d.ownConn(a)), "example.com")
+			_, err := d.svc.AdoptDNSZone(ctx, a, d.ownConn(a), "example.com")
 			return err
 		}, []Kind{ok, ok, ok, F, F, F, F, U}},
 		{"adopt other's zone", func(d *dnsWorld, a Actor) error {
-			_, err := d.svc.AdoptDNSZone(ctx, a, idString(d.otherConn(a)), "example.com")
+			_, err := d.svc.AdoptDNSZone(ctx, a, d.otherConn(a), "example.com")
 			return err
 		}, []Kind{F, F, N, F, F, F, F, U}},
 		{"release own zone", func(d *dnsWorld, a Actor) error {
 			if _, err := d.svc.store.AdoptDNSZone(ctx, d.ownConn(a), "unused.example"); err != nil {
 				d.t.Fatal(err)
 			}
-			return d.svc.ReleaseDNSZone(ctx, a, idString(d.ownConn(a)), "unused.example")
+			return d.svc.ReleaseDNSZone(ctx, a, d.ownConn(a), "unused.example")
 		}, []Kind{ok, ok, ok, F, F, F, F, U}},
 		{"release other's zone", func(d *dnsWorld, a Actor) error {
 			if _, err := d.svc.store.AdoptDNSZone(ctx, d.otherConn(a), "unused.example"); err != nil {
 				d.t.Fatal(err)
 			}
-			return d.svc.ReleaseDNSZone(ctx, a, idString(d.otherConn(a)), "unused.example")
+			return d.svc.ReleaseDNSZone(ctx, a, d.otherConn(a), "unused.example")
 		}, []Kind{F, F, N, F, F, F, F, U}},
 		{"list own records", func(d *dnsWorld, a Actor) error {
-			_, err := d.svc.DNSRecords(ctx, a, idString(d.ownConn(a)), "example.com")
+			_, err := d.svc.DNSRecords(ctx, a, d.ownConn(a), "example.com")
 			return err
 		}, []Kind{ok, ok, ok, ok, F, ok, F, U}},
 		{"list other's records", func(d *dnsWorld, a Actor) error {
-			_, err := d.svc.DNSRecords(ctx, a, idString(d.otherConn(a)), "example.com")
+			_, err := d.svc.DNSRecords(ctx, a, d.otherConn(a), "example.com")
 			return err
 		}, []Kind{F, F, N, N, F, F, F, U}},
 		{"set own record", func(d *dnsWorld, a Actor) error {
-			_, err := d.svc.SetDNSRecord(ctx, a, idString(d.ownConn(a)), "example.com", "www", "A", nil, []string{"198.51.100.7"})
+			_, err := d.svc.SetDNSRecord(ctx, a, d.ownConn(a), "example.com", "www", "A", nil, []string{"198.51.100.7"})
 			return err
 		}, []Kind{ok, ok, ok, F, F, F, F, U}},
 		{"set other's record", func(d *dnsWorld, a Actor) error {
-			_, err := d.svc.SetDNSRecord(ctx, a, idString(d.otherConn(a)), "example.com", "www", "A", nil, []string{"198.51.100.7"})
+			_, err := d.svc.SetDNSRecord(ctx, a, d.otherConn(a), "example.com", "www", "A", nil, []string{"198.51.100.7"})
 			return err
 		}, []Kind{F, F, N, F, F, F, F, U}},
 		{"delete own record", func(d *dnsWorld, a Actor) error {
-			return d.svc.DeleteDNSRecord(ctx, a, idString(d.ownConn(a)), "example.com", "www", "A")
+			return d.svc.DeleteDNSRecord(ctx, a, d.ownConn(a), "example.com", "www", "A")
 		}, []Kind{ok, ok, ok, F, F, F, F, U}},
 		{"delete other's record", func(d *dnsWorld, a Actor) error {
-			return d.svc.DeleteDNSRecord(ctx, a, idString(d.otherConn(a)), "example.com", "www", "A")
+			return d.svc.DeleteDNSRecord(ctx, a, d.otherConn(a), "example.com", "www", "A")
 		}, []Kind{F, F, N, F, F, F, F, U}},
 		{"domain status", func(d *dnsWorld, a Actor) error { _, err := d.svc.DomainStatuses(ctx, a, "bobsite"); return err },
 			[]Kind{ok, ok, ok, ok, ok, ok, N, U}},
@@ -283,17 +283,17 @@ func TestDNSConnectionsSeenByAdminAndOwner(t *testing.T) {
 		t.Fatalf("new connection: %+v", c)
 	}
 	// The token is stored encrypted.
-	raw, _ := d.svc.store.DNSConnection(ctx, mustStoreID(c.ID))
+	raw, _ := d.svc.store.DNSConnection(ctx, c.ID)
 	if bytes.Contains(raw.Secret, []byte(bobToken)) {
 		t.Fatal("the token is stored in plain text")
 	}
 	// Admins cannot use other people's connections, but can remove them.
-	_, err = d.svc.DNSRecords(ctx, admin, idString(d.bobConn), "example.com")
+	_, err = d.svc.DNSRecords(ctx, admin, d.bobConn, "example.com")
 	wantKind(t, err, Forbidden)
 	if !strings.Contains(err.Error(), "bob") {
 		t.Fatalf("message %q", err)
 	}
-	if err := d.svc.DeleteDNSConnection(ctx, admin, idString(d.bobConn)); err != nil {
+	if err := d.svc.DeleteDNSConnection(ctx, admin, d.bobConn); err != nil {
 		t.Fatal(err)
 	}
 	acts, _ := d.svc.store.Activities(ctx, 1)
@@ -342,7 +342,7 @@ func TestCheckDNSConnectionReportsProblems(t *testing.T) {
 	srv := d.hz[bobToken]
 	srv.Token = "rotated" // the token was deleted at Hetzner
 	d.now = d.now.Add(time.Hour)
-	c, err := d.svc.CheckDNSConnection(ctx, bob, idString(d.bobConn))
+	c, err := d.svc.CheckDNSConnection(ctx, bob, d.bobConn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,18 +351,18 @@ func TestCheckDNSConnectionReportsProblems(t *testing.T) {
 	}
 	srv.Token = bobToken
 	srv.AddZone("third.example", "secondary")
-	c, err = d.svc.CheckDNSConnection(ctx, bob, idString(d.bobConn))
+	c, err = d.svc.CheckDNSConnection(ctx, bob, d.bobConn)
 	if err != nil || c.LastError != "" || *c.ZoneCount != 3 {
 		t.Fatalf("%+v %v", c, err)
 	}
 	// With another secret key the stored token cannot be read.
 	other, _ := panzerschrank.New(bytes.Repeat([]byte{7}, panzerschrank.KeySize))
 	d.svc.secrets = other
-	c, err = d.svc.CheckDNSConnection(ctx, bob, idString(d.bobConn))
+	c, err = d.svc.CheckDNSConnection(ctx, bob, d.bobConn)
 	if err != nil || !strings.Contains(c.LastError, "secret key has changed") {
 		t.Fatalf("%+v %v", c, err)
 	}
-	_, err = d.svc.DNSRecords(ctx, bob, idString(d.bobConn), "example.com")
+	_, err = d.svc.DNSRecords(ctx, bob, d.bobConn, "example.com")
 	wantKind(t, err, Conflict)
 }
 
@@ -370,20 +370,20 @@ func TestReadOnlyProviderTokenIsFlagged(t *testing.T) {
 	d := newDNSWorld(t)
 	ctx := context.Background()
 	d.hz[bobToken].ReadOnlyToken = true
-	_, err := d.svc.SetDNSRecord(ctx, bob, idString(d.bobConn), "example.com", "www", "A", nil, []string{"198.51.100.7"})
+	_, err := d.svc.SetDNSRecord(ctx, bob, d.bobConn, "example.com", "www", "A", nil, []string{"198.51.100.7"})
 	wantKind(t, err, Conflict)
 	c := d.conn(d.bobConn)
 	if c.CanWrite == nil || *c.CanWrite || !strings.Contains(c.LastError, "may only read") {
 		t.Fatalf("%+v", c)
 	}
 	// A successful listing does not hide that writes are refused.
-	c, err = d.svc.CheckDNSConnection(ctx, bob, idString(d.bobConn))
+	c, err = d.svc.CheckDNSConnection(ctx, bob, d.bobConn)
 	if err != nil || !strings.Contains(c.LastError, "may only read") {
 		t.Fatalf("%+v %v", c, err)
 	}
 	// A successful write proves the opposite.
 	d.hz[bobToken].ReadOnlyToken = false
-	if _, err := d.svc.SetDNSRecord(ctx, bob, idString(d.bobConn), "example.com", "www", "A", nil, []string{"198.51.100.7"}); err != nil {
+	if _, err := d.svc.SetDNSRecord(ctx, bob, d.bobConn, "example.com", "www", "A", nil, []string{"198.51.100.7"}); err != nil {
 		t.Fatal(err)
 	}
 	c = d.conn(d.bobConn)
@@ -406,7 +406,7 @@ func TestProviderErrorKinds(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := newDNSWorld(t)
 			d.hz[bobToken].Fail("GET /zones/example.com/rrsets", -1, tc.err)
-			_, err := d.svc.DNSRecords(ctx, bob, idString(d.bobConn), "example.com")
+			_, err := d.svc.DNSRecords(ctx, bob, d.bobConn, "example.com")
 			wantKind(t, err, tc.kind)
 			if strings.Contains(err.Error(), bobToken) {
 				t.Fatal("token in message")
@@ -414,7 +414,7 @@ func TestProviderErrorKinds(t *testing.T) {
 		})
 	}
 	d := newDNSWorld(t)
-	_, err := d.svc.DNSRecords(ctx, bob, idString(d.bobConn), "unknown.example")
+	_, err := d.svc.DNSRecords(ctx, bob, d.bobConn, "unknown.example")
 	wantKind(t, err, NotFound)
 }
 
@@ -422,7 +422,7 @@ func TestZoneCacheExpires(t *testing.T) {
 	d := newDNSWorld(t)
 	ctx := context.Background()
 	srv := d.hz[bobToken]
-	if _, err := d.svc.AdoptDNSZone(ctx, bob, idString(d.bobConn), "other.org"); err != nil {
+	if _, err := d.svc.AdoptDNSZone(ctx, bob, d.bobConn, "other.org"); err != nil {
 		t.Fatal(err)
 	}
 	srv.ResetCalls()
@@ -450,7 +450,7 @@ func TestZoneCacheExpires(t *testing.T) {
 		t.Fatalf("%d zone listings after 60 s, want 1", n)
 	}
 	// Writes invalidate the cache.
-	if _, err := d.svc.SetDNSRecord(ctx, bob, idString(d.bobConn), "example.com", "www", "A", nil, []string{"198.51.100.7"}); err != nil {
+	if _, err := d.svc.SetDNSRecord(ctx, bob, d.bobConn, "example.com", "www", "A", nil, []string{"198.51.100.7"}); err != nil {
 		t.Fatal(err)
 	}
 	zones()
@@ -465,7 +465,7 @@ func TestZonesListSkipsFailingConnection(t *testing.T) {
 	if _, err := d.svc.CreateDNSConnection(ctx, bob, "hetzner", "second", newToken); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.svc.AdoptDNSZone(ctx, bob, idString(d.bobConn), "other.org"); err != nil {
+	if _, err := d.svc.AdoptDNSZone(ctx, bob, d.bobConn, "other.org"); err != nil {
 		t.Fatal(err)
 	}
 	d.hz[newToken].Token = "rotated"
@@ -487,20 +487,20 @@ func TestRecordsRoundTrip(t *testing.T) {
 	srv.AddRRSet("example.com", hetznertest.RRSet{Name: "@", Type: "SOA", Records: []string{"hydrogen.ns.hetzner.com. dns.hetzner.com. 1 86400 10800 3600000 3600"}})
 	ttl := 600
 	txt := `v=spf1 include:_spf.example.net "quoted" -all`
-	rs, err := d.svc.SetDNSRecord(ctx, bob, idString(d.bobConn), "Example.com.", "@", "txt", &ttl, []string{txt})
+	rs, err := d.svc.SetDNSRecord(ctx, bob, d.bobConn, "Example.com.", "@", "txt", &ttl, []string{txt})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(rs, RecordSet{Name: "@", Type: "TXT", TTL: &ttl, Values: []string{txt}}) {
 		t.Fatalf("%+v", rs)
 	}
-	if _, err := d.svc.SetDNSRecord(ctx, bob, idString(d.bobConn), "example.com", "mail", "MX", nil, []string{"10   Mx.Example.net"}); err != nil {
+	if _, err := d.svc.SetDNSRecord(ctx, bob, d.bobConn, "example.com", "mail", "MX", nil, []string{"10   Mx.Example.net"}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := srv.RRSet("example.com", "mail", "MX"); !reflect.DeepEqual(got.Records, []string{"10 mx.example.net."}) || got.TTL != 0 {
 		t.Fatalf("stored MX %+v", got)
 	}
-	list, err := d.svc.DNSRecords(ctx, bob, idString(d.bobConn), "example.com")
+	list, err := d.svc.DNSRecords(ctx, bob, d.bobConn, "example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,11 +514,11 @@ func TestRecordsRoundTrip(t *testing.T) {
 	if list[1].Values[0] != txt || *list[1].TTL != 600 || list[2].TTL != nil {
 		t.Fatalf("%+v", list)
 	}
-	err = d.svc.DeleteDNSRecord(ctx, bob, idString(d.bobConn), "example.com", "@", "SOA")
+	err = d.svc.DeleteDNSRecord(ctx, bob, d.bobConn, "example.com", "@", "SOA")
 	wantKind(t, err, Invalid)
-	err = d.svc.DeleteDNSRecord(ctx, bob, idString(d.bobConn), "example.com", "@", "NS")
+	err = d.svc.DeleteDNSRecord(ctx, bob, d.bobConn, "example.com", "@", "NS")
 	wantKind(t, err, Invalid)
-	if err := d.svc.DeleteDNSRecord(ctx, bob, idString(d.bobConn), "example.com", "mail", "MX"); err != nil {
+	if err := d.svc.DeleteDNSRecord(ctx, bob, d.bobConn, "example.com", "mail", "MX"); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := srv.RRSet("example.com", "mail", "MX"); ok {
@@ -527,11 +527,11 @@ func TestRecordsRoundTrip(t *testing.T) {
 	// A secondary zone cannot be changed.
 	srv.AddZone("secondary.example", "secondary")
 	d.now = d.now.Add(time.Hour)
-	_, err = d.svc.SetDNSRecord(ctx, bob, idString(d.bobConn), "secondary.example", "www", "A", nil, []string{"198.51.100.7"})
+	_, err = d.svc.SetDNSRecord(ctx, bob, d.bobConn, "secondary.example", "www", "A", nil, []string{"198.51.100.7"})
 	wantKind(t, err, Conflict)
 	// Protected records are reported as such.
 	srv.AddRRSet("example.com", hetznertest.RRSet{Name: "locked", Type: "A", Records: []string{"198.51.100.1"}, Protected: true})
-	_, err = d.svc.SetDNSRecord(ctx, bob, idString(d.bobConn), "example.com", "locked", "A", nil, []string{"198.51.100.2"})
+	_, err = d.svc.SetDNSRecord(ctx, bob, d.bobConn, "example.com", "locked", "A", nil, []string{"198.51.100.2"})
 	wantKind(t, err, Conflict)
 }
 
@@ -682,7 +682,7 @@ func TestPointHere(t *testing.T) {
 
 	t.Run("no matching zone", func(t *testing.T) {
 		d := newDNSWorld(t)
-		if err := d.svc.DeleteDNSConnection(ctx, bob, idString(d.bobConn)); err != nil {
+		if err := d.svc.DeleteDNSConnection(ctx, bob, d.bobConn); err != nil {
 			t.Fatal(err)
 		}
 		_, err := d.svc.PointDomain(ctx, bob, "bobsite", "bobsite.example.com")
@@ -772,12 +772,12 @@ func TestDomainStatuses(t *testing.T) {
 	}
 	want := []DomainStatus{
 		{Domain: "away.example.com", State: DomainPointsElsewhere, Found: []string{"198.51.100.1"},
-			Zone: &DomainZone{ConnectionID: idString(d.bobConn), ConnectionName: "bob-main", Zone: "example.com", RecordName: "away"}},
+			Zone: &DomainZone{ConnectionID: d.bobConn, ConnectionName: "bob-main", Zone: "example.com", RecordName: "away"}},
 		{Domain: "bobsite.example.com", State: DomainPointsHere, Found: []string{"2001:db8::5", "203.0.113.5"},
-			Zone: &DomainZone{ConnectionID: idString(d.bobConn), ConnectionName: "bob-main", Zone: "example.com", RecordName: "bobsite"}},
+			Zone: &DomainZone{ConnectionID: d.bobConn, ConnectionName: "bob-main", Zone: "example.com", RecordName: "bobsite"}},
 		{Domain: "broken.example.org", State: DomainLookupFailed, Found: []string{}},
 		{Domain: "gone.other.org", State: DomainNoRecord, Found: []string{},
-			Zone: &DomainZone{ConnectionID: idString(d.bobConn), ConnectionName: "bob-main", Zone: "other.org", RecordName: "gone"}},
+			Zone: &DomainZone{ConnectionID: d.bobConn, ConnectionName: "bob-main", Zone: "other.org", RecordName: "gone"}},
 	}
 	if !reflect.DeepEqual(list, want) {
 		t.Fatalf("got  %+v\nwant %+v", list, want)
@@ -796,7 +796,7 @@ func TestDomainStatuses(t *testing.T) {
 	}
 	// The admin sees the status, with the admin's own zone.
 	list, err = d.svc.DomainStatuses(ctx, admin, "bobsite")
-	if err != nil || list[1].Zone == nil || list[1].Zone.ConnectionID != idString(d.rootConn) {
+	if err != nil || list[1].Zone == nil || list[1].Zone.ConnectionID != d.rootConn {
 		t.Fatalf("%+v %v", list, err)
 	}
 }
@@ -805,19 +805,19 @@ func TestDNSSecretsNeverRecorded(t *testing.T) {
 	d := newDNSWorld(t)
 	ctx := context.Background()
 	long := "google-site-verification=" + strings.Repeat("x", 60)
-	if _, err := d.svc.SetDNSRecord(ctx, bob, idString(d.bobConn), "example.com", "@", "TXT", nil, []string{long, "short"}); err != nil {
+	if _, err := d.svc.SetDNSRecord(ctx, bob, d.bobConn, "example.com", "@", "TXT", nil, []string{long, "short"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.svc.PointDomain(ctx, bob, "bobsite", "bobsite.example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.svc.DeleteDNSRecord(ctx, bob, idString(d.bobConn), "example.com", "@", "TXT"); err != nil {
+	if err := d.svc.DeleteDNSRecord(ctx, bob, d.bobConn, "example.com", "@", "TXT"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.svc.CreateDNSConnection(ctx, bob, "hetzner", "bad", "hz-wrong-token-0123456789"); err == nil {
 		t.Fatal("a wrong token must be refused")
 	}
-	if err := d.svc.DeleteDNSConnection(ctx, bob, idString(d.bobConn)); err != nil {
+	if err := d.svc.DeleteDNSConnection(ctx, bob, d.bobConn); err != nil {
 		t.Fatal(err)
 	}
 	acts, err := d.svc.store.Activities(ctx, 100)
@@ -952,7 +952,7 @@ func TestChosenDNSZones(t *testing.T) {
 	srv := d.hz[bobToken]
 	srv.ResetCalls()
 	for range 2 {
-		got, err := d.svc.AdoptDNSZone(ctx, bob, idString(d.bobConn), " Other.ORG. ")
+		got, err := d.svc.AdoptDNSZone(ctx, bob, d.bobConn, " Other.ORG. ")
 		if err != nil || got.Name != "other.org" || !got.Adopted || len(got.UsedBy) != 0 {
 			t.Fatalf("adopt: %+v %v", got, err)
 		}
@@ -964,7 +964,7 @@ func TestChosenDNSZones(t *testing.T) {
 	}
 	want("after adopting", inPanel(), "bob-main/example.com", "bob-main/other.org")
 	want("available after adopting", available(), "second/new.example")
-	if _, err := d.svc.AdoptDNSZone(ctx, bob, idString(d.bobConn), "missing.org"); KindOf(err) != NotFound {
+	if _, err := d.svc.AdoptDNSZone(ctx, bob, d.bobConn, "missing.org"); KindOf(err) != NotFound {
 		t.Fatalf("unknown zone: %v", err)
 	}
 
@@ -977,7 +977,7 @@ func TestChosenDNSZones(t *testing.T) {
 		t.Fatal(err)
 	}
 	want("with e-mail", inPanel(), "bob-main/example.com", "second/new.example", "bob-main/other.org")
-	if err := d.svc.ReleaseDNSZone(ctx, bob, idString(d.bobConn), "example.com"); KindOf(err) != Conflict ||
+	if err := d.svc.ReleaseDNSZone(ctx, bob, d.bobConn, "example.com"); KindOf(err) != Conflict ||
 		!strings.Contains(err.Error(), "stays in the panel while it is used by the site bobother") {
 		t.Fatalf("release a used zone: %v", err)
 	}
@@ -987,10 +987,10 @@ func TestChosenDNSZones(t *testing.T) {
 	}
 
 	// Releasing takes an adopted zone out; it is available again.
-	if err := d.svc.ReleaseDNSZone(ctx, bob, idString(d.bobConn), "other.org"); err != nil {
+	if err := d.svc.ReleaseDNSZone(ctx, bob, d.bobConn, "other.org"); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.svc.ReleaseDNSZone(ctx, bob, idString(d.bobConn), "other.org"); KindOf(err) != NotFound {
+	if err := d.svc.ReleaseDNSZone(ctx, bob, d.bobConn, "other.org"); KindOf(err) != NotFound {
 		t.Fatalf("release twice: %v", err)
 	}
 	want("after releasing", available(), "bob-main/other.org")
@@ -1004,7 +1004,7 @@ func TestChosenDNSZones(t *testing.T) {
 		t.Fatal(err)
 	}
 	want("with another person's site", available(), "bob-main/other.org")
-	if err := d.svc.DeleteDNSZone(ctx, bob, idString(d.bobConn), "other.org", "other.org"); KindOf(err) != Conflict ||
+	if err := d.svc.DeleteDNSZone(ctx, bob, d.bobConn, "other.org", "other.org"); KindOf(err) != Conflict ||
 		!strings.Contains(err.Error(), "a site of another person (blog.other.org)") {
 		t.Fatalf("delete a zone another person uses: %v", err)
 	}
@@ -1029,12 +1029,12 @@ func TestChosenDNSZones(t *testing.T) {
 	d.svc.settings.panelDomain = ""
 
 	// A created zone is adopted; a deleted one is forgotten.
-	created, err := d.svc.CreateDNSZone(ctx, bob, idString(d.bobConn), "fresh.org")
+	created, err := d.svc.CreateDNSZone(ctx, bob, d.bobConn, "fresh.org")
 	if err != nil || !created.Adopted {
 		t.Fatalf("create: %+v %v", created, err)
 	}
 	want("after creating", inPanel(), "bob-main/example.com", "bob-main/fresh.org", "second/new.example")
-	if err := d.svc.DeleteDNSZone(ctx, bob, idString(d.bobConn), "fresh.org", "fresh.org"); err != nil {
+	if err := d.svc.DeleteDNSZone(ctx, bob, d.bobConn, "fresh.org", "fresh.org"); err != nil {
 		t.Fatal(err)
 	}
 	if list, _ := d.svc.store.AdoptedDNSZones(ctx, bob.UserID); len(list) != 0 {
@@ -1042,7 +1042,7 @@ func TestChosenDNSZones(t *testing.T) {
 	}
 
 	// Someone else's adoption does not count for bob, and the root sees only its own.
-	if _, err := d.svc.AdoptDNSZone(ctx, admin, idString(d.rootConn), "example.com"); err != nil {
+	if _, err := d.svc.AdoptDNSZone(ctx, admin, d.rootConn, "example.com"); err != nil {
 		t.Fatal(err)
 	}
 	rz, err = d.svc.DNSZones(ctx, admin)
