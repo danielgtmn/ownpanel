@@ -13,7 +13,9 @@ Group=ownpanel
 #   -tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock
 # Add -panel-domain panel.example.com to reach the panel over HTTPS.
 EnvironmentFile=-/etc/ownpanel/ownpaneld.env
-ExecStart=/usr/local/bin/ownpaneld -data /var/lib/ownpanel $OWNPANELD_ARGS
+# Caddy's certificates and the update requests live outside the data
+# directory, in directories only Caddy or root control (see install.sh).
+ExecStart=/usr/local/bin/ownpaneld -data /var/lib/ownpanel -caddy-storage /var/lib/ownpanel-caddy/storage -update-dir /var/lib/ownpanel-update/requests $OWNPANELD_ARGS
 Restart=on-failure
 NoNewPrivileges=true
 PrivateTmp=true

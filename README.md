@@ -312,9 +312,11 @@ fix the owners:
 ```sh
 systemctl stop ownpaneld ownpanel-caddy
 rm -f /var/lib/ownpanel/ownpanel.db /var/lib/ownpanel/ownpanel.db-wal /var/lib/ownpanel/ownpanel.db-shm
-tar -xzf ownpanel-2026-01-31.tar.gz -C /var/lib/ownpanel
+tar -xzf ownpanel-2026-01-31.tar.gz -C /var/lib/ownpanel --exclude 'caddy/*' --exclude caddy --exclude 'mail/*' --exclude mail
+mkdir -p /var/lib/ownpanel-caddy/storage
+tar -xzf ownpanel-2026-01-31.tar.gz -C /var/lib/ownpanel-caddy/storage --strip-components 1 caddy
 chown -R ownpanel:ownpanel /var/lib/ownpanel/ownpanel.db /var/lib/ownpanel/sites /var/lib/ownpanel/secret.key
-chown -R caddy:caddy /var/lib/ownpanel/caddy
+chown -R caddy:caddy /var/lib/ownpanel-caddy
 systemctl start ownpanel-caddy ownpaneld
 ```
 
