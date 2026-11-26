@@ -24,6 +24,7 @@ import { ConnectedAccountsSection } from './ConnectedAccountsSection.tsx'
 import { GitHubSection } from './GitHubSection.tsx'
 import { ipAccessNotice } from './rules.ts'
 import { MailSection } from './MailSection.tsx'
+import { PreviewsSection } from './PreviewsSection.tsx'
 import { BuildsSection } from './BuildsSection.tsx'
 import { UpdatesSection } from './UpdatesSection.tsx'
 
@@ -230,6 +231,7 @@ function Loaded({ initial }: { initial: PanelSettings }) {
       <AddressesSection settings={settings} onSaved={setSettings} />
       <PanelAddressSection settings={settings} onSaved={setSettings} open={panelOpen} onOpenChange={setPanelOpen} />
       <CertificateSection settings={settings} onSaved={setSettings} />
+      <PreviewsSection settings={settings} onSaved={setSettings} />
       <MailSection settings={settings} onSaved={setSettings} />
       <BuildsSection />
       <UpdatesSection />

@@ -102,7 +102,7 @@ function Loaded({ site, reload }: { site: Site; reload: () => Promise<void> }) {
           </>
         }
       />
-      <PublishSection name={site.name} onPublished={reload} />
+      <PublishSection name={site.name} previewAddresses={site.preview_addresses === true} onPublished={reload} />
       <VersionsSection site={site} onChanged={reload} />
       <Section
         title="Domains"

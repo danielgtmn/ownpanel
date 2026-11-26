@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"net/netip"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 // TLS modes.
@@ -72,6 +74,19 @@ type Options struct {
 	// is a site's domain, MailAutoconfigWellKnown is passed to the panel
 	// before the site's files.
 	MailAutoconfigDomains []string
+
+	// PreviewDomain, when set, serves the Previews of sites on
+	// <label>.<PreviewDomain> (see Preview). One wildcard route takes all
+	// names below it; names that are no preview answer 404. With TLS their
+	// certificates are obtained on demand, during the first handshake for a
+	// name, and only after Caddy asked PreviewPermission whether the name is
+	// a preview, so no certificate is requested for versions nobody opens
+	// and none for names that are not previews.
+	PreviewDomain string
+	// PreviewPermission is the URL Caddy asks (with "?domain=<name>")
+	// before it obtains a certificate for a name below PreviewDomain; any
+	// answer but 2xx refuses. Required with TLS when PreviewDomain is set.
+	PreviewPermission string
 }
 
 // MailWeb is the site of the mail host (wiki/Groupware-Architecture.md,
@@ -132,7 +147,41 @@ type Site struct {
 	Domains []string
 	Root    string // absolute path served as web root
 	Live    bool   // false until the first deployment exists
+	// Previews are the site's releases served below Options.PreviewDomain.
+	Previews []Preview
 }
+
+// Preview is one release served on <Label>.<PreviewDomain>. Only a request
+// that carries Key, as PreviewQuery in the address or later in the cookie
+// the first such request sets, gets the files: the host name alone is not a
+// secret once a public certificate for it exists (certificates are logged
+// publicly).
+type Preview struct {
+	Label string // lowercase DNS label
+	Root  string // absolute path of the release directory
+	Key   string // lowercase letters and digits, at least 20
+}
+
+// PreviewQuery is the query parameter of a preview link that carries its
+// key. A request with it is redirected to the same path without a query,
+// setting the preview's cookie.
+const PreviewQuery = "ownpanel-preview"
+
+// Names of the cookie of a preview. Over HTTPS the prefix makes browsers
+// insist on Secure, Path=/ and no Domain, so another preview (a sibling
+// name) cannot set or overwrite it.
+const (
+	previewCookie       = "ownpanel_preview"
+	securePreviewCookie = "__Host-ownpanel_preview"
+	// previewCookieMaxAge is how long a browser may keep opening a preview
+	// after its link was used once.
+	previewCookieMaxAge = 7 * 24 * 60 * 60
+)
+
+var (
+	previewLabelRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	previewKeyRE   = regexp.MustCompile(`^[a-z0-9]{20,128}$`)
+)
 
 type obj = map[string]any
 
@@ -211,6 +260,13 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 			}}},
 			"terminal": true,
 		})
+	}
+	previewRoute, err := buildPreviews(opts, sorted)
+	if err != nil {
+		return nil, err
+	}
+	if previewRoute != nil {
+		routes = append(routes, previewRoute)
 	}
 	routes = append(routes, domainRedirects...)
 	mailDomains := map[string]bool{}
@@ -330,17 +386,39 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 		// internal CA does, whatever the mode.
 		policies = append(policies, obj{"subjects": ips, "issuers": []obj{{"module": "internal"}}})
 	}
+	var issuers []obj
 	switch opts.TLSMode {
 	case TLSInternal:
-		policies = append(policies, obj{"issuers": []obj{{"module": "internal"}}})
+		issuers = []obj{{"module": "internal"}}
 	case TLSACME:
 		if opts.ACMEEmail != "" {
-			policies = append(policies, obj{"issuers": []obj{{"module": "acme", "email": opts.ACMEEmail}}})
+			issuers = []obj{{"module": "acme", "email": opts.ACMEEmail}}
 		}
 	}
 	tlsApp := obj{}
+	var skip []string
+	if opts.PreviewDomain != "" && opts.TLSMode != TLSOff {
+		// Certificates for previews only on demand, one per name that is
+		// opened, after asking the panel; never for the wildcard itself.
+		p := obj{"subjects": []string{"*." + opts.PreviewDomain}, "on_demand": true}
+		if issuers != nil {
+			p["issuers"] = issuers
+		}
+		policies = append(policies, p)
+		skip = append(skip, "*."+opts.PreviewDomain)
+	}
+	if issuers != nil {
+		policies = append(policies, obj{"issuers": issuers})
+	}
+	automation := obj{}
 	if len(policies) > 0 {
-		tlsApp["automation"] = obj{"policies": policies}
+		automation["policies"] = policies
+	}
+	if opts.PreviewDomain != "" && opts.TLSMode != TLSOff {
+		automation["on_demand"] = obj{"permission": obj{"module": "http", "endpoint": opts.PreviewPermission}}
+	}
+	if len(automation) > 0 {
+		tlsApp["automation"] = automation
 	}
 	if mailWeb != nil && opts.TLSMode != TLSOff {
 		// The panel's certificate for the mail host, and no certificate
@@ -350,7 +428,10 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 			pems = append(pems, obj{"certificate": c.CertPEM, "key": c.KeyPEM, "tags": []string{mailWebTag}})
 		}
 		tlsApp["certificates"] = obj{"load_pem": pems}
-		server["automatic_https"] = obj{"skip_certificates": []string{opts.MailWeb.Host}}
+		skip = append(skip, opts.MailWeb.Host)
+	}
+	if len(skip) > 0 {
+		server["automatic_https"] = obj{"skip_certificates": skip}
 	}
 	if len(tlsApp) > 0 {
 		apps["tls"] = tlsApp
@@ -364,6 +445,91 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 		"admin":   obj{"listen": opts.AdminListen},
 		"storage": obj{"module": "file_system", "root": opts.StorageDir},
 		"apps":    apps,
+	}, nil
+}
+
+// buildPreviews returns the route that serves the previews below
+// opts.PreviewDomain, or nil if previews are off.
+func buildPreviews(opts Options, sites []Site) (obj, error) {
+	pd := opts.PreviewDomain
+	if pd == "" {
+		return nil, nil
+	}
+	if !validHost(pd) {
+		return nil, fmt.Errorf("preview domain %q is not a host name", pd)
+	}
+	if opts.TLSMode != TLSOff && opts.PreviewPermission == "" {
+		return nil, fmt.Errorf("previews with certificates need the address Caddy asks for permission")
+	}
+	cookie := securePreviewCookie + "=%s; Path=/; Max-Age=%d; Secure; HttpOnly; SameSite=Lax"
+	if opts.TLSMode == TLSOff {
+		cookie = previewCookie + "=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Lax"
+	}
+	name := securePreviewCookie
+	if opts.TLSMode == TLSOff {
+		name = previewCookie
+	}
+	seen := map[string]bool{}
+	var hosts []obj
+	for _, s := range sites {
+		for _, p := range s.Previews {
+			switch {
+			case !previewLabelRE.MatchString(p.Label):
+				return nil, fmt.Errorf("preview label %q of site %s is not a DNS label", p.Label, s.Name)
+			case !previewKeyRE.MatchString(p.Key):
+				return nil, fmt.Errorf("preview key of site %s is not valid", s.Name)
+			case !filepath.IsAbs(p.Root):
+				return nil, fmt.Errorf("preview root %q of site %s is not absolute", p.Root, s.Name)
+			case seen[p.Label]:
+				return nil, fmt.Errorf("preview label %q is used twice", p.Label)
+			}
+			seen[p.Label] = true
+			hosts = append(hosts, obj{
+				"match": []obj{{"host": []string{p.Label + "." + pd}}},
+				"handle": []obj{{"handler": "subroute", "routes": []obj{
+					{
+						// The link from the panel: remember the key, drop it
+						// from the address. The location is absolute, so a
+						// path like //other.example stays on this host.
+						"match": []obj{{"query": obj{PreviewQuery: []string{p.Key}}}},
+						"handle": []obj{{
+							"handler":     "static_response",
+							"status_code": 303,
+							"headers": obj{
+								"Location":      []string{"{http.request.scheme}://{http.request.hostport}{http.request.uri.path}"},
+								"Set-Cookie":    []string{fmt.Sprintf(cookie, p.Key, previewCookieMaxAge)},
+								"Cache-Control": []string{"no-store"},
+							},
+						}},
+						"terminal": true,
+					},
+					{
+						"match": []obj{{"header": obj{"Cookie": []string{"*" + name + "=" + p.Key + "*"}}}},
+						"handle": []obj{
+							{"handler": "vars", "root": p.Root},
+							{"handler": "encode", "encodings": obj{"zstd": obj{}, "gzip": obj{}}},
+							{"handler": "file_server"},
+						},
+						"terminal": true,
+					},
+					{"handle": []obj{{"handler": "static_response", "status_code": 403, "body": "Open this preview with its link from the panel.\n"}}},
+				}}},
+				"terminal": true,
+			})
+		}
+	}
+	sort.Slice(hosts, func(i, j int) bool {
+		return hosts[i]["match"].([]obj)[0]["host"].([]string)[0] < hosts[j]["match"].([]obj)[0]["host"].([]string)[0]
+	})
+	inner := append(hosts, obj{"handle": []obj{{"handler": "static_response", "status_code": 404, "body": "Unknown preview.\n"}}})
+	return obj{
+		"match": []obj{{"host": []string{"*." + pd}}},
+		"handle": []obj{
+			// Previews are not for search engines.
+			{"handler": "headers", "response": obj{"set": obj{"X-Robots-Tag": []string{"noindex, nofollow"}}}},
+			{"handler": "subroute", "routes": inner},
+		},
+		"terminal": true,
 	}, nil
 }
 
@@ -407,6 +573,19 @@ func (o Options) mailWebRoute() (obj, error) {
 		}}},
 		"terminal": true,
 	}, nil
+}
+
+// validHost: a lowercase host name with a dot and no wildcard.
+func validHost(h string) bool {
+	if len(h) > 253 || !strings.Contains(h, ".") {
+		return false
+	}
+	for _, l := range strings.Split(h, ".") {
+		if !previewLabelRE.MatchString(l) {
+			return false
+		}
+	}
+	return true
 }
 
 // Timeouts of the HTTP servers. Sites and the panel share a server, so the

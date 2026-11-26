@@ -49,7 +49,11 @@ Every id the API returns or takes is a **string**: `"id": "42"`, `"connection_id
 
 ## Objects
 
-**Site:** `{"name", "domains": [..], "owner", "current_release", "releases": [..]}`. `releases` lists version ids oldest first; `current_release` is empty until something is published.
+**Site:** `{"name", "domains": [..], "owner", "current_release", "releases": [..], "versions": [Version, …], "preview_addresses": bool}`. `releases` lists version ids oldest first; `current_release` is empty until a version is live. `versions` lists the same versions newest first with their state; `preview_addresses` tells whether versions can be opened on an address of their own (an admin set a domain for previews).
+
+**Version:** `{"id", "live": bool, "pending": bool, "preview_url"}`. `pending` is true for a version published without making it live that has not been live since. `preview_url` opens the version (live or not) and works for anyone who has it; `""` without a domain for previews.
+
+**Publication** (the answer to publishing): a Site plus `{"published_release", "published_live": bool, "preview_url"}` for the new version. When only the web server could not be updated (`502`), the answer carries the Publication next to `error`: the version exists.
 
 **User:** `{"id", "name", "email", "role", "created_at"}`, role `"admin"` or `"member"`; `email` is `""` when the person has none.
 
@@ -131,10 +135,11 @@ Domains whose DNS is managed elsewhere: kept in your panel as domains of their o
 | `GET` | `/api/sites/{name}` | anyone, own site | | Site |
 | `PUT` | `/api/sites/{name}` | write; creating needs an unrestricted token | `{"domains": ["example.com"]}` | Site. Creates the site if the name is free, otherwise replaces its domains |
 | `DELETE` | `/api/sites/{name}` | write, unrestricted | | `204` |
-| `POST` | `/api/sites/{name}/deployments` | write, own site | raw `.zip` or `.tar.gz` body | `201` Site |
-| `POST` | `/api/sites/{name}/rollback` | write, own site | optional `{"release": "<id>"}`; no body means the previous version | Site |
+| `POST` | `/api/sites/{name}/deployments` | write, own site | raw `.zip` or `.tar.gz` body; `?live=false` adds the version without making it live | `201` Publication |
+| `POST` | `/api/sites/{name}/rollback` | write, own site | optional `{"release": "<id>"}`; no body means the last earlier version that was live | Site |
 | `GET` | `/api/sites/{name}/icon` | anyone, own site | | the icon of the live version: a `<link rel="icon">` (or `shortcut icon`, `apple-touch-icon`) in `index.html` pointing at a file in the same version or a `data:` URL up to 64 KB, else `favicon.svg`, `favicon.png`, `favicon.ico` or `apple-touch-icon.png`; PNG, ICO, SVG, WebP, GIF or JPEG up to 256 KB. Nothing is fetched from elsewhere. `404` if there is none |
-| `POST` | `/api/uploads/{id}` | open (upload link) | raw archive body | `201` Site; `404` for unknown, used or expired links |
+| `POST` | `/api/uploads/{id}` | open (upload link) | raw archive body | `201` Publication (made live or not, as the link was created); `404` for unknown, used or expired links |
+| `GET` | `/api/previews/certificate-allowed?domain=<name>` | only the web server on this machine | | `200` if the name is the preview address of a kept version, else `404`. Asked by Caddy before it obtains a certificate for a preview ([[Security|Security#previews]]) |
 
 ### Users and activity
 
@@ -269,7 +274,9 @@ Connecting an account is a browser flow with a stop at GitHub ([[GitHub|GitHub]]
 
 A change that is saved but could not be sent to the mail service answers `502` with "saved, but the mail server could not be updated yet"; the panel keeps retrying. Without a mail service (`-mail-admin` not set) everything is stored, and `GET /api/mail/status` says the service is not set up.
 
-The panel settings (`GET`/`PUT /api/settings`, admin) also carry `mail_host`, `mail_host_locked` and `postmaster_address`; see [[Configuration|Configuration]]. The spam checks are `mail_blocklists` (list of DNS blocklist zones, at most 10; `[]` turns them off; zones with a Spamhaus key, `<key>.….dq.spamhaus.net`, are answered as `••••.….dq.spamhaus.net`, and sending the masked name back keeps the stored zone), `mail_blocklists_default` (`true` uses the default list and ignores `mail_blocklists`), `mail_junk_score` (1–50, default 5) and `mail_greylisting` (default `false`). Omitted fields stay unchanged.
+The panel settings (`GET`/`PUT /api/settings`, admin) carry `preview_domain` (empty: versions have no preview address; see [[Configuration|Configuration]]). `GET /api/settings/checks` includes `preview_dns`: `{"name": "*.<preview domain>", "state", "found", "expected", "zone": null or {"connection_id", "connection_name", "zone", "record_name"}}`; `zone` is set when the record can be written into a zone of your DNS connections with `POST /api/settings/preview-domain/point` (admin; answers `{"changed": [Record set, …]}`).
+
+The panel settings also carry `mail_host`, `mail_host_locked` and `postmaster_address`; see [[Configuration|Configuration]]. The spam checks are `mail_blocklists` (list of DNS blocklist zones, at most 10; `[]` turns them off; zones with a Spamhaus key, `<key>.….dq.spamhaus.net`, are answered as `••••.….dq.spamhaus.net`, and sending the masked name back keeps the stored zone), `mail_blocklists_default` (`true` uses the default list and ignores `mail_blocklists`), `mail_junk_score` (1–50, default 5) and `mail_greylisting` (default `false`). Omitted fields stay unchanged.
 
 **Settings for mail programs (public, outside `/api/`).** Mail programs ask before they have a password, so these need no sign-in. They answer only for active mail domains, the same for every address (never whether a mailbox exists), and `404` for everything else:
 
@@ -321,4 +328,4 @@ curl --fail-with-body -X POST \
 
 Use a `write` token limited to the one site, so a leaked token can publish to that site but cannot create or delete sites.
 
-The request is synchronous: the `201` answer comes after the new version is live, and its `current_release` is the new version's id. On GitHub Actions, the [[GitHub Action|GitHub-Action]] does this for you.
+The request is synchronous: the `201` answer comes after the new version is live, and its `published_release` (and `current_release`) is the new version's id. With `?live=false` the live version stays, and `preview_url` is where the new one can be opened. On GitHub Actions, the [[GitHub Action|GitHub-Action]] does this for you.

@@ -8,6 +8,8 @@ import {
   FileInputTrigger,
   formatFileSize,
 } from '@ui-sdk/react/file-input'
+import { Field, FieldDescription, FieldLabel } from '@ui-sdk/react/field'
+import { Switch, SwitchThumb } from '@ui-sdk/react/switch'
 import { toast } from '@ui-sdk/react/toast'
 import { useState } from 'react'
 import { errorMessage, isSavedButNotApplied } from '../../shared/api/index.ts'
@@ -18,11 +20,14 @@ import { ACCEPT, MAX_BYTES, rejectionMessage } from './uploadRules.ts'
 
 type PublishSectionProps = {
   name: string
+  /** Versions can be opened on an address of their own. */
+  previewAddresses: boolean
   onPublished: () => Promise<void>
 }
 
-export function PublishSection({ name, onPublished }: PublishSectionProps) {
+export function PublishSection({ name, previewAddresses, onPublished }: PublishSectionProps) {
   const [files, setFiles] = useState<File[]>([])
+  const [live, setLive] = useState(true)
   const [rejection, setRejection] = useState<string | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
 
@@ -31,8 +36,10 @@ export function PublishSection({ name, onPublished }: PublishSectionProps) {
     if (!file) return
     setFailure(null)
     try {
-      await publishArchive(name, file)
-      toast.success('Your site is live with the new files.')
+      await publishArchive(name, file, live)
+      if (live) toast.success('Your site is live with the new files.')
+      else if (previewAddresses) toast.success('Published. Visitors still see the live version; open the preview below to check the new one.')
+      else toast.success('Published. Visitors still see the live version until you make the new one live below.')
     } catch (error) {
       if (isSavedButNotApplied(error)) {
         toast.warning(errorMessage(error))
@@ -80,6 +87,19 @@ export function PublishSection({ name, onPublished }: PublishSectionProps) {
             </FileInputItem>
           </FileInputList>
         </FileInput>
+        <Field className="publish-live">
+          <Switch checked={live} onCheckedChange={(next) => setLive(next === true)}>
+            <SwitchThumb />
+          </Switch>
+          <div className="choice-text">
+            <FieldLabel>Make it live right away</FieldLabel>
+            <FieldDescription>
+              {previewAddresses
+                ? 'Turn this off to publish without making it live yet: visitors keep seeing the current version while you check the new one in its preview.'
+                : 'Turn this off to publish without making it live yet: visitors keep seeing the current version until you make the new one live.'}
+            </FieldDescription>
+          </div>
+        </Field>
         {rejection ? (
           <p className="form-error" role="alert">
             {rejection}
@@ -97,7 +117,7 @@ export function PublishSection({ name, onPublished }: PublishSectionProps) {
             pendingAnnouncement="Publishing"
             onClick={publish}
           >
-            Publish
+            {live ? 'Publish' : 'Publish without making it live'}
           </Button>
         </div>
       </div>
