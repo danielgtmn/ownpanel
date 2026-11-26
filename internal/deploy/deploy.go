@@ -4,6 +4,8 @@
 //
 //	<base>/<site>/releases/<release-id>/   extracted archive, never modified
 //	<base>/<site>/current                  symlink to the active release
+//	<base>/<site>/pending/<release-id>     empty marker: published without
+//	                                       ever having been made live
 //
 // The web server serves "current". Switching releases is one atomic rename of
 // a symlink, so a deployment or rollback never exposes a half-written site
@@ -27,13 +29,16 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
-// KeepReleases is how many releases are retained per site.
+// KeepReleases is how many of the newest releases are retained per site.
+// The live release and the one Rollback would go back to are kept besides,
+// so a burst of releases that are not made live cannot push them out.
 const KeepReleases = 5
 
 // Limits for one release. Variables so tests can lower them.
@@ -99,6 +104,7 @@ type Manager struct {
 
 func (m *Manager) siteDir(site string) string     { return filepath.Join(m.Base, site) }
 func (m *Manager) releasesDir(site string) string { return filepath.Join(m.Base, site, "releases") }
+func (m *Manager) pendingDir(site string) string  { return filepath.Join(m.Base, site, "pending") }
 
 // Root is the path the web server serves for a site.
 func (m *Manager) Root(site string) string { return filepath.Join(m.Base, site, "current") }
@@ -136,6 +142,17 @@ func (m *Manager) Releases(site string) []string {
 // Unpacking stops when ctx is done (reading the upload already fails when
 // the request goes away).
 func (m *Manager) Deploy(ctx context.Context, site string, archive io.Reader) (string, error) {
+	return m.add(ctx, site, archive, true)
+}
+
+// Add extracts an archive as a new release like Deploy, but leaves the live
+// release as it is. The new release is marked as pending until it is made
+// live with Rollback.
+func (m *Manager) Add(ctx context.Context, site string, archive io.Reader) (string, error) {
+	return m.add(ctx, site, archive, false)
+}
+
+func (m *Manager) add(ctx context.Context, site string, archive io.Reader, live bool) (string, error) {
 	relDir := m.releasesDir(site)
 	if err := os.MkdirAll(relDir, 0o755); err != nil {
 		return "", err
@@ -165,14 +182,57 @@ func (m *Manager) Deploy(ctx context.Context, site string, archive io.Reader) (s
 	if err := extract(ctx, tmp, spool); err != nil {
 		return "", err
 	}
+	if !live {
+		// The marker exists before the release does, so a release is never
+		// seen without it.
+		if err := m.markPending(site, id); err != nil {
+			return "", err
+		}
+	}
 	if err := os.Rename(tmp, filepath.Join(relDir, id)); err != nil {
+		_ = os.Remove(filepath.Join(m.pendingDir(site), id))
 		return "", err
 	}
-	if err := m.activate(site, id); err != nil {
-		return "", err
+	if live {
+		if err := m.activate(site, id); err != nil {
+			return "", err
+		}
 	}
 	m.prune(site)
 	return id, nil
+}
+
+func (m *Manager) markPending(site, id string) error {
+	if err := os.MkdirAll(m.pendingDir(site), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(m.pendingDir(site), id), os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// Pending reports whether a release was published without being made live
+// and has not been made live since.
+func (m *Manager) Pending(site, id string) bool {
+	_, err := os.Lstat(filepath.Join(m.pendingDir(site), id))
+	return err == nil
+}
+
+// previous is the release Rollback goes back to without an id: the newest
+// release older than the live one that is not pending (one that was live
+// before, or older releases from before pending markers existed). "" if
+// there is none.
+func (m *Manager) previous(site string, releases []string) string {
+	cur := m.Current(site)
+	i := slices.Index(releases, cur)
+	for i--; i >= 0; i-- {
+		if !m.Pending(site, releases[i]) {
+			return releases[i]
+		}
+	}
+	return ""
 }
 
 // Rollback activates the given release, or the one before the current release
@@ -180,11 +240,8 @@ func (m *Manager) Deploy(ctx context.Context, site string, archive io.Reader) (s
 func (m *Manager) Rollback(site, id string) (string, error) {
 	releases := m.Releases(site)
 	if id == "" {
-		cur := m.Current(site)
-		for i, r := range releases {
-			if r == cur && i > 0 {
-				id = releases[i-1]
-			}
+		if m.Current(site) != "" {
+			id = m.previous(site, releases)
 		}
 		if id == "" {
 			return "", fmt.Errorf("%w: there is no earlier release to go back to", ErrNoRelease)
@@ -213,16 +270,32 @@ func (m *Manager) activate(site, id string) error {
 	if err := os.Symlink(filepath.Join("releases", id), tmp); err != nil {
 		return err
 	}
-	return os.Rename(tmp, link)
+	if err := os.Rename(tmp, link); err != nil {
+		return err
+	}
+	// Once live, a release is no longer pending: going back may return to it.
+	if err := os.Remove(filepath.Join(m.pendingDir(site), id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
-// prune removes the oldest releases beyond KeepReleases, never the active one.
+// prune removes the oldest releases beyond KeepReleases. It never removes
+// the live release nor the one Rollback would go back to, however many
+// releases were added after them without being made live. Markers of
+// releases that no longer exist are removed too.
 func (m *Manager) prune(site string) {
 	releases := m.Releases(site)
-	cur := m.Current(site)
+	keep := map[string]bool{m.Current(site): true, m.previous(site, releases): true}
 	for i := 0; i < len(releases)-KeepReleases; i++ {
-		if releases[i] != cur {
+		if !keep[releases[i]] {
 			_ = os.RemoveAll(filepath.Join(m.releasesDir(site), releases[i]))
+		}
+	}
+	markers, _ := os.ReadDir(m.pendingDir(site))
+	for _, e := range markers {
+		if _, err := os.Lstat(filepath.Join(m.releasesDir(site), e.Name())); errors.Is(err, fs.ErrNotExist) {
+			_ = os.Remove(filepath.Join(m.pendingDir(site), e.Name()))
 		}
 	}
 }
