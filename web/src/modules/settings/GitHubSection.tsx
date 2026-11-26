@@ -123,6 +123,8 @@ function RemovedDialog({ removed, onClose }: { removed: GitHubRemoved | null; on
   )
 }
 
+const sentence = (text: string) => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`)
+
 // GitHub sends people back with codes that work once; StrictMode runs effects twice.
 const handledReturns = new Set<string>()
 
@@ -229,7 +231,7 @@ export function GitHubSection({ onSetPanelDomain }: { onSetPanelDomain?: () => v
       ) : null}
       {github.status === 'ready' && !github.data.ready ? (
         <div className="notice settings-notice">
-          <p>{github.data.problem}</p>
+          <p>{sentence(github.data.problem ?? '')}</p>
           {onSetPanelDomain ? <Button onClick={onSetPanelDomain}>Set panel domain</Button> : null}
         </div>
       ) : null}
