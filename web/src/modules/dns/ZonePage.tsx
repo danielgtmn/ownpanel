@@ -11,6 +11,7 @@ import { adoptZone, deleteRecord, deleteZone, listAvailableZones, listRecords, l
 import { DeleteDomainDialog } from './DeleteDomainDialog.tsx'
 import { Nameservers } from './Nameservers.tsx'
 import { RecordDialog, type RecordSubmit } from './RecordDialog.tsx'
+import { TemplateDialog } from './TemplateDialog.tsx'
 import {
   fullName,
   isEditableRecordSet,
@@ -22,7 +23,8 @@ import {
   withChanges,
   type ConfirmedChanges,
 } from './records.ts'
-import type { RecordSet, Zone } from './types.ts'
+import { summarize } from './templates.ts'
+import type { RecordSet, TemplateResult, Zone } from './types.ts'
 import { findZone } from './zones.ts'
 
 const backLink = (
@@ -98,6 +100,7 @@ function Loaded({ connectionId, zoneInfo, records, reload }: LoadedProps) {
   const zone = zoneInfo.name
   const [dialog, setDialog] = useState<{ open: boolean; existing: RecordSet | null }>({ open: false, existing: null })
   const [deleting, setDeleting] = useState(false)
+  const [templating, setTemplating] = useState(false)
   const [changes, setChanges] = useState<ConfirmedChanges>(new Map())
   const editable = !zoneInfo.read_only
   usePageTitle(zone)
@@ -145,6 +148,17 @@ function Loaded({ connectionId, zoneInfo, records, reload }: LoadedProps) {
     await reload()
   }
 
+  async function templateApplied(title: string, result: TemplateResult) {
+    const { writes } = summarize(result.changes)
+    setTemplating(false)
+    toast.success(
+      writes === 0
+        ? `${title}: everything was already set up.`
+        : `${title} is set up. DNS changes can take a few minutes to be visible.`,
+    )
+    await reload()
+  }
+
   async function remove(set: RecordSet) {
     const target = fullName(set.name, zone)
     const yes = await confirm({
@@ -174,9 +188,12 @@ function Loaded({ connectionId, zoneInfo, records, reload }: LoadedProps) {
         meta={<span className="muted">From {zoneInfo.connection_name}</span>}
         actions={
           editable ? (
-            <Button data-variant="solid" onClick={() => setDialog({ open: true, existing: null })}>
-              Add record
-            </Button>
+            <>
+              <Button onClick={() => setTemplating(true)}>Set up a service</Button>
+              <Button data-variant="solid" onClick={() => setDialog({ open: true, existing: null })}>
+                Add record
+              </Button>
+            </>
           ) : null
         }
       />
@@ -235,6 +252,15 @@ function Loaded({ connectionId, zoneInfo, records, reload }: LoadedProps) {
         connectionName={zoneInfo.connection_name}
         onDelete={removeDomain}
       />
+      {editable ? (
+        <TemplateDialog
+          open={templating}
+          onOpenChange={setTemplating}
+          connectionId={connectionId}
+          zone={zone}
+          onApplied={templateApplied}
+        />
+      ) : null}
       <RecordDialog
         open={dialog.open}
         onOpenChange={(open) => setDialog((current) => ({ ...current, open }))}

@@ -8,7 +8,7 @@ ownpanel is early. This page separates what exists from what is only planned. Pl
 - **Preview versions:** publish without making a version live, open every version on an address of its own, make it live with one click ([[Sites and Publishing|Sites-and-Publishing#previews]], [#14](https://github.com/danielgtmn/ownpanel/issues/14)).
 - **Users and access tokens:** admins and members, sign-in sessions, read-only and site-limited tokens, an activity log ([[Users and Access|Users-and-Access]]).
 - **Web interface** for all of the above.
-- **MCP** for AI agents, with the same permission rules ([[MCP|MCP]]).
+- **MCP** for AI agents, with the same permission rules, including DNS records and "point to this server" ([[MCP|MCP]]).
 - **DNS with Hetzner:** add and delete domains, edit records, domain status, "point to this server" ([[DNS|DNS]]).
 - **Redirects:** main address with or without www, path redirects, whole-domain redirects ([[Redirects|Redirects]]).
 - **First-run setup wizard** in the browser and a Settings page for the panel's domain and the server's addresses ([[Getting Started|Getting-Started]]).
@@ -30,7 +30,7 @@ The live plan is the **[roadmap board](https://github.com/users/danielgtmn/proje
 - **v0.3.0:**
   - build sites from a GitHub repository on the server ([#55](https://github.com/danielgtmn/ownpanel/issues/55));
   - preview versions: built (see above); previews for pull requests follow with building from GitHub;
-  - DNS for agents.
+  - DNS for agents: built (see above).
 - **v0.4.0:** e-mail, first version, as a self-hosted service that also sends mail itself ([#21](https://github.com/danielgtmn/ownpanel/issues/21)): built (see above). Next steps: webmail ([#30](https://github.com/danielgtmn/ownpanel/issues/30)), virus scanning, reports from receivers about your mail, outgoing encryption policies (MTA-STS, DANE), changing signing keys, a daily blocklist check. Groupware (shared mailboxes, filters and out-of-office, calendars and contacts, mailbox users changing their own password) is planned in [[Groupware architecture|Groupware-Architecture]] ([#84](https://github.com/danielgtmn/ownpanel/issues/84)).
 - **Later:** apps in containers ([#32](https://github.com/danielgtmn/ownpanel/issues/32)). Not built: today only static sites can be hosted.
 
