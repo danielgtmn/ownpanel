@@ -552,8 +552,8 @@ func (s *Service) sync(ctx context.Context) error {
 	var sites []caddy.Site
 	for _, site := range all {
 		sites = append(sites, caddy.Site{
-			Name:    site.Name,
-			Domains: site.Domains,
+			Name:     site.Name,
+			Domains:  site.Domains,
 			Root:     s.deploys.Root(site.Name),
 			Live:     s.deploys.Current(site.Name) != "",
 			Previews: s.caddyPreviews(site.Name),
