@@ -14,8 +14,15 @@ import (
 	"github.com/danielgtmn/ablage"
 )
 
+// The sign-in users of testdata/sesam_v1.sql.
+const (
+	authRoot = "v1-signin-root"
+	authBob  = "v1-signin-bob"
+)
+
 // legacyDB writes a database the way the panel kept it before ablage: the
-// old migrations, then the rows of testdata/legacy_rows.sql.
+// old migrations, sesam's tables as sesam 1.x wrote them
+// (testdata/sesam_v1.sql), then the rows of testdata/legacy_rows.sql.
 func legacyDB(t *testing.T) string {
 	t.Helper()
 	file := filepath.Join(t.TempDir(), "ownpanel.db")
@@ -29,12 +36,14 @@ func legacyDB(t *testing.T) string {
 	if err := migrate(db, sub); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := os.ReadFile("testdata/legacy_rows.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(string(rows)); err != nil {
-		t.Fatal(err)
+	for _, f := range []string{"testdata/sesam_v1.sql", "testdata/legacy_rows.sql"} {
+		rows, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(string(rows)); err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
 	}
 	return file
 }
@@ -99,10 +108,8 @@ func TestConvertLegacy(t *testing.T) {
 			t.Errorf("left over: %s", name)
 		}
 	}
-	var auth int
-	s.DB().QueryRow(`SELECT count(*) FROM auth_users`).Scan(&auth)
-	if auth != 2 {
-		t.Fatalf("sesam's rows: %d", auth)
+	if n, err := s.st.Count(ctx, "auth_users", ablage.All); err != nil || n != 3 {
+		t.Fatalf("sesam's rows: %d %v", n, err)
 	}
 
 	// Users: ids as text, links to sesam kept, the unmoved one with hash.
@@ -111,14 +118,14 @@ func TestConvertLegacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []User{
-		{ID: "10", Name: "bob", Role: RoleMember, AuthUserID: "au-bob", CreatedAt: at(1700000000)},
+		{ID: "10", Name: "bob", Role: RoleMember, AuthUserID: authBob, CreatedAt: at(1700000000)},
 		{ID: "11", Name: "jürgen", Role: RoleMember, CreatedAt: at(1700000005)},
-		{ID: "9", Name: "root", Role: RoleAdmin, AuthUserID: "au-root", CreatedAt: at(1700000000)},
+		{ID: "9", Name: "root", Role: RoleAdmin, AuthUserID: authRoot, CreatedAt: at(1700000000)},
 	}
 	if !reflect.DeepEqual(users, want) {
 		t.Fatalf("users\n got %+v\nwant %+v", users, want)
 	}
-	if u, err := s.UserByAuthID(ctx, "au-root"); err != nil || u.ID != "9" {
+	if u, err := s.UserByAuthID(ctx, authRoot); err != nil || u.ID != "9" {
 		t.Fatalf("by auth id %+v %v", u, err)
 	}
 	un, _ := s.UnmovedUsers(ctx)

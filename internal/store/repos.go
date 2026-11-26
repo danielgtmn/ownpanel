@@ -21,8 +21,9 @@ type userRow struct {
 	PasswordHash string
 	Role         string
 	// AuthUserID points at the sign-in user (sesam's auth_users.id); nil
-	// until the user was moved.
-	AuthUserID *string `db:",unique"`
+	// until the user was moved. While a panel user points at it, the
+	// sign-in user cannot be deleted (restrict): the panel user goes first.
+	AuthUserID *string `db:",ref=auth_users,unique"`
 	CreatedAt  time.Time
 }
 
@@ -254,6 +255,9 @@ func newRepos(st ablage.Store) (repos, error) {
 	var errs []error
 	add := func(err error) { errs = append(errs, err) }
 	var err error
+	// sesam's tables (auth_*) live in the same store: users reference
+	// auth_users, and one Migrate covers both.
+	add(declareSignIn(st))
 	r.users, err = ablage.NewRepository[userRow](st, "users")
 	add(err)
 	r.sessions, err = ablage.NewRepository[sessionRow](st, "sessions")

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danielgtmn/sesam"
+	"github.com/danielgtmn/sesam/v2"
 
 	"github.com/danielgtmn/ownpanel/internal/store"
 )

@@ -100,6 +100,7 @@ Everything the daemon owns is inside the `-data` directory:
 <data>/
   ownpanel.db            SQLite database (WAL mode: also ownpanel.db-wal, ownpanel.db-shm while running)
   ownpanel.db.pre-ablage-<time>  copy of the database from before its one-time conversion (only after that update)
+  ownpanel.db.pre-auth-ref-<time>  copy from before a one-time fix of the users table (only for a database converted by a nightly build before the fix)
   secret.key             32-byte key that encrypts stored DNS tokens (mode 0600)
   setup-code             one-time first-run code; exists only while no user exists
   sites/
@@ -110,7 +111,7 @@ Everything the daemon owns is inside the `-data` directory:
   state.json.imported    only if sites were imported from an old state.json
 ```
 
-- **`ownpanel.db`** holds users (password hashes), sessions, access tokens (hashed), sites and their domains, DNS connections (token encrypted), the activity log and settings. It is created with mode 0600. The schema is migrated automatically at start. A database from before the panel kept its data with [ablage](https://github.com/danielgtmn/ablage) is converted once at start; the copy from before is kept as `ownpanel.db.pre-ablage-<UTC time>` (mode 0600) and may be deleted once the new version runs well (see [[Installation|Installation#updating]]).
+- **`ownpanel.db`** holds users (password hashes), sessions, access tokens (hashed), sites and their domains, DNS connections (token encrypted), the activity log and settings. It is created with mode 0600. The schema is migrated automatically at start. A database from before the panel kept its data with [ablage](https://github.com/danielgtmn/ablage) is converted once at start; the copy from before is kept as `ownpanel.db.pre-ablage-<UTC time>` (mode 0600) and may be deleted once the new version runs well (see [[Installation|Installation#updating]]). A database converted by a nightly build before panel users referenced their sign-in account gets that reference once at start, after a copy `ownpanel.db.pre-auth-ref-<UTC time>` (mode 0600); it may be deleted the same way.
 - **`secret.key`** is created on first start. Without it the stored DNS tokens cannot be used; connections must be added again. It is included in backups.
 - **`setup-code`** is created when no user exists and deleted once the first admin is created (or at start, if a user already exists).
 - **`sites/<site>/releases/<id>`**: an id looks like `20260131T120000.000Z-ab12cd`. The newest five versions of a site are kept; the live one is never removed.
