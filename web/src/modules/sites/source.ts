@@ -61,6 +61,8 @@ export type Run = {
   head_repository?: string
   /** The preview the run published, while it exists. Carries the key that opens it. */
   preview_url?: string
+  /** The preview a succeeded run of a pull request published is gone (replaced or the pull request closed). */
+  preview_gone?: boolean
 }
 
 export type SiteSourceState = {
@@ -160,7 +162,8 @@ export function runStatus(run: Run): { label: string; tone: 'positive' | 'neutra
     case 'running':
       return { label: 'Building', tone: 'neutral' }
     case 'succeeded':
-      return { label: run.trigger === 'pull_request' ? 'Preview ready' : 'Published', tone: 'positive' }
+      if (run.trigger !== 'pull_request') return { label: 'Published', tone: 'positive' }
+      return run.preview_gone ? { label: 'Preview removed', tone: 'neutral' } : { label: 'Preview ready', tone: 'positive' }
     case 'failed':
       return { label: 'Failed', tone: 'warning' }
     case 'cancelled':

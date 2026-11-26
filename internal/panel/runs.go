@@ -100,6 +100,9 @@ type Run struct {
 	Fork           bool   `json:"fork,omitempty"`
 	HeadRepository string `json:"head_repository,omitempty"`
 	PreviewURL     string `json:"preview_url,omitempty"`
+	// PreviewGone: the preview a succeeded run of a pull request published
+	// is gone (a newer commit replaced it, or the pull request was closed).
+	PreviewGone bool `json:"preview_gone,omitempty"`
 }
 
 // SiteRuns are the newest runs of a site, newest first.
@@ -152,8 +155,12 @@ func (s *Service) runViewFor(r store.Run) Run {
 			v.PullRequestURL = s.github.WebURL() + "/" + url.PathEscape(owner) + "/" + url.PathEscape(name) + "/pull/" + strconv.Itoa(r.PullRequest)
 		}
 	}
-	if r.Preview != "" && r.Status == store.RunSucceeded && s.deploys.Tag(r.Site, r.Release) == r.Preview {
-		v.PreviewURL = s.previewURL(r.Site, r.Release)
+	if r.Preview != "" && r.Status == store.RunSucceeded {
+		if s.deploys.Tag(r.Site, r.Release) == r.Preview {
+			v.PreviewURL = s.previewURL(r.Site, r.Release)
+		} else {
+			v.PreviewGone = true
+		}
 	}
 	return v
 }

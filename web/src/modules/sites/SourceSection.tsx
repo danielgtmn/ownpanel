@@ -69,9 +69,9 @@ export function SourceSection({ site }: { site: string }) {
   const [editing, setEditing] = useState(false)
   const [previews, setPreviews] = useState(false)
 
-  async function previewsSaved(next: SiteSourceState) {
+  async function previewsSaved() {
     setPreviews(false)
-    if (next.source) toast.success(`${previewsSummary(next.source)} for ${site}.`)
+    toast.success(`Saved which pull requests are built as previews of ${site}.`)
     await state.reload()
   }
 

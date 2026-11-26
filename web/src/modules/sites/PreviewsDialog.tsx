@@ -86,7 +86,7 @@ export function PreviewsDialog({ open, onOpenChange, site, source, onSaved }: Pr
       open={open}
       onOpenChange={onOpenChange}
       title="Previews of pull requests"
-      description={`Which pull requests to ${source.repository} ${site} builds as previews.`}
+      description={`Which pull requests to ${source.repository} are built as previews of ${site}.`}
     >
       <PreviewsForm site={site} source={source} onSaved={onSaved} />
     </FormDialog>

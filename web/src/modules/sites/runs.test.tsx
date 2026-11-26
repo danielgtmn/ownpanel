@@ -181,10 +181,12 @@ describe('a run of a pull request', () => {
   it('says in the details where it comes from and that it is not live', () => {
     const fork = { ...pr, fork: true, head_repository: 'stranger/website' }
     const html = renderToStaticMarkup(<RunDetails site="blog" run={fork} publishingAvailable />)
-    for (const text of ['Title', 'Comes from', 'the fork stranger/website', 'without', 'preview, not live', 'Open preview']) {
+    for (const text of ['Title', 'Comes from', 'The fork stranger/website', 'without', 'preview, not live', 'Open preview']) {
       expect(html, text).toContain(text)
     }
-    const gone = renderToStaticMarkup(<RunDetails site="blog" run={{ ...pr, preview_url: undefined }} publishingAvailable />)
+    const removed = { ...pr, preview_url: undefined, preview_gone: true }
+    const gone = renderToStaticMarkup(<RunDetails site="blog" run={removed} publishingAvailable />)
     expect(gone).toContain('Removed, or replaced by a newer one.')
+    expect(renderToStaticMarkup(<RunRow run={removed} onOpen={open} />)).toContain('Preview removed')
   })
 })

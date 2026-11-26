@@ -162,7 +162,7 @@ func TestPullRequestPreviewLifecycle(t *testing.T) {
 	}
 	// The run of the first commit no longer links to a preview.
 	for _, r := range b.runs("rootsite") {
-		if r.ID == runA.ID && r.PreviewURL != "" {
+		if r.ID == runA.ID && (r.PreviewURL != "" || !r.PreviewGone) {
 			t.Errorf("the replaced preview still has a link: %+v", r)
 		}
 	}

@@ -74,7 +74,7 @@ function PreviewLink({ run }: { run: Run }) {
   const href = previewLink(run)
   if (!href) return null
   return (
-    <a className="inline-link" href={href} target="_blank" rel="noreferrer noopener">
+    <a className="inline-link run-preview" href={href} target="_blank" rel="noreferrer noopener">
       Open preview<span className="visually-hidden"> of {runTrigger(run).toLowerCase()} (opens in a new tab)</span>
       <ExternalIcon />
     </a>
@@ -246,7 +246,7 @@ export function RunDetails({ site, run, publishingAvailable }: { site: string; r
         <Fact label="Repository">{run.repository}</Fact>
         {run.fork ? (
           <Fact label="Comes from">
-            {run.head_repository ? `the fork ${run.head_repository}` : 'a fork that no longer exists'}. Built without
+            {run.head_repository ? `The fork ${run.head_repository}` : 'A fork that no longer exists'}. Built without
             the site's variables.
           </Fact>
         ) : null}
@@ -285,7 +285,7 @@ export function RunDetails({ site, run, publishingAvailable }: { site: string; r
             </a>{' '}
             <span className="muted">Anyone with this link can open it until the pull request is closed.</span>
           </Fact>
-        ) : run.trigger === 'pull_request' && run.status === 'succeeded' ? (
+        ) : run.preview_gone ? (
           <Fact label="Preview">
             <span className="muted">Removed, or replaced by a newer one.</span>
           </Fact>

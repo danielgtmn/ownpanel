@@ -57,6 +57,7 @@ type runInfo struct {
 	Fork           bool   `json:"fork,omitempty" jsonschema:"the pull request comes from a fork: built without the site's variables and secrets"`
 	HeadRepository string `json:"head_repository,omitempty" jsonschema:"owner/name of the fork"`
 	PreviewURL     string `json:"preview_url,omitempty" jsonschema:"link to the preview the run published, while it exists; it carries the key that opens the preview, so share it only with people who should see it"`
+	PreviewGone    bool   `json:"preview_gone,omitempty" jsonschema:"the preview this run published is gone: a newer commit replaced it or the pull request was closed"`
 }
 
 func runOutput(r panel.Run) runInfo {
@@ -71,7 +72,7 @@ func runOutput(r panel.Run) runInfo {
 		Message: r.Message, AuthorName: r.AuthorName, AuthorLogin: r.AuthorLogin, Pusher: r.Pusher, Detail: r.Detail,
 		Waiting: r.Waiting, CreatedAt: stamp(&r.CreatedAt), StartedAt: stamp(r.StartedAt), FinishedAt: stamp(r.FinishedAt),
 		Release: r.Release, PullRequest: r.PullRequest, PullRequestURL: r.PullRequestURL, Fork: r.Fork,
-		HeadRepository: r.HeadRepository, PreviewURL: r.PreviewURL,
+		HeadRepository: r.HeadRepository, PreviewURL: r.PreviewURL, PreviewGone: r.PreviewGone,
 	}
 }
 

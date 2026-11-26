@@ -47,7 +47,8 @@ while IFS= read -r line; do
 done < "$tmp/headers"
 
 if [ "$action" = opened ]; then
-  sed -n 's/.*"number":\([0-9]*\).*/pull request \1/p' "$tmp/body" | head -n 1
+  n=$(sed -n 's/.*"number":\([0-9]*\),"pull_request".*/\1/p' "$tmp/body")
+  echo "pull request ${n:-?}"
 fi
 curl -ksS -X POST --data-binary "@$tmp/body" "${args[@]}" "$panel/api/github/webhook"
 echo
