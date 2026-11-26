@@ -414,16 +414,18 @@
 
 .build-variable {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto auto;
   align-items: end;
   gap: 0.5rem;
 }
 
-.build-variable-secret {
+.build-variable .build-variable-secret {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 0.375rem;
   padding-bottom: 0.5rem;
+  white-space: nowrap;
 }
 
 .form-actions-start {
@@ -449,11 +451,16 @@
 
   .build-variable {
     grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
   }
 
+  .build-variable > :nth-child(1),
   .build-variable > :nth-child(2) {
     grid-column: 1 / -1;
-    grid-row: 2;
+  }
+
+  .build-variable .build-variable-secret {
+    padding-bottom: 0;
   }
 }
 

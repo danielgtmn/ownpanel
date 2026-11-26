@@ -56,12 +56,13 @@ type RowProps = { run: Run; onOpen: (run: Run) => void; onCancel?: (run: Run) =>
 /** One run. Message, author and pusher come from the repository: React shows them as text. */
 export function RunRow({ run, onOpen, onCancel }: RowProps) {
   const status = runStatus(run)
-  const author = runAuthor(run)
+  const author = run.trigger === 'push' ? runAuthor(run) : ''
+  const fallback = run.trigger === 'manual' ? 'Newest commit of the branch' : 'No message'
   const note = runNote(run)
   return (
     <li className="record-row run-row">
       <div className="record-main">
-        <p className="run-message">{run.message || <span className="muted">No message</span>}</p>
+        <p className="run-message">{run.message || <span className="muted">{fallback}</span>}</p>
         <ul className="record-facts">
           <li>
             <CommitId run={run} />
@@ -181,7 +182,7 @@ function RunLog({ site, run, publishingAvailable }: { site: string; run: Run; pu
 export function RunDetails({ site, run, publishingAvailable }: { site: string; run: Run; publishingAvailable: boolean }) {
   const status = runStatus(run)
   const note = runNote(run)
-  const author = runAuthor(run)
+  const author = run.trigger === 'push' ? runAuthor(run) : ''
   const duration = runDuration(run)
   return (
     <div className="run-details">
@@ -193,9 +194,15 @@ export function RunDetails({ site, run, publishingAvailable }: { site: string; r
         <Fact label="Commit">
           <CommitId run={run} />
         </Fact>
-        <Fact label="Message">{run.message || <span className="muted">No message</span>}</Fact>
+        <Fact label="Message">
+          {run.message || (
+            <span className="muted">{run.trigger === 'manual' ? 'Newest commit of the branch' : 'No message'}</span>
+          )}
+        </Fact>
         {author ? <Fact label="Author">{author}</Fact> : null}
-        {run.pusher && run.pusher !== run.author_login ? <Fact label="Pushed by">{run.pusher}</Fact> : null}
+        {run.trigger === 'push' && run.pusher && run.pusher !== run.author_login ? (
+          <Fact label="Pushed by">{run.pusher}</Fact>
+        ) : null}
         <Fact label="Repository">{run.repository}</Fact>
         {run.branch ? (
           <Fact label="Branch">
@@ -228,6 +235,11 @@ export function RunDetails({ site, run, publishingAvailable }: { site: string; r
   )
 }
 
+function runDescription(run: Run): string {
+  const where = `${run.branch || run.ref} of ${run.repository}`
+  return run.trigger === 'manual' ? `${runTrigger(run)}: the newest commit of ${where}` : `${runTrigger(run)} to ${where}`
+}
+
 function RunDialog({
   site,
   run,
@@ -249,7 +261,7 @@ function RunDialog({
       open={run !== null}
       onOpenChange={(open) => (open ? null : onClose())}
       title={shown ? `Build of ${shown.short_commit}` : 'Build'}
-      description={shown ? `${runTrigger(shown)} to ${shown.branch || shown.ref} of ${shown.repository}` : ''}
+      description={shown ? runDescription(shown) : ''}
     >
       {shown ? <RunDetails site={site} run={shown} publishingAvailable={publishingAvailable} /> : null}
       <div className="form-actions">

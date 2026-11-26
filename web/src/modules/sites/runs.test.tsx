@@ -30,7 +30,8 @@ const open = () => undefined
 describe('a run', () => {
   it('says what started it', () => {
     expect(runTrigger(run)).toBe('Push')
-    expect(runTrigger({ ...run, trigger: 'manual' })).toBe('Started by hand')
+    expect(runTrigger({ ...run, trigger: 'manual', pusher: 'root' })).toBe('Build now by root')
+    expect(runTrigger({ ...run, trigger: 'manual', pusher: undefined })).toBe('Build now')
     expect(runTrigger({ ...run, trigger: 'something-new' })).toBe('Other')
   })
 
