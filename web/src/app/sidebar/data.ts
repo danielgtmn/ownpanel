@@ -5,6 +5,7 @@ type SiteData = { name: string; domains: string[] | null; current_release: strin
 type ZoneData = { zones?: { connection_id: string; connection_name: string; name: string }[] | null }
 type RedirectData = { id: string; source_domain: string; source_path: string; target: string }
 type MailDomainData = { domain: string; active: boolean }
+type AddedDomainData = { name: string }
 
 async function optional<T>(load: Promise<T>, fallback: T): Promise<T> {
   try {
@@ -16,12 +17,14 @@ async function optional<T>(load: Promise<T>, fallback: T): Promise<T> {
 
 // The panel's own address is left out on purpose: it is managed only under Settings.
 export async function loadSources(): Promise<DomainSources> {
-  const [sites, zones, redirects, mailDomains] = await Promise.all([
+  const [sites, zones, redirects, mailDomains, domains] = await Promise.all([
     request<SiteData[] | null>('/sites'),
     optional(request<ZoneData>('/dns/zones'), { zones: [] }),
     request<RedirectData[] | null>('/redirects'),
     // Tokens limited to sites may not see e-mail (403); then the sidebar shows none.
     optional(request<MailDomainData[] | null>('/mail/domains'), null),
+    // Domains added by hand; tokens limited to sites may not see them either.
+    optional(request<AddedDomainData[] | null>('/domains'), null),
   ])
   return {
     sites: (sites ?? []).map((site) => ({
@@ -44,6 +47,7 @@ export async function loadSources(): Promise<DomainSources> {
       ),
     ],
     mailDomains: mailDomains ? mailDomains.map((mail) => ({ domain: mail.domain, active: mail.active })) : undefined,
+    domains: domains ? domains.map((domain) => domain.name) : undefined,
   }
 }
 

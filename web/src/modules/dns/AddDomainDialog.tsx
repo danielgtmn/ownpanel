@@ -22,7 +22,7 @@ import { listAvailableZones } from './api.ts'
 import { Nameservers } from './Nameservers.tsx'
 import { normalizeZoneName, problemMessage, validateZoneName } from './zones.ts'
 
-type Mode = 'choose' | 'create'
+type Mode = 'choose' | 'create' | 'elsewhere'
 
 type FormProps = {
   accounts: Connection[]
@@ -30,6 +30,7 @@ type FormProps = {
   domain?: string
   onAdopt: (zone: Zone) => Promise<void>
   onCreate: (connection: Connection, name: string) => Promise<void>
+  onElsewhere: (name: string) => Promise<void>
 }
 
 function AccountSelect({ accounts, value, onChange }: { accounts: Connection[]; value: string; onChange: (id: string) => void }) {
@@ -52,10 +53,12 @@ function AccountSelect({ accounts, value, onChange }: { accounts: Connection[]; 
   )
 }
 
-export function AddDomainForm({ accounts, available, domain, onAdopt, onCreate }: FormProps) {
+export function AddDomainForm({ accounts, available, domain, onAdopt, onCreate, onElsewhere }: FormProps) {
   const groups = groupByAccount(available.zones)
   const preselected = domain ? zonesNamed(available.zones, domain)[0] : undefined
-  const [mode, setMode] = useState<Mode>(available.zones.length > 0 && (!domain || preselected) ? 'choose' : 'create')
+  const [mode, setMode] = useState<Mode>(
+    accounts.length === 0 ? 'elsewhere' : available.zones.length > 0 && (!domain || preselected) ? 'choose' : 'create',
+  )
   const first = groups[0]?.zones[0]
   const [picked, setPicked] = useState(preselected ? zoneKey(preselected) : first ? zoneKey(first) : '')
   const [account, setAccount] = useState(accounts[0]?.id ?? '')
@@ -73,6 +76,13 @@ export function AddDomainForm({ accounts, available, domain, onAdopt, onCreate }
         return
       }
       run = () => onAdopt(zone)
+    } else if (mode === 'elsewhere') {
+      const problem = validateZoneName(name)
+      if (problem) {
+        setError(problem)
+        return
+      }
+      run = () => onElsewhere(normalizeZoneName(name))
     } else {
       const connection = accounts.find((candidate) => candidate.id === account)
       const problem = validateZoneName(name) ?? (connection ? null : 'Choose an account.')
@@ -157,6 +167,27 @@ export function AddDomainForm({ accounts, available, domain, onAdopt, onCreate }
     </>
   )
 
+  const elsewhere = (
+    <Field name="name" invalid={error ? true : undefined}>
+      <FieldLabel>Domain</FieldLabel>
+      <Input
+        value={name}
+        autoComplete="off"
+        autoCapitalize="none"
+        spellCheck={false}
+        placeholder="example.com"
+        onValueChange={(value) => {
+          setName(value)
+          setError(null)
+        }}
+      />
+      <FieldDescription>
+        The domain you registered, like example.com, without www. Its records stay where you manage them now.
+      </FieldDescription>
+      {error ? <FieldError match>{error}</FieldError> : null}
+    </Field>
+  )
+
   return (
     <form className="form" onSubmit={submit} noValidate>
       {available.problems.map((problem) => (
@@ -180,24 +211,47 @@ export function AddDomainForm({ accounts, available, domain, onAdopt, onCreate }
             <div className="choice-text">
               <FieldLabel>Choose one from your accounts</FieldLabel>
               <FieldDescription>
-                {available.zones.length === 0
-                  ? 'Every domain in your accounts is managed here already.'
-                  : 'Manage the DNS records of a domain your account already has.'}
+                {accounts.length === 0
+                  ? 'Needs a connected account.'
+                  : available.zones.length === 0
+                    ? 'Every domain in your accounts is managed here already.'
+                    : 'Manage the DNS records of a domain your account already has.'}
               </FieldDescription>
             </div>
           </Field>
           <Field>
-            <Radio value="create">
+            <Radio value="create" disabled={accounts.length === 0}>
               <RadioIndicator />
             </Radio>
             <div className="choice-text">
               <FieldLabel>Create a new one</FieldLabel>
-              <FieldDescription>For a domain your account doesn't have yet.</FieldDescription>
+              <FieldDescription>
+                {accounts.length === 0
+                  ? 'Needs a connected account at the company that manages your domains.'
+                  : "For a domain your account doesn't have yet."}
+              </FieldDescription>
+            </div>
+          </Field>
+          <Field>
+            <Radio value="elsewhere">
+              <RadioIndicator />
+            </Radio>
+            <div className="choice-text">
+              <FieldLabel>Use a domain whose DNS is managed elsewhere</FieldLabel>
+              <FieldDescription>
+                Keep it here to set up a site, a redirect or e-mail. Nothing changes where it is managed.
+              </FieldDescription>
             </div>
           </Field>
         </RadioGroup>
       </Field>
-      {mode === 'choose' ? choose : create}
+      {accounts.length === 0 ? (
+        <p className="muted">
+          To manage the DNS records of a domain here, first connect the account at the company that manages it.{' '}
+          <a href={connectAccountHref()}>Connect an account</a>
+        </p>
+      ) : null}
+      {mode === 'choose' ? choose : mode === 'create' ? create : elsewhere}
       <div className="form-actions">
         <DialogClose disabled={busy}>Cancel</DialogClose>
         <Button type="submit" data-variant="solid" disabled={busy}>
@@ -223,23 +277,14 @@ function Created({ zone }: { zone: Zone }) {
   )
 }
 
-function NoAccount() {
-  return (
-    <div className="form">
-      <p className="dialog-text">
-        To manage the DNS records of a domain here, first connect the account at the company that manages it.
-      </p>
-      <div className="form-actions">
-        <DialogClose>Cancel</DialogClose>
-        <Button data-variant="solid" onClick={() => (window.location.hash = connectAccountHref())}>
-          Connect an account
-        </Button>
-      </div>
-    </div>
-  )
+const NOTHING_AVAILABLE: ZoneList = { zones: [], problems: [] }
+
+function Body(props: Omit<FormProps, 'available'>) {
+  if (props.accounts.length === 0) return <AddDomainForm {...props} available={NOTHING_AVAILABLE} />
+  return <WithAvailable {...props} />
 }
 
-function Body({ accounts, domain, onAdopt, onCreate }: Omit<FormProps, 'available'>) {
+function WithAvailable({ accounts, domain, onAdopt, onCreate, onElsewhere }: Omit<FormProps, 'available'>) {
   const available = useResource(listAvailableZones, 'dns-available-zones')
   if (available.status === 'loading') return <LoadingState label="Loading the domains of your accounts…" />
   if (available.status === 'error') {
@@ -247,7 +292,16 @@ function Body({ accounts, domain, onAdopt, onCreate }: Omit<FormProps, 'availabl
       <ErrorState title="Couldn't load your domains" message={errorMessage(available.error)} onRetry={available.retry} />
     )
   }
-  return <AddDomainForm accounts={accounts} available={available.data} domain={domain} onAdopt={onAdopt} onCreate={onCreate} />
+  return (
+    <AddDomainForm
+      accounts={accounts}
+      available={available.data}
+      domain={domain}
+      onAdopt={onAdopt}
+      onCreate={onCreate}
+      onElsewhere={onElsewhere}
+    />
+  )
 }
 
 type Props = {
@@ -257,9 +311,10 @@ type Props = {
   onOpenChange: (open: boolean) => void
   onAdopt: (zone: Zone) => Promise<void>
   onCreate: (connection: Connection, name: string) => Promise<Zone>
+  onElsewhere: (name: string) => Promise<void>
 }
 
-export function AddDomainDialog({ open, accounts, domain, onOpenChange, onAdopt, onCreate }: Props) {
+export function AddDomainDialog({ open, accounts, domain, onOpenChange, onAdopt, onCreate, onElsewhere }: Props) {
   const [created, setCreated] = useState<Zone | null>(null)
 
   return (
@@ -273,20 +328,19 @@ export function AddDomainDialog({ open, accounts, domain, onOpenChange, onAdopt,
       description={
         created
           ? `${created.name} is now at ${created.connection_name} and managed here.`
-          : 'Manage the DNS records of a domain here.'
+          : 'Add a domain to the panel, with its DNS records managed here or elsewhere.'
       }
     >
       {created ? (
         <Created zone={created} />
       ) : accounts === null ? (
         <LoadingState label="Loading your accounts…" />
-      ) : accounts.length === 0 ? (
-        <NoAccount />
       ) : (
         <Body
           accounts={accounts}
           domain={domain}
           onAdopt={onAdopt}
+          onElsewhere={onElsewhere}
           onCreate={async (connection, name) => setCreated(await onCreate(connection, name))}
         />
       )}

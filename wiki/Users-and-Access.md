@@ -122,6 +122,7 @@ Admins can read the newest entries (web interface: **Activity**; API: `GET /api/
 | `site.upload-link` | upload link created |
 | `dns.connect`, `dns.disconnect` | DNS connection added or removed |
 | `dns.zone.adopt`, `dns.zone.release` | a domain is managed in the panel, or no longer |
+| `domain.add`, `domain.remove` | a domain whose DNS is managed elsewhere was added to the panel, or removed |
 | `dns.record.set`, `dns.record.delete`, `dns.point` | DNS changes |
 
 Passwords, tokens, links to choose a new password and DNS API tokens are never logged, and e-mail addresses are not written to the activity log; TXT values longer than 60 characters are replaced by their length. Failed sign-ins are not logged.

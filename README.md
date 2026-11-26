@@ -134,6 +134,8 @@ made with the cookie must send `X-Ownpanel-Request: 1`.
 | `GET` | `/api/dns/zones` | `{"zones": [..], "problems": [..]}`: zones of your connections that are in the panel (chosen or in use) |
 | `GET` | `/api/dns/zones/available` | the other zones of your connections, to choose from |
 | `PUT` `DELETE` | `/api/dns/connections/{id}/zones/{zone}/managed` | manage a zone in the panel, or stop (nothing changes at the provider) |
+| `GET` `POST` | `/api/domains` | your domains whose DNS is managed elsewhere; add with `{"name": "example.com"}` |
+| `DELETE` | `/api/domains/{domain}` | remove such a domain from the panel; `used_by` says what of yours still keeps it there |
 | `GET` | `/api/dns/connections/{id}/zones/{zone}/records` | record sets of a zone (`ttl` null = zone default) |
 | `PUT` `DELETE` | `/api/dns/connections/{id}/zones/{zone}/records/{name}/{type}` | set with `{"ttl": 3600 \| null, "values": [..]}`, or delete; `name` is `@` for the zone itself |
 | `GET` | `/api/sites/{name}/domains/status` | per domain: `points_here`, `points_elsewhere`, `no_record` or `lookup_failed`, and the zone "point here" would use |
@@ -229,7 +231,10 @@ created new at Hetzner), plus every zone that one of your sites, redirects
 or mail domains uses (for administrators also the panel's own domain).
 **Stop managing here** takes a chosen zone out of the panel without touching
 it at Hetzner; deleting it at Hetzner is a separate action. After upgrading, zones in use stay visible and the others
-wait under **Add domain**; nothing is deleted.
+wait under **Add domain**; nothing is deleted. A domain whose DNS is managed
+elsewhere (another provider, the registrar) can be added too, **Add domain →
+Use a domain whose DNS is managed elsewhere**: it shows up in the sidebar on
+its own, ready for a site, a redirect or e-mail, without anything at a provider.
 
 - Connections belong to the person who added them. Admins see everyone's
   connections (name and owner, never the token) and can remove them, but can

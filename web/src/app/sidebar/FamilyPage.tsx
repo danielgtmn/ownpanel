@@ -11,9 +11,26 @@ import {
 import { Button } from '@ui-sdk/react/button'
 import { toast } from '@ui-sdk/react/toast'
 import { errorMessage } from '../../shared/api/index.ts'
-import { adoptZone, listAvailableZones, listConnections, ownConnections, zonesNamed, type Zone } from '../../shared/dns/index.ts'
+import {
+  adoptZone,
+  listAvailableZones,
+  listConnections,
+  ownConnections,
+  removeAddedDomain,
+  staysBecause,
+  zonesNamed,
+  type Zone,
+} from '../../shared/dns/index.ts'
 import { usePageTitle, useResource } from '../../shared/hooks/index.ts'
-import { addDomainHref, connectAccountHref, hrefFor, navigate, newMailHref, newSiteHref } from '../../shared/routing/index.ts'
+import {
+  addDomainHref,
+  connectAccountHref,
+  hrefFor,
+  navigate,
+  newMailHref,
+  newRedirectHref,
+  newSiteHref,
+} from '../../shared/routing/index.ts'
 import { useSession } from '../../shared/session/index.ts'
 import { EmptyState, ErrorState, LoadingState, PageHeader, Section, StatusBadge } from '../../shared/ui/index.ts'
 import { AddressesSection } from './AddressesSection.tsx'
@@ -77,7 +94,47 @@ function DnsOffer({ domain }: { domain: string }) {
   )
 }
 
-function FamilyContent({ family, sources, states }: { family: Family; sources: DomainSources; states: PointStates }) {
+// The domains of the family the person added by hand, with a way to take each out of the panel again.
+function AddedSection({ family, allHref }: { family: Family; allHref: string }) {
+  async function remove(domain: string) {
+    try {
+      const removed = await removeAddedDomain(domain)
+      const stays = staysBecause(removed)
+      if (stays) {
+        toast.info(`${removed.name} was removed from your list. ${stays}`)
+        return
+      }
+      toast.success(`${removed.name} was removed from the panel.`)
+      window.location.hash = allHref
+    } catch (error) {
+      toast.error(errorMessage(error))
+    }
+  }
+
+  return (
+    <Section
+      title="Added by you"
+      description="Removing a domain only takes it out of the panel. Nothing changes where its DNS is managed."
+    >
+      <ul className="record-list" aria-label={`Domains you added under ${family.domain}`}>
+        {family.added.map((domain) => (
+          <li className="record-row family-row" key={domain}>
+            <div className="family-row-head">
+              <span className="family-row-name">{domain}</span>
+              <Button pendingAnnouncement="Removing" onClick={() => remove(domain)}>
+                Remove from the panel
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </Section>
+  )
+}
+
+type ContentProps = { family: Family; sources: DomainSources; states: PointStates; allHref: string }
+
+function FamilyContent({ family, sources, states, allHref }: ContentProps) {
   const status = familyStatus(family, states)
   const tone = status === 'ok' ? 'positive' : status === 'attention' ? 'warning' : 'neutral'
   return (
@@ -96,7 +153,8 @@ function FamilyContent({ family, sources, states }: { family: Family; sources: D
       <Section title="Websites" description={`Sites on ${family.domain} and its subdomains.`}>
         {family.sites.length === 0 ? (
           <p className="muted">
-            No site uses this domain yet. <a href={newSiteHref(family.domain)}>Create a site</a>
+            No site uses this domain yet. <a href={newSiteHref(family.domain)}>Create a site</a> or{' '}
+            <a href={newRedirectHref(family.domain)}>redirect it to another address</a>
           </p>
         ) : (
           <ul className="record-list" aria-label={`Sites on ${family.domain}`}>
@@ -160,6 +218,7 @@ function FamilyContent({ family, sources, states }: { family: Family; sources: D
           </ul>
         )}
       </Section>
+      {family.added.length > 0 ? <AddedSection family={family} allHref={allHref} /> : null}
     </>
   )
 }
@@ -186,5 +245,5 @@ export function FamilyPage({ domain, data, allHref }: { domain: string; data: Do
       />
     )
   }
-  return <FamilyContent family={family} sources={data.sources} states={data.states} />
+  return <FamilyContent family={family} sources={data.sources} states={data.states} allHref={allHref} />
 }

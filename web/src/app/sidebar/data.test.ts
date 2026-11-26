@@ -51,6 +51,21 @@ describe('loading the addresses of a domain', () => {
     expect((await loadSources()).mailDomains).toBeUndefined()
   })
 
+  it('loads the domains added by hand, and none when they may not be seen', async () => {
+    const base = {
+      '/api/sites': () => json([]),
+      '/api/dns/zones': () => json({ zones: [] }),
+      '/api/redirects': () => json([]),
+    }
+    mockRoutes({
+      ...base,
+      '/api/domains': () => json([{ name: 'elsewhere.org', created_at: '2026-01-01T00:00:00Z', used_by: [] }]),
+    })
+    expect((await loadSources()).domains).toEqual(['elsewhere.org'])
+    mockRoutes({ ...base, '/api/domains': () => json({ error: 'limited to sites' }, 403) })
+    expect((await loadSources()).domains).toBeUndefined()
+  })
+
   it('reads the record names of each DNS account and reports the ones that failed', async () => {
     const fetchMock = mockRoutes({
       '/api/dns/connections/1/zones/example.com/records': () =>

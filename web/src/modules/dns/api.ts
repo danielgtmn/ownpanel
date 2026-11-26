@@ -3,6 +3,7 @@ import { connectionPath } from '../../shared/dns/index.ts'
 import type { RecordBody, RecordSet } from './types.ts'
 
 export {
+  addDomain,
   adoptZone,
   createZone,
   deleteZone,

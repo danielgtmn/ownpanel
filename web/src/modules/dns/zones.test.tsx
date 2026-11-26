@@ -224,6 +224,7 @@ describe('add domain form', () => {
           available={{ zones: [], problems: [] }}
           onAdopt={async () => undefined}
           onCreate={async () => undefined}
+          onElsewhere={async () => undefined}
           {...props}
         />
       </Dialog>,
@@ -251,5 +252,20 @@ describe('add domain form', () => {
     })
     expect(html).toContain('value="fresh.com"')
     expect(html).toContain('Account')
+  })
+
+  it('offers a domain whose DNS is managed elsewhere', () => {
+    const html = render({})
+    expect(html).toContain('Use a domain whose DNS is managed elsewhere')
+    expect(html).not.toContain('Connect an account')
+  })
+
+  it('without an account, starts with a domain managed elsewhere and offers connecting one', () => {
+    const html = render({ accounts: [], domain: 'fresh.com' })
+    expect(html).toContain('Its records stay where you manage them now.')
+    expect(html).toContain('value="fresh.com"')
+    expect(html).toContain('Connect an account')
+    expect(html).not.toContain('New domain')
+    expect(html).not.toContain('managed here already')
   })
 })

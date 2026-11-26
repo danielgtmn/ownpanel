@@ -63,6 +63,16 @@ Every id the API returns or takes is a **string**: `"id": "42"`, `"connection_id
 
 **Redirect:** `{"id", "owner", "source_domain", "source_path", "target", "code", "keep_path", "keep_query", "created_at"}`. `source_path` is `""` for a whole-domain redirect, otherwise `/exact` or a prefix `/path/*`; `code` is `301`, `302`, `307` or `308`. See [[Redirects|Redirects]].
 
+Domains whose DNS is managed elsewhere: kept in your panel as domains of their own, with nothing at any DNS provider. Each person has their own list; another person's entry answers `404`, also for administrators.
+
+| Method | Path | Who | Request | Response |
+|---|---|---|---|---|
+| `GET` | `/api/domains` | anyone, not site-limited | | list of Domain, by name |
+| `POST` | `/api/domains` | password sign-in or unrestricted write | `{"name": "example.com"}` | Domain. Only registrable domains (no subdomains, no IP addresses, non-ASCII in `xn--` form); `400` otherwise. Adding it again is fine |
+| `DELETE` | `/api/domains/{domain}` | same | | `{"name", "used_by"}`. Removes only the entry; nothing changes at any provider. `used_by` lists what of yours still uses a name in the domain, so it stays in the panel through that. `404` if it is not in your list |
+
+**Domain:** `{"name", "created_at", "used_by"}`; `used_by` as for Zone below.
+
 **Zone:** `{"connection_id", "connection_name", "name", "read_only", "nameservers": [..]}`. `nameservers` are the provider's nameservers to enter at the domain's registrar.
 
 **Mail domain:** `{"domain", "owner", "active", "activated_at", "checked_at", "problem", "mailboxes", "aliases", "dkim_selector", "dkim_record", "created_at", "organisation"}`. `organisation` is `null` when the domain stands alone, else `{"id", "name", "own", "domains": [..]}`: `own` is false when an administrator put the domain into someone else's organisation, `domains` are its other domains you may see. `active` turns true once the domain's MX record (asked at its authoritative nameservers) points to the mail host; only then is mail received for it. `problem` says why it is not active yet. `dkim_record` is the public TXT value for `<dkim_selector>._domainkey.<domain>`; the private key is never returned.

@@ -8,7 +8,7 @@ import { useSession } from '../../shared/session/index.ts'
 import { PageHeader } from '../../shared/ui/index.ts'
 import type { ModuleProps } from '../types.ts'
 import { AddDomainDialog } from './AddDomainDialog.tsx'
-import { adoptZone, createZone, listConnections, listZones } from './api.ts'
+import { addDomain, adoptZone, createZone, listConnections, listZones } from './api.ts'
 import { parseConnectionId } from './zones.ts'
 import { ZonePage } from './ZonePage.tsx'
 import { ZonesSection } from './ZonesSection.tsx'
@@ -43,6 +43,13 @@ function Overview() {
     return zone
   }
 
+  async function useElsewhere(name: string) {
+    const added = await addDomain(name)
+    close()
+    toast.success(`${added.name} was added. Its DNS records stay where you manage them now.`)
+    navigate('d', added.name)
+  }
+
   return (
     <>
       <PageHeader
@@ -67,6 +74,7 @@ function Overview() {
         }}
         onAdopt={adopt}
         onCreate={create}
+        onElsewhere={useElsewhere}
       />
     </>
   )
