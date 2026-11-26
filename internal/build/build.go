@@ -317,6 +317,10 @@ type Spec struct {
 	Secrets map[string]string `json:"secrets,omitempty"`
 	// Limits lowers (or, up to the worker's maxima, raises) the limits.
 	Limits Limits `json:"limits"`
+	// Untrusted builds (pull requests from forks, #116) get an empty cache
+	// of their own, in their slot, removed with it, instead of the site's:
+	// what they leave there can never reach a later build of the site.
+	Untrusted bool `json:"untrusted,omitempty"`
 }
 
 // String and GoString keep the command and the variables out of logs and

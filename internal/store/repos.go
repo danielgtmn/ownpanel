@@ -290,6 +290,13 @@ type siteSourceRow struct {
 	CreatedBy      *string `db:",ref=users,setnull,index"`
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	// PullRequestPreviews: pull requests against Branch from the same
+	// repository are built as previews (#116); nil means on, the default
+	// (also for sources linked before the setting existed).
+	// ForkPreviews: pull requests from forks are built too (off unless
+	// switched on). Both survive linking anew.
+	PullRequestPreviews *bool
+	ForkPreviews        bool
 }
 
 // siteRunRow is one run of a site: one entry per push (later also "Build
@@ -326,6 +333,17 @@ type siteRunRow struct {
 	FinishedAt   *time.Time
 	// Release is the version a succeeded run published.
 	Release string
+	// Runs of pull requests (#116): PullRequest is its number (0 for
+	// pushes and "Build now"), Preview the tag of the versions it publishes
+	// (not live, one per pull request; "" for runs that make a version
+	// live). Runs only replace queued runs with the same Preview.
+	// HeadRepository is owner/name of the fork the pull request comes
+	// from ("" for the same repository); Fork marks such runs, which are
+	// built without the site's variables and cache.
+	PullRequest    int
+	Preview        string `db:",index"`
+	HeadRepository string
+	Fork           bool
 }
 
 // siteRunLogRow is the log of a run's build (#115), as the panel shows it:

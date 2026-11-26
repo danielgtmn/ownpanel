@@ -73,13 +73,18 @@ type buildRunner struct {
 	sites  map[string]bool       // sites with a run being built here
 	logs   map[string]*runLog    // by run id, while the build runs
 	poll   time.Duration
+	// bg counts work that tells the web server and GitHub about closed
+	// pull requests after their delivery (pullrequests.go).
+	bg sync.WaitGroup
 }
 
 type activeRun struct {
 	site        string
 	cancel      context.CancelFunc
 	cancelledBy string
-	done        chan struct{}
+	// reason, when set, says why it was cancelled instead of who did.
+	reason string
+	done   chan struct{}
 }
 
 func newBuildRunner() *buildRunner {
@@ -172,15 +177,29 @@ func (s *Service) buildQueuedRun(ctx context.Context, run store.Run, ar *activeR
 		s.wakeRunner() // the site may have a newer run waiting
 	}()
 	bg := context.WithoutCancel(ctx)
-	s.setCommitStatus(bg, run, github.StatusPending, "Building the site")
+	pending := "Building the site"
+	if run.Preview != "" {
+		pending = "Building a preview"
+	}
+	s.setCommitStatus(bg, run, github.StatusPending, pending)
 
 	b, ok, err := s.siteBuildSettings(ctx, run.Site)
 	if err == nil && !ok {
 		err = errorf(Conflict, "%s", runNoSettings)
 	}
+	if err == nil && run.Preview != "" {
+		err = s.previewRunAllowed(ctx, run)
+	}
 	if err == nil {
 		ref := SourceRef{Site: run.Site, Commit: run.CommitSHA, RepositoryID: run.RepositoryID}
-		_, err = s.BuildCommit(ctx, System, ref, buildSettingsFor(b), true, run.ID)
+		// A run of a pull request publishes a version that is not live,
+		// tagged with the pull request. One from a fork gets none of the
+		// site's variables and not its cache.
+		req := BuildRequest{Settings: buildSettingsFor(b), Live: run.Preview == "", RunID: run.ID, Tag: run.Preview}
+		if run.Fork {
+			req.Settings.Env, req.Settings.Secrets, req.Untrusted = nil, nil, true
+		}
+		_, err = s.buildCommit(ctx, System, ref, req)
 	}
 	// Every run the runner took ends, also when its build never started.
 	cur, gerr := s.store.Run(bg, run.ID)
@@ -198,6 +217,10 @@ func (s *Service) buildQueuedRun(ctx context.Context, run store.Run, ar *activeR
 	}
 	if cur, gerr = s.store.Run(bg, run.ID); gerr != nil {
 		return // the site went away meanwhile
+	}
+	if cur.Preview != "" {
+		s.reportPreview(bg, cur)
+		return
 	}
 	switch cur.Status {
 	case store.RunSucceeded:
@@ -222,6 +245,9 @@ func errorMessage(err error) string {
 func (s *Service) cancelDetail(runID string) string {
 	s.runner.mu.Lock()
 	defer s.runner.mu.Unlock()
+	if ar := s.runner.active[runID]; ar != nil && ar.reason != "" {
+		return ar.reason
+	}
 	if ar := s.runner.active[runID]; ar != nil && ar.cancelledBy != "" {
 		return "cancelled by " + ar.cancelledBy
 	}
@@ -696,6 +722,9 @@ func (s *Service) setCommitStatus(ctx context.Context, r store.Run, state, descr
 		return
 	}
 	st := github.CommitStatus{State: state, Description: plainText(description, 140), Context: commitStatusContext}
+	if r.Preview != "" {
+		st.Context = previewStatusContext
+	}
 	if base, err := s.githubBase(); err == nil {
 		st.TargetURL = base + "/#/sites/" + url.PathEscape(r.Site) + "?run=" + url.QueryEscape(r.ID)
 	}

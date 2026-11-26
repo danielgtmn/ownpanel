@@ -13,17 +13,19 @@ import (
 // tools ask GitHub, so they are marked as reaching outside the panel.
 
 type sourceInfo struct {
-	Kind           string `json:"kind" jsonschema:"github: a repository of a connected GitHub account"`
-	Repository     string `json:"repository" jsonschema:"owner/name on GitHub (its current name; repositories can be renamed)"`
-	RepositoryID   int64  `json:"repository_id,omitempty" jsonschema:"GitHub's id of the repository"`
-	InstallationID int64  `json:"installation_id,omitempty" jsonschema:"installation the repository is reached through; 0 if its GitHub connection was removed"`
-	Account        string `json:"account,omitempty" jsonschema:"GitHub account the repository is reached through"`
-	URL            string `json:"url,omitempty" jsonschema:"the repository on GitHub"`
-	Branch         string `json:"branch"`
-	PublishOnPush  bool   `json:"publish_on_push" jsonschema:"a push to the branch should publish the site (see publishing_available)"`
-	Status         string `json:"status" jsonschema:"linked; connection_missing (the GitHub connection was removed: link again or unlink); suspended (on GitHub); repository_missing (the connection no longer sees the repository); unchecked (GitHub could not be asked, see problem)"`
-	Problem        string `json:"problem,omitempty"`
-	LinkedBy       string `json:"linked_by"`
+	Kind                string `json:"kind" jsonschema:"github: a repository of a connected GitHub account"`
+	Repository          string `json:"repository" jsonschema:"owner/name on GitHub (its current name; repositories can be renamed)"`
+	RepositoryID        int64  `json:"repository_id,omitempty" jsonschema:"GitHub's id of the repository"`
+	InstallationID      int64  `json:"installation_id,omitempty" jsonschema:"installation the repository is reached through; 0 if its GitHub connection was removed"`
+	Account             string `json:"account,omitempty" jsonschema:"GitHub account the repository is reached through"`
+	URL                 string `json:"url,omitempty" jsonschema:"the repository on GitHub"`
+	Branch              string `json:"branch"`
+	PublishOnPush       bool   `json:"publish_on_push" jsonschema:"a push to the branch should publish the site (see publishing_available)"`
+	Status              string `json:"status" jsonschema:"linked; connection_missing (the GitHub connection was removed: link again or unlink); suspended (on GitHub); repository_missing (the connection no longer sees the repository); unchecked (GitHub could not be asked, see problem)"`
+	Problem             string `json:"problem,omitempty"`
+	LinkedBy            string `json:"linked_by"`
+	PullRequestPreviews bool   `json:"pull_request_previews" jsonschema:"pull requests against the branch from the same repository are built as versions that are not live, each with its own preview address (on by default)"`
+	ForkPreviews        bool   `json:"fork_previews" jsonschema:"pull requests from forks are built too, without the site's variables and secrets (off by default)"`
 }
 
 type siteSourceOutput struct {
@@ -34,22 +36,27 @@ type siteSourceOutput struct {
 }
 
 type runInfo struct {
-	ID          string `json:"id"`
-	Trigger     string `json:"trigger" jsonschema:"push: a push to the linked branch; manual: started with start_site_build (pusher names who)"`
-	Status      string `json:"status" jsonschema:"queued, running, succeeded (built and made live), failed, cancelled or skipped (replaced by a newer run before it started)"`
-	Repository  string `json:"repository"`
-	Branch      string `json:"branch,omitempty"`
-	Commit      string `json:"commit" jsonschema:"full commit id"`
-	Message     string `json:"message" jsonschema:"first line of the commit message, as written by its author (untrusted text)"`
-	AuthorName  string `json:"author_name"`
-	AuthorLogin string `json:"author_login,omitempty"`
-	Pusher      string `json:"pusher,omitempty"`
-	Detail      string `json:"detail,omitempty" jsonschema:"why the run was skipped, failed or cancelled"`
-	Waiting     string `json:"waiting,omitempty" jsonschema:"set while a queued run waits because this server does not build sites"`
-	CreatedAt   string `json:"created_at"`
-	StartedAt   string `json:"started_at,omitempty"`
-	FinishedAt  string `json:"finished_at,omitempty"`
-	Release     string `json:"release,omitempty" jsonschema:"the version a succeeded run published"`
+	ID             string `json:"id"`
+	Trigger        string `json:"trigger" jsonschema:"push: a push to the linked branch; manual: started with start_site_build (pusher names who); pull_request: a pull request against the branch, built as a version that is not live"`
+	Status         string `json:"status" jsonschema:"queued, running, succeeded (built and made live), failed, cancelled or skipped (replaced by a newer run before it started)"`
+	Repository     string `json:"repository"`
+	Branch         string `json:"branch,omitempty"`
+	Commit         string `json:"commit" jsonschema:"full commit id"`
+	Message        string `json:"message" jsonschema:"first line of the commit message, as written by its author (untrusted text)"`
+	AuthorName     string `json:"author_name"`
+	AuthorLogin    string `json:"author_login,omitempty"`
+	Pusher         string `json:"pusher,omitempty"`
+	Detail         string `json:"detail,omitempty" jsonschema:"why the run was skipped, failed or cancelled"`
+	Waiting        string `json:"waiting,omitempty" jsonschema:"set while a queued run waits because this server does not build sites"`
+	CreatedAt      string `json:"created_at"`
+	StartedAt      string `json:"started_at,omitempty"`
+	FinishedAt     string `json:"finished_at,omitempty"`
+	Release        string `json:"release,omitempty" jsonschema:"the version a succeeded run published"`
+	PullRequest    int    `json:"pull_request,omitempty" jsonschema:"number of the pull request a run of trigger pull_request builds"`
+	PullRequestURL string `json:"pull_request_url,omitempty" jsonschema:"the pull request on GitHub"`
+	Fork           bool   `json:"fork,omitempty" jsonschema:"the pull request comes from a fork: built without the site's variables and secrets"`
+	HeadRepository string `json:"head_repository,omitempty" jsonschema:"owner/name of the fork"`
+	PreviewURL     string `json:"preview_url,omitempty" jsonschema:"link to the preview the run published, while it exists; it carries the key that opens the preview, so share it only with people who should see it"`
 }
 
 func runOutput(r panel.Run) runInfo {
@@ -63,7 +70,8 @@ func runOutput(r panel.Run) runInfo {
 		ID: r.ID, Trigger: r.Trigger, Status: r.Status, Repository: r.Repository, Branch: r.Branch, Commit: r.Commit,
 		Message: r.Message, AuthorName: r.AuthorName, AuthorLogin: r.AuthorLogin, Pusher: r.Pusher, Detail: r.Detail,
 		Waiting: r.Waiting, CreatedAt: stamp(&r.CreatedAt), StartedAt: stamp(r.StartedAt), FinishedAt: stamp(r.FinishedAt),
-		Release: r.Release,
+		Release: r.Release, PullRequest: r.PullRequest, PullRequestURL: r.PullRequestURL, Fork: r.Fork,
+		HeadRepository: r.HeadRepository, PreviewURL: r.PreviewURL,
 	}
 }
 
@@ -84,7 +92,7 @@ func sourceOutput(st panel.SiteSourceState) siteSourceOutput {
 		out.Source = &sourceInfo{
 			Kind: s.Kind, Repository: s.Repository, RepositoryID: s.RepositoryID, InstallationID: s.InstallationID,
 			Account: s.Account, URL: s.URL, Branch: s.Branch, PublishOnPush: s.PublishOnPush, Status: s.Status,
-			Problem: s.Problem, LinkedBy: s.LinkedBy,
+			Problem: s.Problem, LinkedBy: s.LinkedBy, PullRequestPreviews: s.PullRequestPreviews, ForkPreviews: s.ForkPreviews,
 		}
 	}
 	return out
@@ -119,6 +127,12 @@ type linkSourceInput struct {
 	RepositoryID   int64  `json:"repository_id" jsonschema:"from list_site_source_repositories"`
 	Branch         string `json:"branch" jsonschema:"an existing branch of the repository, e.g. its default_branch"`
 	PublishOnPush  bool   `json:"publish_on_push" jsonschema:"whether a push to the branch should publish the site"`
+}
+
+type sitePreviewsInput struct {
+	Site         string `json:"site" jsonschema:"site name as shown by list_sites"`
+	PullRequests bool   `json:"pull_requests" jsonschema:"build pull requests against the linked branch from the same repository as versions that are not live, with a preview address posted on the pull request"`
+	Forks        bool   `json:"forks,omitempty" jsonschema:"also build pull requests from forks (needs pull_requests); they run code from people outside the repository and never get the site's variables or secrets"`
 }
 
 type unlinkSourceOutput struct {
@@ -190,6 +204,19 @@ func addSourceTools(s *sdk.Server, p *panel.Service) {
 	})
 
 	add(s, &sdk.Tool{
+		Name:  "set_site_pull_request_previews",
+		Title: "Choose which pull requests get previews",
+		Description: "Choose whether pull requests against the site's linked branch are built as versions that are not " +
+			"live, each with its own preview address (posted on the pull request, and removed when it is closed): " +
+			"those from the same repository (on by default) and those from forks (off by default; built without the " +
+			"site's variables and secrets). Takes effect from the next pull request or push to one.",
+		Annotations: annotations("Choose which pull requests get previews", false, false, true),
+	}, func(ctx context.Context, c call, in sitePreviewsInput) (siteSourceOutput, error) {
+		st, err := p.SetSitePreviews(ctx, c.actor, in.Site, panel.SitePreviewsInput{PullRequests: in.PullRequests, Forks: in.Forks})
+		return sourceOutput(st), err
+	})
+
+	add(s, &sdk.Tool{
 		Name:  "unlink_site_source",
 		Title: "Unlink a site from its repository",
 		Description: "Remove the link between a site and its repository. The site and its published files stay as " +
@@ -206,7 +233,9 @@ func addSourceTools(s *sdk.Server, p *panel.Service) {
 		Name:  "list_site_runs",
 		Title: "List the runs of a site",
 		Description: "List the newest runs of a site: one per push to its linked branch while publish_on_push is on, " +
-			"and one per start_site_build, with commit, message, author, status and the published version. " +
+			"one per start_site_build, and one per new commit of a pull request against the branch (trigger " +
+			"pull_request, see set_site_pull_request_previews), with commit, message, author, status and the " +
+			"published version. " +
 			"read_site_run_log shows a run's build log. While publishing_available is false, queued runs wait.",
 		Annotations: annotations("List the runs of a site", true, false, true),
 	}, func(ctx context.Context, c call, in siteInput) (siteRunsOutput, error) {

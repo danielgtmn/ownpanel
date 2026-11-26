@@ -14,6 +14,7 @@ func (s *Server) sourceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/sites/{name}/source", s.deleteSiteSource)
 	mux.HandleFunc("GET /api/sites/{name}/source/repositories", s.sourceRepositories)
 	mux.HandleFunc("GET /api/sites/{name}/source/branches", s.sourceBranches)
+	mux.HandleFunc("PUT /api/sites/{name}/source/previews", s.putSitePreviews)
 	mux.HandleFunc("GET /api/sites/{name}/runs", s.siteRuns)
 }
 
@@ -41,6 +42,19 @@ func (s *Server) putSiteSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := s.Panel.SetSiteSource(r.Context(), actorOf(r), r.PathValue("name"), body)
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) putSitePreviews(w http.ResponseWriter, r *http.Request) {
+	var body panel.SitePreviewsInput
+	if !decodeJSON(w, r, &body, `{"pull_requests": true, "forks": false}`) {
+		return
+	}
+	out, err := s.Panel.SetSitePreviews(r.Context(), actorOf(r), r.PathValue("name"), body)
 	if err != nil {
 		writeFailure(w, err)
 		return

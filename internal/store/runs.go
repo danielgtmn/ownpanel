@@ -55,6 +55,12 @@ type Run struct {
 	FinishedAt   *time.Time // nil until it ends
 	// Release is the version a succeeded run published.
 	Release string
+	// PullRequest, Preview, HeadRepository and Fork: see siteRunRow. A run
+	// with a Preview builds a version that is not live, tagged Preview.
+	PullRequest    int
+	Preview        string
+	HeadRepository string
+	Fork           bool
 }
 
 var errRunNotFound = notFoundf("run not found")
@@ -63,7 +69,8 @@ func runOf(row siteRunRow) Run {
 	return Run{ID: row.ID, Site: row.SiteName, Trigger: row.Trigger, Status: row.Status, SourceKind: row.SourceKind,
 		RepositoryID: row.RepositoryID, Repository: row.Repository, Ref: row.Ref, CommitSHA: row.CommitSHA,
 		Message: row.Message, AuthorName: row.AuthorName, AuthorLogin: row.AuthorLogin, Pusher: row.Pusher,
-		Detail: row.Detail, CreatedAt: row.CreatedAt, StartedAt: row.StartedAt, FinishedAt: row.FinishedAt, Release: row.Release}
+		Detail: row.Detail, CreatedAt: row.CreatedAt, StartedAt: row.StartedAt, FinishedAt: row.FinishedAt, Release: row.Release,
+		PullRequest: row.PullRequest, Preview: row.Preview, HeadRepository: row.HeadRepository, Fork: row.Fork}
 }
 
 func validCommitSHA(s string) bool {
@@ -82,9 +89,12 @@ func validCommitSHA(s string) bool {
 // the order the runs were recorded.
 var newestFirst = []ablage.Order{ablage.Desc("id")}
 
-// skipQueued marks the queued runs of a site skipped, except the run keep.
-func skipQueued(ctx context.Context, r repos, site, keep, detail string, now time.Time) error {
-	where := ablage.And(ablage.Eq("site_name", site), ablage.Eq("status", RunQueued))
+// skipQueued marks the queued runs of a site with the same preview (""
+// for runs that make a version live) skipped, except the run keep. Runs of
+// a pull request never replace the site's other runs, nor runs of other
+// pull requests.
+func skipQueued(ctx context.Context, r repos, site, preview, keep, detail string, now time.Time) error {
+	where := ablage.And(ablage.Eq("site_name", site), ablage.Eq("status", RunQueued), ablage.Eq("preview", preview))
 	if keep != "" {
 		where = ablage.And(where, ablage.Ne("id", keep))
 	}
@@ -93,7 +103,7 @@ func skipQueued(ctx context.Context, r repos, site, keep, detail string, now tim
 }
 
 // AddRun records a queued run of a site. In the same transaction it marks
-// the site's older queued runs skipped (supersededDetail says why) and
+// the site's older queued runs with the same Preview skipped (supersededDetail says why) and
 // removes finished runs older than the newest keep of the site; queued and
 // running runs are never removed.
 func (s *Store) AddRun(ctx context.Context, r Run, supersededDetail string, keep int) (Run, error) {
@@ -103,18 +113,22 @@ func (s *Store) AddRun(ctx context.Context, r Run, supersededDetail string, keep
 	if !validCommitSHA(r.CommitSHA) {
 		return Run{}, invalidf("%q is not a full commit id", r.CommitSHA)
 	}
+	if (r.Preview == "") != (r.PullRequest == 0) || r.PullRequest < 0 {
+		return Run{}, invalidf("a run of a pull request needs its number and a preview, and only it has them")
+	}
 	keep = max(keep, 1)
 	now := s.now()
 	row := siteRunRow{SiteName: r.Site, Trigger: r.Trigger, Status: RunQueued, SourceKind: r.SourceKind,
 		RepositoryID: r.RepositoryID, Repository: r.Repository, Ref: r.Ref, CommitSHA: r.CommitSHA, Message: r.Message,
-		AuthorName: r.AuthorName, AuthorLogin: r.AuthorLogin, Pusher: r.Pusher, CreatedAt: now}
+		AuthorName: r.AuthorName, AuthorLogin: r.AuthorLogin, Pusher: r.Pusher, CreatedAt: now,
+		PullRequest: r.PullRequest, Preview: r.Preview, HeadRepository: r.HeadRepository, Fork: r.Fork}
 	err := s.tx(ctx, func(tx repos) error {
 		if ok, err := tx.sites.Exists(ctx, r.Site); err != nil {
 			return err
 		} else if !ok {
 			return errSiteNotFound
 		}
-		if err := skipQueued(ctx, tx, r.Site, "", supersededDetail, now); err != nil {
+		if err := skipQueued(ctx, tx, r.Site, r.Preview, "", supersededDetail, now); err != nil {
 			return err
 		}
 		if err := tx.runs.Create(ctx, &row); err != nil {
@@ -175,10 +189,12 @@ func (s *Store) SitesWithQueuedRuns(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-// ClaimNextRun marks the newest queued run of a site running and returns
-// it. ErrNotFound: nothing is queued. ErrConflict: a run of the site is
-// already running. Older queued runs (there are none while AddRun
-// supersedes them) are marked skipped.
+// ClaimNextRun marks a queued run of a site running and returns it: the
+// newest of the runs that make a version live first, else the oldest
+// queued run of a pull request. ErrNotFound: nothing is queued.
+// ErrConflict: a run of the site is already running. Older queued runs of
+// the same kind (there are none while AddRun supersedes them) are marked
+// skipped.
 func (s *Store) ClaimNextRun(ctx context.Context, site, supersededDetail string) (Run, error) {
 	var id string
 	err := s.tx(ctx, func(r repos) error {
@@ -189,8 +205,11 @@ func (s *Store) ClaimNextRun(ctx context.Context, site, supersededDetail string)
 		if running > 0 {
 			return conflictf("a run of the site is already running")
 		}
-		next, err := r.runs.First(ctx, ablage.Query{Where: ablage.And(ablage.Eq("site_name", site), ablage.Eq("status", RunQueued)),
-			OrderBy: newestFirst})
+		queued := ablage.And(ablage.Eq("site_name", site), ablage.Eq("status", RunQueued))
+		next, err := r.runs.First(ctx, ablage.Query{Where: ablage.And(queued, ablage.Eq("preview", "")), OrderBy: newestFirst})
+		if errors.Is(err, ablage.ErrNotFound) {
+			next, err = r.runs.First(ctx, ablage.Query{Where: queued, OrderBy: []ablage.Order{ablage.Asc("id")}})
+		}
 		if errors.Is(err, ablage.ErrNotFound) {
 			return notFoundf("no queued run")
 		}
@@ -199,7 +218,7 @@ func (s *Store) ClaimNextRun(ctx context.Context, site, supersededDetail string)
 		}
 		id = next.ID
 		now := s.now()
-		if err := skipQueued(ctx, r, site, id, supersededDetail, now); err != nil {
+		if err := skipQueued(ctx, r, site, next.Preview, id, supersededDetail, now); err != nil {
 			return err
 		}
 		return r.runs.Patch(ctx, id, ablage.Row{"status": RunRunning, "started_at": now})
@@ -208,6 +227,23 @@ func (s *Store) ClaimNextRun(ctx context.Context, site, supersededDetail string)
 		return Run{}, err
 	}
 	return s.Run(ctx, id)
+}
+
+// PreviewRuns lists the queued and running runs with a preview tag, of
+// every site, oldest first.
+func (s *Store) PreviewRuns(ctx context.Context, preview string) ([]Run, error) {
+	rows, err := s.r.runs.Find(ctx, ablage.Query{
+		Where:   ablage.And(ablage.Eq("preview", preview), ablage.In("status", RunQueued, RunRunning)),
+		OrderBy: []ablage.Order{ablage.Asc("id")},
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Run, len(rows))
+	for i, row := range rows {
+		out[i] = runOf(row)
+	}
+	return out, nil
 }
 
 // FinishRun gives a queued or running run its final status. ErrConflict if

@@ -326,6 +326,10 @@ type Version struct {
 	// or not; "" when previews have no addresses. Anyone with the link can
 	// open it.
 	PreviewURL string `json:"preview_url"`
+	// PullRequest is the number of the pull request this version is the
+	// preview of (0 for none); it is removed when the pull request is
+	// closed, unless it was made live.
+	PullRequest int `json:"pull_request,omitempty"`
 }
 
 func (s *Service) view(site store.Site) Site {
@@ -531,12 +535,14 @@ type Publication struct {
 // opened as a preview and made live later with MakeLive. If only the web
 // server update fails, the publication is returned with a NotSynced error.
 func (s *Service) PublishVersion(ctx context.Context, a Actor, name string, archive io.Reader, live bool) (Publication, error) {
-	return s.publishVersion(ctx, a, name, archive, live, "site.publish", "site.publish-not-live")
+	return s.publishVersion(ctx, a, name, archive, live, "", "site.publish", "site.publish-not-live")
 }
 
 // publishVersion is PublishVersion with the activity entries to write;
 // builds publish their output through it too (sitebuild.go).
-func (s *Service) publishVersion(ctx context.Context, a Actor, name string, archive io.Reader, live bool, actionLive, actionNotLive string) (Publication, error) {
+// publishVersion publishes like PublishVersion. A tag (only without live)
+// marks the version as the preview of a pull request (deploy.AddTagged).
+func (s *Service) publishVersion(ctx context.Context, a Actor, name string, archive io.Reader, live bool, tag, actionLive, actionNotLive string) (Publication, error) {
 	site, err := s.visibleSite(ctx, a, name)
 	if err != nil {
 		return Publication{}, err
@@ -546,7 +552,15 @@ func (s *Service) publishVersion(ctx context.Context, a Actor, name string, arch
 	}
 	first := s.deploys.Current(site.Name) == ""
 	add, action := s.deploys.Deploy, actionLive
-	if !live {
+	switch {
+	case live && tag != "":
+		return Publication{}, errorf(Internal, "a live version cannot have a tag")
+	case tag != "":
+		add = func(ctx context.Context, site string, archive io.Reader) (string, error) {
+			return s.deploys.AddTagged(ctx, site, archive, tag)
+		}
+		action = actionNotLive
+	case !live:
 		add, action = s.deploys.Add, actionNotLive
 	}
 	id, err := add(ctx, site.Name, archive)

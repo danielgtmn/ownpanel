@@ -142,6 +142,14 @@ type BuildRequest struct {
 	Live bool
 	// RunID is passed on to the RunReporter.
 	RunID string
+	// Tag (only without Live) marks the new version as the preview of a
+	// pull request (deploy.AddTagged).
+	Tag string
+	// Untrusted builds (pull requests from forks) get an empty cache of
+	// their own instead of the site's (build.Spec.Untrusted). They must
+	// not be given the site's variables either: the caller leaves them
+	// out of Settings.
+	Untrusted bool
 }
 
 // BuildResult is a build after it ended.
@@ -229,6 +237,12 @@ func (s *Service) BuildSiteFromUpload(ctx context.Context, a Actor, site string,
 // BuildCommit builds a commit of the site's repository through the
 // SourceFetcher (Config.Sources) and publishes the output.
 func (s *Service) BuildCommit(ctx context.Context, a Actor, ref SourceRef, settings BuildSettings, live bool, runID string) (BuildResult, error) {
+	return s.buildCommit(ctx, a, ref, BuildRequest{Site: ref.Site, Settings: settings, Live: live, RunID: runID})
+}
+
+// buildCommit is BuildCommit for a request (its Tree and Strip come from
+// the fetcher).
+func (s *Service) buildCommit(ctx context.Context, a Actor, ref SourceRef, req BuildRequest) (BuildResult, error) {
 	if _, err := s.visibleSite(ctx, a, ref.Site); err != nil {
 		return BuildResult{}, err
 	}
@@ -250,7 +264,8 @@ func (s *Service) BuildCommit(ctx context.Context, a Actor, ref SourceRef, setti
 		return BuildResult{}, &Error{Kind: Unavailable, Msg: msg, Err: err}
 	}
 	defer tree.Close()
-	return s.BuildSite(ctx, a, BuildRequest{Site: ref.Site, Tree: tree, Strip: strip, Settings: settings, Live: live, RunID: runID})
+	req.Site, req.Tree, req.Strip = ref.Site, tree, strip
+	return s.BuildSite(ctx, a, req)
 }
 
 // BuildSite builds a site from a source tree and publishes the output as a
@@ -276,7 +291,10 @@ func (s *Service) BuildSite(ctx context.Context, a Actor, req BuildRequest) (Bui
 	spec := build.Spec{
 		ID: s.build.newID(), Site: site.Name, Image: req.Settings.Image,
 		Command: req.Settings.Command, Output: req.Settings.Output,
-		Env: req.Settings.Env, Secrets: req.Settings.Secrets,
+		Env: req.Settings.Env, Secrets: req.Settings.Secrets, Untrusted: req.Untrusted,
+	}
+	if req.Live && req.Tag != "" {
+		return BuildResult{}, errorf(Invalid, "a live version cannot be the preview of a pull request")
 	}
 	if err := spec.Validate(); err != nil {
 		return BuildResult{}, errorf(Invalid, "%v", err)
@@ -500,7 +518,7 @@ func (r *buildRun) publish(ctx context.Context) (BuildResult, error) {
 		return r.fail(build.ReasonOutput, "the output could not be fetched from the build service")
 	}
 	defer out.Close()
-	p, err := r.s.publishVersion(ctx, r.a, r.spec.Site, &limitedOutput{r: out, left: maxOutputStream}, r.req.Live, "site.build-publish", "site.build-publish-not-live")
+	p, err := r.s.publishVersion(ctx, r.a, r.spec.Site, &limitedOutput{r: out, left: maxOutputStream}, r.req.Live, r.req.Tag, "site.build-publish", "site.build-publish-not-live")
 	if err != nil && KindOf(err) != NotSynced {
 		switch {
 		case ctx.Err() != nil:

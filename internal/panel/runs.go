@@ -3,6 +3,7 @@ package panel
 import (
 	"context"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -13,7 +14,8 @@ import (
 
 // Runs: every push to the linked branch of a site with "publish on push"
 // on records a run (github_webhook.go), and so does "Build now"
-// (runner.go). A run is the unit the build on the server works on: the
+// (runner.go) and a pull request against that branch (pullrequests.go,
+// RunTriggerPullRequest), which builds a preview instead. A run is the unit the build on the server works on: the
 // runner takes queued runs and builds them (runner.go); on a panel without
 // a build service, runs stay queued and say so.
 //
@@ -89,6 +91,15 @@ type Run struct {
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 	// Release is the version a succeeded run published.
 	Release string `json:"release,omitempty"`
+	// Runs of pull requests: the number and its page on GitHub, whether it
+	// comes from a fork (HeadRepository names it; built without the
+	// site's variables), and the link to the preview it published while
+	// that still exists (it carries the preview's key).
+	PullRequest    int    `json:"pull_request,omitempty"`
+	PullRequestURL string `json:"pull_request_url,omitempty"`
+	Fork           bool   `json:"fork,omitempty"`
+	HeadRepository string `json:"head_repository,omitempty"`
+	PreviewURL     string `json:"preview_url,omitempty"`
 }
 
 // SiteRuns are the newest runs of a site, newest first.
@@ -118,7 +129,7 @@ func runView(r store.Run) Run {
 		ID: r.ID, Site: r.Site, Trigger: r.Trigger, Status: r.Status, Repository: r.Repository,
 		RepositoryID: r.RepositoryID, Ref: r.Ref, Commit: r.CommitSHA, Message: r.Message, AuthorName: r.AuthorName,
 		AuthorLogin: r.AuthorLogin, Pusher: r.Pusher, Detail: r.Detail, CreatedAt: r.CreatedAt, StartedAt: r.StartedAt,
-		FinishedAt: r.FinishedAt, Release: r.Release,
+		FinishedAt: r.FinishedAt, Release: r.Release, PullRequest: r.PullRequest, Fork: r.Fork, HeadRepository: r.HeadRepository,
 	}
 	v.Branch, _ = strings.CutPrefix(r.Ref, "refs/heads/")
 	if v.Branch == r.Ref {
@@ -137,6 +148,12 @@ func (s *Service) runViewFor(r store.Run) Run {
 	owner, name, ok := strings.Cut(r.Repository, "/")
 	if ok && owner != "" && name != "" && !strings.Contains(name, "/") && v.Commit != "" {
 		v.CommitURL = s.github.WebURL() + "/" + url.PathEscape(owner) + "/" + url.PathEscape(name) + "/commit/" + url.PathEscape(v.Commit)
+		if r.PullRequest > 0 {
+			v.PullRequestURL = s.github.WebURL() + "/" + url.PathEscape(owner) + "/" + url.PathEscape(name) + "/pull/" + strconv.Itoa(r.PullRequest)
+		}
+	}
+	if r.Preview != "" && r.Status == store.RunSucceeded && s.deploys.Tag(r.Site, r.Release) == r.Preview {
+		v.PreviewURL = s.previewURL(r.Site, r.Release)
 	}
 	return v
 }

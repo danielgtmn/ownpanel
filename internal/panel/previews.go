@@ -287,7 +287,9 @@ func (s *Service) versionsView(site string) []Version {
 	cur := s.deploys.Current(site)
 	out := make([]Version, 0, len(releases))
 	for _, r := range slices.Backward(releases) {
-		out = append(out, Version{ID: r, Live: r == cur, Pending: s.deploys.Pending(site, r), PreviewURL: s.previewURL(site, r)})
+		_, pr, _ := parsePreviewTag(s.deploys.Tag(site, r))
+		out = append(out, Version{ID: r, Live: r == cur, Pending: s.deploys.Pending(site, r), PreviewURL: s.previewURL(site, r),
+			PullRequest: pr})
 	}
 	return out
 }
