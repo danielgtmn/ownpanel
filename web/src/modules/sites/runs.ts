@@ -21,7 +21,7 @@ export function runTrigger(run: Run): string {
     case 'push':
       return 'Push'
     case 'manual':
-      return 'Started by hand'
+      return run.pusher ? `Build now by ${run.pusher}` : 'Build now'
     default:
       return 'Other'
   }

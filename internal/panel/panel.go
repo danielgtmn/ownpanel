@@ -89,10 +89,11 @@ type Config struct {
 	// Builds is the build service's socket (-build-worker); nil means
 	// builds are not set up for this panel. *build.Client satisfies it.
 	Builds BuildService
-	// Runs hears about the steps of builds (#130); nil means nobody does.
+	// Runs hears about the steps of builds, on top of the runs they belong
+	// to (which the panel updates itself); nil means nobody else does.
 	Runs RunReporter
-	// Sources fetches the source of a site's commit (#122/#125); nil means
-	// sites can only be built from an uploaded source tree.
+	// Sources fetches the source of a site's commit; nil means the site's
+	// linked GitHub repository (runner.go).
 	Sources SourceFetcher
 	// BuildsStateFile is install.sh's record of the build environment
 	// (build.StateFile); "" means there is none.
@@ -184,8 +185,10 @@ type Service struct {
 
 	builds          BuildService
 	buildsStateFile string
-	// build runs builds of sites (sitebuild.go).
-	build buildConfig
+	// build runs builds of sites (sitebuild.go); runner builds runs
+	// (runner.go).
+	build  buildConfig
+	runner *buildRunner
 	// github talks to GitHub; githubFlows are connections waiting for the
 	// person to come back from GitHub; githubRepos caches repository
 	// lists (github.go).
@@ -226,12 +229,19 @@ func New(cfg Config) (*Service, error) {
 		builds:          cfg.Builds,
 		buildsStateFile: cfg.BuildsStateFile,
 		build:           newBuildConfig(cfg.Runs, cfg.Sources, time.Now()),
+		runner:          newBuildRunner(),
 		mx:              cfg.MXResolver,
 		certs:           newMailCerts(cfg.MailTLSDir, cfg.Caddy.TLSMode),
 		github:          cfg.GitHub,
 	}
 	if s.github == nil {
 		s.github = DefaultGitHub()
+	}
+	// Builds report to their runs (and to cfg.Runs); commits come from the
+	// site's GitHub repository unless the caller fetches them itself.
+	s.build.runs = runReporter{s: s, extra: cfg.Runs}
+	if cfg.Sources == nil {
+		s.build.sources = githubSources{s}
 	}
 	if cfg.MailHost != "" {
 		d, err := store.NormalizeDomain(cfg.MailHost)

@@ -12,8 +12,10 @@ import (
 )
 
 // Runs: every push to the linked branch of a site with "publish on push"
-// on records a run (github_webhook.go). A run is the unit the build on the
-// server works on (#113); until that exists, runs stay queued and say so.
+// on records a run (github_webhook.go), and so does "Build now"
+// (runner.go). A run is the unit the build on the server works on: the
+// runner takes queued runs and builds them (runner.go); on a panel without
+// a build service, runs stay queued and say so.
 //
 // Contract for the builder (#113), which uses only these functions:
 //
@@ -33,8 +35,8 @@ import (
 //     time; the source may have changed or gone since, so the builder
 //     reads it again and fails the run if it no longer matches.
 //
-// Who may see runs: whoever may see the site. Nobody changes them through
-// the API or MCP yet ("Build now" and "Cancel" are #115).
+// Who may see runs and their logs: whoever may see the site. Starting and
+// cancelling them (runner.go): the same as changing the site.
 
 // RunsKept is how many runs of a site are kept; older finished runs are
 // removed when a new one is recorded. Queued and running runs are always
@@ -42,7 +44,12 @@ import (
 const RunsKept = 30
 
 // Run triggers.
-const RunTriggerPush = "push"
+const (
+	RunTriggerPush = "push"
+	// RunTriggerManual: someone asked for a build ("Build now"); Pusher
+	// names them.
+	RunTriggerManual = "manual"
+)
 
 const (
 	runSupersededDetail = "replaced by a newer push"
@@ -80,6 +87,8 @@ type Run struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	StartedAt  *time.Time `json:"started_at,omitempty"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	// Release is the version a succeeded run published.
+	Release string `json:"release,omitempty"`
 }
 
 // SiteRuns are the newest runs of a site, newest first.
@@ -94,12 +103,22 @@ type SiteRuns struct {
 // runWaiting is what a queued run says while there are no builds.
 const runWaiting = "waits for building on the server, which this panel cannot do yet"
 
+// viewRun is runViewFor with what depends on the panel: whether a queued
+// run waits for building to be set up.
+func (s *Service) viewRun(r store.Run) Run {
+	v := s.runViewFor(r)
+	if r.Status == store.RunQueued && !s.PublishingAvailable() {
+		v.Waiting = runWaiting
+	}
+	return v
+}
+
 func runView(r store.Run) Run {
 	v := Run{
 		ID: r.ID, Site: r.Site, Trigger: r.Trigger, Status: r.Status, Repository: r.Repository,
 		RepositoryID: r.RepositoryID, Ref: r.Ref, Commit: r.CommitSHA, Message: r.Message, AuthorName: r.AuthorName,
 		AuthorLogin: r.AuthorLogin, Pusher: r.Pusher, Detail: r.Detail, CreatedAt: r.CreatedAt, StartedAt: r.StartedAt,
-		FinishedAt: r.FinishedAt,
+		FinishedAt: r.FinishedAt, Release: r.Release,
 	}
 	v.Branch, _ = strings.CutPrefix(r.Ref, "refs/heads/")
 	if v.Branch == r.Ref {
@@ -108,9 +127,6 @@ func runView(r store.Run) Run {
 	v.ShortCommit = r.CommitSHA
 	if len(v.ShortCommit) > 7 {
 		v.ShortCommit = v.ShortCommit[:7]
-	}
-	if r.Status == store.RunQueued && !PublishingAvailable {
-		v.Waiting = runWaiting
 	}
 	return v
 }
@@ -135,9 +151,9 @@ func (s *Service) ListSiteRuns(ctx context.Context, a Actor, site string) (SiteR
 	if err != nil {
 		return SiteRuns{}, storeError(err)
 	}
-	out := SiteRuns{Site: st.Name, Runs: make([]Run, 0, len(list)), Kept: RunsKept, PublishingAvailable: PublishingAvailable}
+	out := SiteRuns{Site: st.Name, Runs: make([]Run, 0, len(list)), Kept: RunsKept, PublishingAvailable: s.PublishingAvailable()}
 	for _, r := range list {
-		out.Runs = append(out.Runs, s.runViewFor(r))
+		out.Runs = append(out.Runs, s.viewRun(r))
 	}
 	return out, nil
 }
@@ -148,11 +164,11 @@ func (s *Service) lastRun(ctx context.Context, site string) (*Run, error) {
 	if err != nil || len(list) == 0 {
 		return nil, err
 	}
-	v := s.runViewFor(list[0])
+	v := s.viewRun(list[0])
 	return &v, nil
 }
 
-// ---- for the builder (#113); not reachable through the API or MCP ----
+// ---- for the builder (runner.go); not reachable through the API or MCP ----
 
 // SitesWithQueuedRuns lists the sites that have a queued run.
 func (s *Service) SitesWithQueuedRuns(ctx context.Context) ([]string, error) {
@@ -170,7 +186,7 @@ func (s *Service) ClaimNextRun(ctx context.Context, site string) (Run, error) {
 	if err != nil {
 		return Run{}, storeError(err)
 	}
-	return runView(r), nil
+	return s.viewRun(r), nil
 }
 
 // FinishRun ends a run with succeeded, failed or cancelled.
@@ -184,7 +200,7 @@ func (s *Service) FinishRun(ctx context.Context, id string, status, detail strin
 	if err != nil {
 		return Run{}, storeError(err)
 	}
-	return runView(r), nil
+	return s.viewRun(r), nil
 }
 
 // plainText makes untrusted text fit for a one-line display: its first

@@ -77,7 +77,7 @@ describe('runs', () => {
     expect(runStatus(run({}))).toEqual({ label: 'Waiting', tone: 'neutral' })
     expect(runStatus(run({ status: 'succeeded' })).tone).toBe('positive')
     expect(runStatus(run({ status: 'failed' })).tone).toBe('warning')
-    expect(runStatus(run({ status: 'skipped' })).label).toBe('Replaced by a newer push')
+    expect(runStatus(run({ status: 'skipped' })).label).toBe('Replaced by a newer build')
   })
   it('names the author', () => {
     expect(runAuthor(run({}))).toBe('Ann Author (ann)')

@@ -176,8 +176,10 @@ for examples (Vite, Astro, Hugo, Jekyll, plain HTML) and error messages.
 Administrators can also connect a GitHub account or organisation under
 Settings → GitHub: the panel creates its own GitHub App (one per account,
 private, with read access to code), you confirm it on GitHub and choose the
-repositories. The panel needs its own domain with HTTPS for that. Linking
-sites to repositories and building on push come next. See the wiki page
+repositories. The panel needs its own domain with HTTPS for that. A site
+linked to a repository is built on the server on every push (or with
+"Build now") with its build settings, and the result goes live; a failed
+build changes nothing. See the wiki page
 [GitHub](https://github.com/danielgtmn/ownpanel/wiki/GitHub).
 
 ## MCP

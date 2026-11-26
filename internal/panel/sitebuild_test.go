@@ -466,7 +466,15 @@ func TestBuildSiteRefusals(t *testing.T) {
 		t.Errorf("not configured: %v", err)
 	}
 
-	// No source fetcher yet.
+	// The panel's own fetcher: the site has no repository, and the reason
+	// is part of the message.
+	svc.builds = fake.Client()
+	if _, err := svc.BuildCommit(ctx, admin, SourceRef{Site: "blog", Commit: "abc"}, settings, true, ""); KindOf(err) != Unavailable ||
+		!strings.Contains(err.Error(), "not linked to a repository") {
+		t.Errorf("no repository: %v", err)
+	}
+	// No source fetcher.
+	svc.build.sources = nil
 	if _, err := svc.BuildCommit(ctx, admin, SourceRef{Site: "blog", Commit: "abc"}, settings, true, ""); KindOf(err) != Unavailable {
 		t.Errorf("no fetcher: %v", err)
 	}

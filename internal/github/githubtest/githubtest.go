@@ -137,6 +137,13 @@ type Server struct {
 	jwts     []JWT
 	requests []string
 	fail     map[string]int // "METHOD /path" prefix -> status to answer once
+
+	// commits.go
+	commits      map[string]*commit
+	heads        map[int64]map[string]string // repository -> branch -> commit
+	downloads    map[string]string           // one-time download code -> commit
+	statuses     []Status
+	tarballDelay time.Duration
 }
 
 // New starts a fake on a random local port. Close it when done
@@ -396,6 +403,19 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /api/v3/installation/repositories", s.listRepos)
 	mux.HandleFunc("GET /api/v3/repos/{owner}/{repo}/branches", s.listBranches)
 	mux.HandleFunc("GET /api/v3/repos/{owner}/{repo}/branches/{branch...}", s.getBranch)
+	mux.HandleFunc("GET /api/v3/repos/{owner}/{repo}/tarball/{ref}", s.tarball)
+	mux.HandleFunc("POST /api/v3/repos/{owner}/{repo}/statuses/{sha}", s.postStatus)
+	mux.HandleFunc("GET /_codeload/{file}", s.codeload)
+	mux.HandleFunc("POST /_dev/commit", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		dev := s.Dev
+		s.mu.Unlock()
+		if !dev {
+			http.NotFound(w, r)
+			return
+		}
+		s.devCommit(w, r)
+	})
 	mux.HandleFunc("GET /_dev/push", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		dev := s.Dev
@@ -813,9 +833,8 @@ func (s *Server) repoOfToken(w http.ResponseWriter, r *http.Request) *Repo {
 	return nil
 }
 
-func branchJSON(name string) map[string]any {
-	sum := sha256.Sum256([]byte(name))
-	return map[string]any{"name": name, "commit": map[string]any{"sha": hex.EncodeToString(sum[:20])}, "protected": false}
+func (s *Server) branchJSON(repoID int64, name string) map[string]any {
+	return map[string]any{"name": name, "commit": map[string]any{"sha": s.branchSHA(repoID, name)}, "protected": false}
 }
 
 func (s *Server) listBranches(w http.ResponseWriter, r *http.Request) {
@@ -827,7 +846,7 @@ func (s *Server) listBranches(w http.ResponseWriter, r *http.Request) {
 	}
 	all := []map[string]any{}
 	for _, b := range rp.Branches {
-		all = append(all, branchJSON(b))
+		all = append(all, s.branchJSON(rp.ID, b))
 	}
 	writeJSON(w, http.StatusOK, page(all, r))
 }
@@ -844,5 +863,5 @@ func (s *Server) getBranch(w http.ResponseWriter, r *http.Request) {
 		message(w, http.StatusNotFound, "Branch not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, branchJSON(name))
+	writeJSON(w, http.StatusOK, s.branchJSON(rp.ID, name))
 }
