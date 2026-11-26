@@ -310,6 +310,9 @@ func (s *Service) SetMailboxAccount(ctx context.Context, a Actor, id int64, in M
 	if err := needMailWrite(a); err != nil {
 		return Mailbox{}, err
 	}
+	if in.AppPasswordsOnly != nil && *in.AppPasswordsOnly && m.Kind == config.KindShared {
+		return Mailbox{}, errorf(Invalid, "nobody signs in to a shared mailbox")
+	}
 	next := m
 	if in.DisplayName != nil {
 		if next.DisplayName, err = displayName(*in.DisplayName); err != nil {
@@ -405,6 +408,9 @@ func (s *Service) CreateAppPassword(ctx context.Context, a Actor, mailboxID int6
 	if err := needMailWrite(a); err != nil {
 		return NewAppPassword{}, err
 	}
+	if m.Kind == config.KindShared {
+		return NewAppPassword{}, errorf(Invalid, "nobody signs in to a shared mailbox: people use it with their own mailbox and its app passwords")
+	}
 	n, err := shortName(name, "app password (the device or program it is for)")
 	if err != nil {
 		return NewAppPassword{}, err
@@ -496,6 +502,7 @@ var accountEventKinds = map[string]bool{
 	config.EventAppPasswordCreated: true,
 	config.EventAppPasswordRevoked: true,
 	config.EventAppPasswordUsed:    true,
+	config.EventGrantsChanged:      true,
 }
 
 // applyAccountEvent records a change a mailbox made to its own account in
@@ -572,6 +579,20 @@ func (s *Service) applyAccountEvent(ctx context.Context, e config.Event) (bool, 
 			return false, nil
 		}
 		mc.RevokeAppPassword = ch.AppPasswordID
+	case config.EventGrantsChanged:
+		if ch.Grants == nil || len(*ch.Grants) > config.MaxGrants {
+			return false, nil
+		}
+		list := []store.GrantByStorage{}
+		for _, g := range *ch.Grants {
+			r, err := config.ParseRights(g.Rights)
+			if err != nil || !config.ValidStorageID(g.StorageID) || g.StorageID == e.StorageID {
+				continue
+			}
+			list = append(list, store.GrantByStorage{StorageID: g.StorageID, Rights: r.Names()})
+		}
+		mc.Grants = &list
+		detail = e.Detail
 	default:
 		return false, nil
 	}

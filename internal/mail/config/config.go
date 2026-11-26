@@ -179,6 +179,24 @@ type Mailbox struct {
 	PasswordSetAt         int64 `json:"password_set_at,omitempty"`
 	DisplayNameSetAt      int64 `json:"display_name_set_at,omitempty"`
 	AppPasswordsOnlySetAt int64 `json:"app_passwords_only_set_at,omitempty"`
+
+	// Kind is KindPersonal ("" too) or KindShared. A shared mailbox has no
+	// password (PasswordHash ""), no app passwords and cannot sign in.
+	Kind string `json:"kind,omitempty"`
+	// Grants give personal mailboxes of the same organisation rights on
+	// this mailbox (at most MaxGrants): set by the panel for a shared
+	// mailbox, by the person (self-service) for a personal one.
+	Grants []Grant `json:"grants,omitempty"`
+	// KeepSentCopy (shared mailboxes only): mail sent as or on behalf of
+	// the mailbox is also stored in its Sent folder.
+	KeepSentCopy bool `json:"keep_sent_copy,omitempty"`
+	// GrantsSetAt is when the panel last changed Grants itself (Unix
+	// seconds, 0: never), like PasswordSetAt: a self-delegation the
+	// mailbox made at or before that time no longer counts.
+	GrantsSetAt int64 `json:"grants_set_at,omitempty"`
+	// NoForwarding: the mailbox's filters may not forward mail (redirect);
+	// the domain owner decides, forwarding is allowed by default.
+	NoForwarding bool `json:"no_forwarding,omitempty"`
 }
 
 // Alias delivers mail for Address to Targets.
@@ -187,6 +205,13 @@ type Alias struct {
 	Address string `json:"address"`
 	// Targets are addresses: mailboxes of this service or external ones.
 	Targets []string `json:"targets"`
+	// SenderPolicy says who may write to the address when it is used as a
+	// distribution group: SenderAnyone ("" too), SenderOrganisation or
+	// SenderMembers. Not for the catch-all.
+	SenderPolicy string `json:"sender_policy,omitempty"`
+	// HideFromDirectory keeps the address out of the organisation's
+	// address book.
+	HideFromDirectory bool `json:"hide_from_directory,omitempty"`
 }
 
 // Limits of the whole service.
@@ -333,6 +358,14 @@ func (c *Config) Validate() error {
 			appIDs[ap.ID] = true
 		}
 	}
+	byStorage, orgs := c.mailboxesByStorage(), c.domainOrganisations()
+	for _, m := range c.Mailboxes {
+		for _, g := range m.Grants {
+			if p := GrantProblem(m, g, byStorage, orgs); p != "" {
+				return fmt.Errorf("mailbox %s: a grant is not valid: %s", m.Address, p)
+			}
+		}
+	}
 	for _, a := range c.Aliases {
 		_, d, _ := SplitAddress(a.Address)
 		if err := validateAlias(a); err != nil {
@@ -425,11 +458,26 @@ func validateMailbox(m Mailbox) error {
 	if !ValidStorageID(m.StorageID) {
 		return fmt.Errorf("mailbox %s: storage id is not valid or used twice", m.Address)
 	}
-	if !passwd.WellFormed(m.PasswordHash) {
-		return fmt.Errorf("mailbox %s: password hash is not an argon2id hash", m.Address)
+	if !validKind(m.Kind) {
+		return fmt.Errorf("mailbox %s: unknown kind %q", m.Address, m.Kind)
+	}
+	if m.Shared() {
+		if m.PasswordHash != "" || len(m.AppPasswords) > 0 || m.AppPasswordsOnly {
+			return fmt.Errorf("mailbox %s: a shared mailbox has no password", m.Address)
+		}
+	} else {
+		if !passwd.WellFormed(m.PasswordHash) {
+			return fmt.Errorf("mailbox %s: password hash is not an argon2id hash", m.Address)
+		}
+		if m.KeepSentCopy {
+			return fmt.Errorf("mailbox %s: only shared mailboxes keep copies of sent mail", m.Address)
+		}
+	}
+	if err := CheckGrants(m, m.Grants); err != nil {
+		return fmt.Errorf("mailbox %s: %w", m.Address, err)
 	}
 	if m.QuotaBytes < 0 || m.SendPerHour < 0 || m.SendPerDay < 0 || m.Revision < 0 ||
-		m.PasswordSetAt < 0 || m.DisplayNameSetAt < 0 || m.AppPasswordsOnlySetAt < 0 {
+		m.PasswordSetAt < 0 || m.DisplayNameSetAt < 0 || m.AppPasswordsOnlySetAt < 0 || m.GrantsSetAt < 0 {
 		return fmt.Errorf("mailbox %s: negative limit", m.Address)
 	}
 	if !ValidDisplayName(m.DisplayName) {
@@ -462,6 +510,9 @@ func validateAlias(a Alias) error {
 			return fmt.Errorf("alias %s: target %q is not a valid address", a.Address, t)
 		}
 	}
+	if !ValidSenderPolicy(a.SenderPolicy) || l == "*" && a.SenderPolicy != "" && a.SenderPolicy != SenderAnyone {
+		return fmt.Errorf("alias %s: sender policy %q is not valid", a.Address, a.SenderPolicy)
+	}
 	return nil
 }
 
@@ -480,8 +531,13 @@ func validateAlias(a Alias) error {
 //     is used twice, is left out. An invalid display name is removed.
 //     Invalid app passwords and ids used twice are left out, and beyond
 //     MaxAppPasswords the newest ones (the list is oldest first).
+//   - Personal mailboxes do not keep copies of sent mail (turned off).
+//     Grants that are not valid on their own, listed twice or beyond
+//     MaxGrants are left out, and so are grants that name a mailbox left
+//     out, a shared mailbox or another organisation (GrantProblem).
 //   - An alias that is not valid or whose address is used twice is left
 //     out; invalid targets are left out, beyond MaxTargets the last ones.
+//     An invalid sender policy becomes SenderMembers.
 func (c *Config) DropInvalid() []string {
 	var out []string
 	note := func(format string, args ...any) { out = append(out, fmt.Sprintf(format, args...)) }
@@ -528,6 +584,30 @@ func (c *Config) DropInvalid() []string {
 			note("mailbox %q: display name not valid; removed", m.Address)
 			m.DisplayName = ""
 		}
+		if m.Shared() && (m.PasswordHash != "" || len(m.AppPasswords) > 0 || m.AppPasswordsOnly) {
+			// Nobody signs in to a shared mailbox: what would let someone is
+			// removed, the mailbox stays (it still receives mail).
+			note("mailbox %q: a shared mailbox has no password or app passwords; removed", m.Address)
+			m.PasswordHash, m.AppPasswords, m.AppPasswordsOnly = "", nil, false
+		}
+		if m.KeepSentCopy && !m.Shared() {
+			note("mailbox %q: keeping copies of sent mail is only for shared mailboxes; turned off", m.Address)
+			m.KeepSentCopy = false
+		}
+		if len(m.Grants) > 0 {
+			grants := make([]Grant, 0, min(len(m.Grants), MaxGrants))
+			for _, g := range m.Grants {
+				switch {
+				case validateGrantForm(m, g) != nil || slices.ContainsFunc(grants, func(x Grant) bool { return x.StorageID == g.StorageID }):
+					note("mailbox %q: grant to %q left out: not valid or listed twice", m.Address, g.StorageID)
+				case len(grants) == MaxGrants:
+					note("mailbox %q: grant to %q left out: more than %d", m.Address, g.StorageID, MaxGrants)
+				default:
+					grants = append(grants, g)
+				}
+			}
+			m.Grants = grants
+		}
 		_, d, _ := SplitAddress(m.Address)
 		if err := validateMailbox(m); err != nil || !domains[d] || addresses[m.Address] || storage[m.StorageID] {
 			note("mailbox %q left out: not valid, its domain left out, or its address or storage id used twice", m.Address)
@@ -557,9 +637,36 @@ func (c *Config) DropInvalid() []string {
 		keptMailboxes = append(keptMailboxes, m)
 	}
 	c.Mailboxes = keptMailboxes
+	// Grants that name a mailbox left out, a shared mailbox or another
+	// organisation are left out; the mailbox stays.
+	byStorage, orgs := c.mailboxesByStorage(), c.domainOrganisations()
+	for i := range c.Mailboxes {
+		m := &c.Mailboxes[i]
+		if len(m.Grants) == 0 {
+			continue
+		}
+		kept := make([]Grant, 0, len(m.Grants))
+		for _, g := range m.Grants {
+			if p := GrantProblem(*m, g, byStorage, orgs); p != "" {
+				note("mailbox %s: grant to %s left out: %s", m.Address, g.StorageID, p)
+				continue
+			}
+			kept = append(kept, g)
+		}
+		m.Grants = kept
+	}
 
 	keptAliases := make([]Alias, 0, len(c.Aliases))
 	for _, a := range c.Aliases {
+		if l, _, _ := SplitAddress(a.Address); !ValidSenderPolicy(a.SenderPolicy) || l == "*" && a.SenderPolicy != "" && a.SenderPolicy != SenderAnyone {
+			// The strictest policy: a group nobody may write to by mistake
+			// is better than one open to everyone.
+			note("alias %q: sender policy not valid; only members may write to it", a.Address)
+			a.SenderPolicy = SenderMembers
+			if l == "*" {
+				a.SenderPolicy = ""
+			}
+		}
 		targets := make([]string, 0, min(len(a.Targets), MaxTargets))
 		for _, t := range a.Targets {
 			switch {

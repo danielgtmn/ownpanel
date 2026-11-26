@@ -101,16 +101,31 @@ func (s *Service) buildMailConfig(ctx context.Context) (*config.Config, error) {
 	for _, ap := range appPasswords {
 		byMailbox[ap.MailboxID] = append(byMailbox[ap.MailboxID], config.AppPassword{ID: ap.ID, Name: ap.Name, MAC: ap.MAC, Created: ap.CreatedAt})
 	}
+	grants, err := s.store.MailboxGrants(ctx, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	grantsOf := configGrants(grants)
 	for _, m := range mailboxes {
 		if active[m.Domain] {
-			cfg.Mailboxes = append(cfg.Mailboxes, config.Mailbox{
+			cm := config.Mailbox{
 				StorageID: m.StorageID, Address: m.LocalPart + "@" + m.Domain, PasswordHash: m.PasswordHash,
 				QuotaBytes: m.QuotaBytes, SendPerHour: m.SendPerHour, SendPerDay: m.SendPerDay,
 				DisplayName: m.DisplayName, AppPasswords: byMailbox[m.ID], AppPasswordsOnly: m.AppPasswordsOnly,
 				Revision: m.Revision, PasswordSetAt: unixOrZero(m.AdminPasswordAt),
 				DisplayNameSetAt: unixOrZero(m.AdminDisplayNameAt), AppPasswordsOnlySetAt: unixOrZero(m.AdminAppPasswordsOnlyAt),
-			})
+				Grants: grantsOf[m.ID], GrantsSetAt: unixOrZero(m.AdminGrantsAt),
+			}
+			// Personal is pushed as "", so configurations without shared
+			// mailboxes stay as they were.
+			if m.Kind == config.KindShared {
+				cm.Kind, cm.KeepSentCopy = config.KindShared, m.KeepSentCopy
+			}
+			cfg.Mailboxes = append(cfg.Mailboxes, cm)
 		}
+	}
+	if err := s.applyNoForwarding(ctx, cfg, mailboxes); err != nil {
+		return nil, err
 	}
 	aliases, err := s.store.MailAliases(ctx, "")
 	if err != nil {
@@ -118,7 +133,11 @@ func (s *Service) buildMailConfig(ctx context.Context) (*config.Config, error) {
 	}
 	for _, a := range aliases {
 		if active[a.Domain] {
-			cfg.Aliases = append(cfg.Aliases, config.Alias{Address: a.LocalPart + "@" + a.Domain, Targets: a.Targets})
+			ca := config.Alias{Address: a.LocalPart + "@" + a.Domain, Targets: a.Targets, HideFromDirectory: a.HideFromDirectory}
+			if a.SenderPolicy != config.SenderAnyone {
+				ca.SenderPolicy = a.SenderPolicy
+			}
+			cfg.Aliases = append(cfg.Aliases, ca)
 		}
 	}
 	// One domain, mailbox or alias the mail service would refuse must not

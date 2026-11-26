@@ -109,6 +109,7 @@ mode 0750, socket 0660; the user `ownpanel` is a member of the group
 **Mail service data** `/var/lib/ownpanel-mail` (`StateDirectory`, owner
 `ownpanel-mail`, 0700): `config.json` (0600, rewritten only when it changed),
 `mail.db` (SQLite WAL, one writer, `synchronous=FULL`), `messages/<storage_id>/…`,
+`dav/<storage_id>/<collection>/…` (calendars and contacts, G4a),
 `queue/…`, `srs.key` (32 random bytes, 0600, created on first start; the
 backup copies it with the rest, so SRS addresses stay valid after a
 restore). Data is keyed by `storage_id`, so a reused row id or a restored
@@ -135,7 +136,8 @@ the copy has its file. Restoring is the manual tar step of
 `chown -R ownpanel-mail: /var/lib/ownpanel-mail`. A restored index is older
 than the clients' caches, so the service changes `UIDVALIDITY` of every
 folder when its start-up check finds a difference or the restore marker
-file `restored` exists.
+file `restored` exists; calendars and contacts get a new sync epoch the
+same way (every ETag, ctag and sync token changes).
 
 ## Sync
 
@@ -305,6 +307,9 @@ have no panel account and cannot change their own password yet (*later*).
   left to it.
 - IMAP (implicit TLS on 993 only, RFC 8314): `INBOX`, `Sent`, `Drafts`,
   `Junk`, `Trash`, `Archive` with special-use flags; IDLE, MOVE, UIDPLUS.
+  Folders of mailboxes shared with the signed-in mailbox appear under
+  `Shared/<address>/…`, and COPY/MOVE work across mailboxes; see
+  [[Groupware architecture|Groupware-Architecture]], G3.
   Envelope and body structure are read from the message file on FETCH
   (storing them at delivery is *later*). LITERAL+ is not offered, so an
   oversized APPEND is refused before the client sends it. Quota is enforced on delivery and APPEND (`NO [OVERQUOTA]`) and
@@ -366,13 +371,19 @@ How it is built (phase 1c):
   message for good, the queue sends a delivery status notification (from
   the null sender) to the original sender decoded from the SRS address.
 - **Submission:** external targets of a local alias go into the outbound
-  queue with the rest of the message; the sender is the signed-in mailbox,
-  so there is no SRS, and the message counts once like any other.
+  queue with the rest of the message; the sender is the signed-in mailbox
+  (or a shared mailbox it sends for), so there is no SRS, and the message
+  counts once like any other.
+- **Distribution groups:** an alias may accept mail only from its members
+  or its organisation (`SenderPolicy`); see G3 in
+  [[Groupware architecture|Groupware-Architecture]].
 
 ## Sending — [#26](https://github.com/danielgtmn/ownpanel/issues/26)
 
 - A mailbox may send as its own address or an alias that delivers to it
-  (catch-all does not count), checked for the envelope and the header `From`.
+  (catch-all does not count), and as or on behalf of a shared mailbox it has
+  the right for (G3 in [[Groupware architecture|Groupware-Architecture]]),
+  checked for the envelope and the header `From`.
   The message needs exactly one `From` field; several addresses in it need a
   `Sender` with one address, which the mailbox must also be allowed to send
   as. A header section over 1 MB is refused with `552 5.3.4`.

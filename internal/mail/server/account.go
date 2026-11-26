@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"strings"
 	"time"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
@@ -227,6 +228,34 @@ func checkChange(rt *runtime, cur *config.Mailbox, ch config.AccountChange) (kin
 		}
 		if !found {
 			return "", "", ErrInvalidChange
+		}
+	}
+	if ch.Grants != nil {
+		n++
+		kind = config.EventGrantsChanged
+		if cur.Shared() || config.CheckGrants(*cur, *ch.Grants) != nil {
+			return "", "", ErrInvalidChange
+		}
+		cfg := rt.dir.Config()
+		orgs := map[string]string{}
+		for _, d := range cfg.Domains {
+			orgs[d.Name] = cfg.OrganisationOf(d.Name)
+		}
+		byStorage := map[string]*config.Mailbox{}
+		for i := range cfg.Mailboxes {
+			byStorage[cfg.Mailboxes[i].StorageID] = &cfg.Mailboxes[i]
+		}
+		var parts []string
+		for _, g := range *ch.Grants {
+			if config.GrantProblem(*cur, g, byStorage, orgs) != "" {
+				return "", "", ErrInvalidChange
+			}
+			r, _ := config.ParseRights(g.Rights)
+			parts = append(parts, byStorage[g.StorageID].Address+" ("+strings.Join(r.Names(), ", ")+")")
+		}
+		detail = "shared with nobody"
+		if len(parts) > 0 {
+			detail = "shared with " + strings.Join(parts, "; ")
 		}
 	}
 	if n != 1 || ch.Network != "" {

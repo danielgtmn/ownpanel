@@ -364,6 +364,31 @@
   font-weight: 500;
 }
 
+/* Out-of-office and forwarding of a mailbox (MailboxRulesPanel.tsx). */
+.mail-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 42rem;
+}
+
+.mail-rules-part {
+  padding: 0.875rem;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+}
+
+.mail-rules-part h5 {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.mail-rules-note {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
 .mail-apps {
   display: flex;
   flex-direction: column;
@@ -432,5 +457,23 @@
 .mail-organisation p,
 .mail-organisation-note {
   margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A checkbox with its label and hint, like the switches above. */
+.mail-choice[data-slot='field'] {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.mail-choice > [data-slot='checkbox'] {
+  flex: none;
+  margin-top: 0.125rem;
+}
+
+.mail-grant-person {
+  margin: 0;
+  font-weight: 500;
   overflow-wrap: anywhere;
 }

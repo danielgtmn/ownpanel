@@ -22,3 +22,24 @@ func TestProfileHelpers(t *testing.T) {
 		t.Fatalf("%+v", s)
 	}
 }
+
+func TestProfileWithCalendars(t *testing.T) {
+	plain := string(AppleProfile("a@example.com", Settings("mail.example.net")))
+	if strings.Contains(plain, "caldav") {
+		t.Fatal("calendars without DAV")
+	}
+	c := Settings("mail.example.net").WithDAV()
+	if c.DAVURL != "https://mail.example.net/dav/" {
+		t.Fatal(c.DAVURL)
+	}
+	b := string(AppleProfile("a+b@example.com", c))
+	for _, want := range []string{"com.apple.caldav.account", "com.apple.carddav.account", "<key>CalDAVHostName</key><string>mail.example.net</string>",
+		"<key>CardDAVPrincipalURL</key><string>https://mail.example.net/dav/principals/a+b@example.com/</string>", "<key>CalDAVPort</key><integer>443</integer>"} {
+		if !strings.Contains(b, want) {
+			t.Fatalf("profile lacks %s:\n%s", want, b)
+		}
+	}
+	if strings.Contains(b, "Password</key><string>") {
+		t.Fatal("password in profile")
+	}
+}

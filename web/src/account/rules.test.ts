@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  accessKindText,
   appPasswordUse,
   clientRows,
+  folderText,
   passwordChangedNotice,
   passwordErrors,
   signInErrors,
@@ -94,5 +96,16 @@ describe('password changed', () => {
     expect(passwordChangedNotice(true, undefined).text).toMatch(/all app passwords were revoked/)
     const warning = 'Your password was changed, but 1 app password could not be revoked. Revoke it below.'
     expect(passwordChangedNotice(true, warning)).toEqual({ kind: 'warning', text: warning })
+  })
+})
+
+describe('mailboxes the person may use', () => {
+  it('says where they show up and what kind they are', () => {
+    expect(folderText({ folder: 'Shared/info@example.com' })).toBe(
+      'In your mail program: the folder Shared/info@example.com',
+    )
+    expect(folderText({ folder: '' })).toBe('In your mail program, next to your own mail')
+    expect(accessKindText({ shared: true })).toBe('Shared mailbox')
+    expect(accessKindText({ shared: false })).toMatch(/shared with you/)
   })
 })

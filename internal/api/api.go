@@ -67,6 +67,7 @@ var routeGroups = []func(*Server, *http.ServeMux){
 	(*Server).mailRoutes,
 	(*Server).mailTransferRoutes,
 	(*Server).mailAccountRoutes,
+	(*Server).mailRulesRoutes,
 }
 
 // Handler returns the API routes.
@@ -275,7 +276,19 @@ func writeFailure(w http.ResponseWriter, err error) {
 		writeError(w, status, "something went wrong on the server")
 		return
 	}
+	if code := panel.CodeOf(err); code != "" {
+		writeErrorCode(w, status, err.Error(), code)
+		return
+	}
 	writeError(w, status, err.Error())
+}
+
+// writeErrorCode is writeError with a machine-readable "code".
+func writeErrorCode(w http.ResponseWriter, status int, msg, code string) {
+	if msg != "" {
+		msg = strings.ToUpper(msg[:1]) + msg[1:]
+	}
+	writeJSON(w, status, map[string]string{"error": msg, "code": code})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

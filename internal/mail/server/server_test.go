@@ -53,6 +53,7 @@ func run(t *testing.T, data, sock string, mods ...func(*Options)) *instance {
 		SubmissionAddr:  "127.0.0.1:0",
 		SubmissionsAddr: "127.0.0.1:0",
 		IMAPSAddr:       "127.0.0.1:0",
+		ManageSieveAddr: "127.0.0.1:0",
 		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 		FreeBytes:       func() (int64, error) { return 10 << 30, nil },
 		Resolver:        &mailtest.Resolver{},
@@ -182,6 +183,30 @@ func TestLoadStatusResume(t *testing.T) {
 		t.Error("login with a wrong password worked")
 	}
 	ic.Close()
+
+	// ManageSieve greets in plain text and offers STARTTLS.
+	msL := listener(st, "managesieve")
+	if !msL.Listening || msL.Error != "" {
+		t.Fatalf("managesieve %+v", msL)
+	}
+	mc, err := net.Dial("tcp", msL.Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mc.SetDeadline(time.Now().Add(5 * time.Second))
+	greet := make([]byte, 4096)
+	n, _ := io.ReadAtLeast(mc, greet, 1)
+	for !strings.Contains(string(greet[:n]), "\r\nOK ") && n < len(greet) {
+		k, err := mc.Read(greet[n:])
+		if err != nil {
+			break
+		}
+		n += k
+	}
+	if g := string(greet[:n]); !strings.Contains(g, `"STARTTLS"`) || !strings.Contains(g, `"IMPLEMENTATION" "ownpanel"`) {
+		t.Fatalf("managesieve greeting %q", g)
+	}
+	mc.Close()
 
 	deliver(t, smtpL.Address, "alice@example.org")
 	st, _ = in.client.Status(ctx)

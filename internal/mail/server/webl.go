@@ -73,7 +73,7 @@ func (s *Server) listenWeb() error {
 		return fmt.Errorf("web socket: %w", err)
 	}
 	s.webLn = ln
-	s.web = web.NewServer(web.Options{Account: s.opts.AccountHandler})
+	s.web = web.NewServer(web.Options{Account: s.opts.AccountHandler, DAV: s.opts.DAVHandler})
 	return nil
 }
 

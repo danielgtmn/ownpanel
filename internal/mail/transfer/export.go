@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/mail/davobj"
 	"github.com/danielgtmn/ownpanel/internal/mail/storage"
 )
 
@@ -90,6 +91,11 @@ func Export(ctx context.Context, st *storage.Store, sid string, w io.Writer, now
 		}
 		man.Folders = append(man.Folders, mf)
 	}
+	dav, err := exportDAV(ctx, st, sid, zw, now, paths)
+	if err != nil {
+		return err
+	}
+	man.DAV = dav
 	mw, err := zw.CreateHeader(&zip.FileHeader{Name: "manifest.json", Method: zip.Deflate, Modified: now})
 	if err != nil {
 		return err
@@ -100,6 +106,62 @@ func Export(ctx context.Context, st *storage.Store, sid string, w io.Writer, now
 		return err
 	}
 	return zw.Close()
+}
+
+// exportDAV adds the mailbox's calendars (calendars/<name>.ics) and
+// address books (contacts/<name>.vcf) and returns them for the manifest;
+// the import of our zip skips exactly those. Folder paths always end in
+// .mbox and are in paths, so they never collide.
+func exportDAV(ctx context.Context, st *storage.Store, sid string, zw *zip.Writer, now time.Time, paths *pathSet) ([]manifestDAV, error) {
+	colls, err := st.DAVCollections(ctx, sid, "")
+	if err != nil {
+		return nil, err
+	}
+	used := paths.used
+	var out []manifestDAV
+	for _, c := range colls {
+		dir, ext := davCalendarsDir, ".ics"
+		if c.Kind == davobj.AddressBook {
+			dir, ext = davContactsDir, ".vcf"
+		}
+		base := davFileName(c.Name)
+		p := dir + base + ext
+		for n := 2; used[strings.ToLower(p)]; n++ {
+			p = fmt.Sprintf("%s%s~%d%s", dir, base, n, ext)
+		}
+		used[strings.ToLower(p)] = true
+		fw, err := zw.CreateHeader(&zip.FileHeader{Name: p, Method: zip.Deflate, Modified: now})
+		if err != nil {
+			return nil, err
+		}
+		if err := st.ExportDAVCollection(ctx, c, fw); err != nil {
+			return nil, err
+		}
+		out = append(out, manifestDAV{Kind: c.Kind, Name: c.Name, Path: p})
+	}
+	return out, nil
+}
+
+// Folders of calendars and address books in the export.
+const (
+	davCalendarsDir = "calendars/"
+	davContactsDir  = "contacts/"
+)
+
+// davFileName keeps the characters of a collection name that are safe in
+// a file name everywhere.
+func davFileName(name string) string {
+	out := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.', r == '@', r == '+':
+			return r
+		}
+		return '_'
+	}, name)
+	if strings.Trim(out, ".") == "" {
+		out = "_" + out
+	}
+	return out
 }
 
 // writeMboxMessage writes one message in mboxrd form: the "From " line

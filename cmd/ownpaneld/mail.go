@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/account"
+	"github.com/danielgtmn/ownpanel/internal/mail/dav"
 	"github.com/danielgtmn/ownpanel/internal/mail/server"
 )
 
@@ -29,6 +30,7 @@ func runMail(args []string) error {
 	submission := fs.String("submission", ":587", "address for mail clients sending mail, STARTTLS required before sign-in (\"\" to disable)")
 	submissions := fs.String("submissions", ":465", "address for mail clients sending mail over TLS (\"\" to disable)")
 	imaps := fs.String("imaps", ":993", "address for mail clients reading mail with IMAP over TLS (\"\" to disable)")
+	manageSieve := fs.String("managesieve", ":4190", "address for mail programs managing their mail filters (ManageSieve, STARTTLS required before sign-in; \"\" to disable)")
 	ipv6Out := fs.Bool("ipv6-outbound", false, "also deliver outgoing mail over IPv6 (only if the server's IPv6 address has a reverse DNS entry naming the mail host)")
 	allowPrivateMX := fs.Bool("allow-private-mx", false, "for test setups only: deliver outgoing mail to mail servers with loopback or private network addresses")
 	fs.Parse(args)
@@ -42,9 +44,11 @@ func runMail(args []string) error {
 		webPath = path
 	}
 
-	// The self-service API needs the server, the server needs the handler
-	// before it opens the web socket (in Run): it is set right after New.
+	// The self-service API and calendars and contacts need the server, the
+	// server needs the handlers before it opens the web socket (in Run):
+	// they are set right after New.
 	var acct *account.Handler
+	var davH *dav.Handler
 	srv, err := server.New(server.Options{
 		DataDir:         *dataDir,
 		AdminSocket:     *admin,
@@ -54,19 +58,23 @@ func runMail(args []string) error {
 		SubmissionAddr:  *submission,
 		SubmissionsAddr: *submissions,
 		IMAPSAddr:       *imaps,
+		ManageSieveAddr: *manageSieve,
 		IPv6Outbound:    *ipv6Out,
 		AllowPrivateMX:  *allowPrivateMX,
 		AccountHandler:  http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { acct.ServeHTTP(w, r) }),
+		DAVHandler:      http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { davH.ServeHTTP(w, r) }),
 		Logger:          slog.Default(),
 	})
 	if err != nil {
 		return err
 	}
 	acct = account.New(account.Options{Backend: srv, Logger: slog.Default()})
+	davH = dav.New(dav.Options{Backend: srv, Logger: slog.Default()})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if webPath != "" {
 		go acct.Run(ctx)
+		go davH.Run(ctx)
 	}
 	slog.Info("mail service starting", "version", version, "data", *dataDir, "admin", *admin, "web", webPath)
 	if err := srv.Run(ctx); err != nil {

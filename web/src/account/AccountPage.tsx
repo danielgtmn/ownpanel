@@ -6,15 +6,20 @@ import { Switch, SwitchThumb } from '@ui-sdk/react/switch'
 import { toast } from '@ui-sdk/react/toast'
 import { useState } from 'react'
 import { formatDateTime } from '../shared/format/index.ts'
-import { copyText, Section } from '../shared/ui/index.ts'
+import { rightsText, withGrant, withoutGrant } from '../shared/sharing/index.ts'
+import { copyText, Section, StatusBadge } from '../shared/ui/index.ts'
+import { AccountFilters } from './AccountFilters.tsx'
 import {
   ChangePasswordDialog,
   CreateAppPasswordDialog,
   DisplayNameDialog,
   NewAppPasswordDialog,
+  ShareDialog,
   type CreatedAppPassword,
   type PasswordChange,
 } from './AccountDialogs.tsx'
+import { CalendarsSection } from './CalendarsSection.tsx'
+import { managedMailboxes } from './filters.ts'
 import {
   accountErrorMessage,
   APPLE_SETUP_URL,
@@ -24,12 +29,23 @@ import {
   loadMe,
   revokeAppPassword,
   setAppPasswordsOnly,
+  setDelegations,
   setDisplayName,
   signOut,
   type AppPassword,
+  type Delegate,
   type Me,
 } from './api.ts'
-import { appPasswordUse, clientRows, messagesText, passwordChangedNotice, usageShare, usageText } from './rules.ts'
+import {
+  accessKindText,
+  appPasswordUse,
+  clientRows,
+  folderText,
+  messagesText,
+  passwordChangedNotice,
+  usageShare,
+  usageText,
+} from './rules.ts'
 
 type Dialog = 'name' | 'password' | 'app' | null
 
@@ -53,6 +69,7 @@ export function AccountPage({
   const [created, setCreated] = useState<CreatedAppPassword | null>(null)
   const [switching, setSwitching] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
+  const [sharing, setSharing] = useState<{ open: boolean; existing: Delegate | null }>({ open: false, existing: null })
   const share = usageShare(me)
   const close = (open: boolean) => {
     if (!open) setDialog(null)
@@ -131,6 +148,30 @@ export function AccountPage({
     setSwitching(false)
   }
 
+  // The server takes the whole list each time.
+  async function saveShare(address: string, rights: string[]) {
+    const changing = sharing.existing !== null
+    onChange(await setDelegations(withGrant(me.shared_with, address, rights)))
+    setSharing((current) => ({ ...current, open: false }))
+    toast.success(changing ? `What ${address} may do was changed.` : `Your mailbox is now shared with ${address}.`)
+  }
+
+  async function unshare(person: Delegate) {
+    const yes = await confirm({
+      title: `Stop sharing with ${person.address}?`,
+      description: `${person.address} can no longer use your mailbox. It disappears from their mail program.`,
+      confirmLabel: 'Stop sharing',
+      cancelLabel: 'Cancel',
+    })
+    if (!yes) return
+    try {
+      onChange(await setDelegations(withoutGrant(me.shared_with, person.address)))
+      toast.success(`Your mailbox is no longer shared with ${person.address}.`)
+    } catch (error) {
+      failed(error)
+    }
+  }
+
   async function leave() {
     setSigningOut(true)
     try {
@@ -179,6 +220,8 @@ export function AccountPage({
             </p>
           ) : null}
         </Section>
+
+        <AccountFilters managed={managedMailboxes(me.access)} />
 
         <Section
           title="Your name"
@@ -253,6 +296,78 @@ export function AccountPage({
         </Section>
 
         <Section
+          title="Your mailbox is shared with"
+          description="People of your organisation who may use your mailbox with their own sign-in, for example an assistant. It shows up in their mail program next to their own."
+          actions={
+            me.shared_with.length > 0 ? (
+              <Button onClick={() => setSharing({ open: true, existing: null })}>Share with someone</Button>
+            ) : null
+          }
+        >
+          {me.shared_with.length === 0 ? (
+            <div className="account-sharing-empty">
+              <p className="muted account-empty">Nobody. Only you can use your mailbox.</p>
+              <div className="record-actions">
+                <Button onClick={() => setSharing({ open: true, existing: null })}>Share with someone</Button>
+              </div>
+            </div>
+          ) : (
+            <ul className="access-list" aria-label="People your mailbox is shared with">
+              {me.shared_with.map((person) => (
+                <li className="access-item" key={person.address}>
+                  <div className="access-item-main">
+                    <strong>{person.address}</strong>
+                    <ul className="record-facts">
+                      {person.display_name ? <li>{person.display_name}</li> : null}
+                      <li>{rightsText(person.rights)}</li>
+                    </ul>
+                  </div>
+                  <div className="record-actions">
+                    <Button onClick={() => setSharing({ open: true, existing: person })}>
+                      Change<span className="visually-hidden"> what {person.address} may do</span>
+                    </Button>
+                    <Button data-variant="destructive" pendingAnnouncement="Removing" onClick={() => unshare(person)}>
+                      Remove<span className="visually-hidden"> {person.address}</span>
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
+
+        <Section
+          title="You have access to"
+          description="Other mailboxes you may use with your own sign-in, besides your own."
+        >
+          {me.access.length === 0 ? (
+            <p className="muted account-empty">
+              No other mailboxes. The people who manage your mail can give you access to a shared mailbox, and others
+              can share their mailbox with you.
+            </p>
+          ) : (
+            <ul className="access-list" aria-label="Mailboxes you have access to">
+              {me.access.map((access) => (
+                <li className="access-item" key={access.address}>
+                  <div className="access-item-main">
+                    <strong>
+                      {access.address}
+                      {access.shared ? <StatusBadge tone="neutral">Shared</StatusBadge> : null}
+                    </strong>
+                    <ul className="record-facts">
+                      {access.display_name ? <li>{access.display_name}</li> : null}
+                      <li>{accessKindText(access)}</li>
+                      <li>{rightsText(access.rights)}</li>
+                    </ul>
+                    <p className="muted account-folder">{folderText(access)}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
+
+        <Section
           title="Settings for mail programs"
           description="Enter these in a mail program or on a phone to read and send your mail."
         >
@@ -274,12 +389,15 @@ export function AccountPage({
           <div className="account-apple">
             <p className="muted">
               On an iPhone, iPad or Mac, download the setup and open it; it asks for the password when you install it.
+              {me.client.dav_url ? ' It sets up your calendars and contacts too.' : ''}
             </p>
             <Button className="account-download" render={<a href={APPLE_SETUP_URL} download />}>
               Download setup for Apple devices
             </Button>
           </div>
         </Section>
+
+        <CalendarsSection client={me.client} address={me.address} appPasswordsOnly={me.app_passwords_only} />
 
         <footer className="account-footer muted">The people who manage this server can reset your password.</footer>
       </main>
@@ -298,6 +416,13 @@ export function AccountPage({
       />
       <CreateAppPasswordDialog open={dialog === 'app'} onOpenChange={close} onSubmit={addAppPassword} />
       <NewAppPasswordDialog created={created} onClose={() => setCreated(null)} />
+      <ShareDialog
+        open={sharing.open}
+        own={me.address}
+        existing={sharing.existing}
+        onOpenChange={(open) => setSharing((current) => ({ ...current, open }))}
+        onSubmit={saveShare}
+      />
     </div>
   )
 }

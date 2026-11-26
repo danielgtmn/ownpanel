@@ -128,8 +128,8 @@ func newMailEnvWith(t *testing.T, mail panel.MailService) *env {
 
 var (
 	mailDomainKeys = []string{"domain", "owner", "active", "activated_at", "checked_at", "problem", "mailboxes", "aliases", "dkim_selector", "dkim_record", "created_at", "organisation"}
-	mailboxKeys    = []string{"id", "address", "domain", "local_part", "owner", "quota_bytes", "send_per_hour", "send_per_day", "created_at", "usage", "display_name", "app_passwords_only"}
-	aliasKeys      = []string{"id", "address", "domain", "local_part", "catch_all", "targets", "owner", "created_at"}
+	mailboxKeys    = []string{"id", "address", "domain", "local_part", "owner", "quota_bytes", "send_per_hour", "send_per_day", "created_at", "usage", "display_name", "app_passwords_only", "kind", "keep_sent_copy", "shared_with", "access_to"}
+	aliasKeys      = []string{"id", "address", "domain", "local_part", "catch_all", "targets", "owner", "created_at", "sender_policy", "hide_from_directory"}
 )
 
 func TestMailRoutes(t *testing.T) {

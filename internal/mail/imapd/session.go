@@ -7,10 +7,13 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
 
+	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/mail/directory"
 	"github.com/danielgtmn/ownpanel/internal/mail/signin"
 	"github.com/danielgtmn/ownpanel/internal/mail/storage"
 )
@@ -27,7 +30,13 @@ type session struct {
 	ctx  context.Context
 	wake chan struct{}
 
-	unwatch func()
+	// watch holds a storage watch per mailbox the session reads (its own
+	// and those shared with it).
+	watch watches
+	// nextDir is the configuration waiting to be applied; reconfiguring is
+	// set while a goroutine applies them (queueReconfigure).
+	nextDir       atomic.Pointer[directory.Directory]
+	reconfiguring atomic.Bool
 
 	// mu guards the fields below and selected.queue. It is never held
 	// while calling the store: the storage callback takes it under the
@@ -66,14 +75,16 @@ func (s *session) end() {
 var errEnded = &imap.Error{Type: imap.StatusResponseTypeNo, Text: "Sign-in no longer valid"}
 
 // check ends the session if its mailbox was removed or its password
-// changed since sign-in.
+// changed since sign-in, and checks the rights on a selected folder of
+// another mailbox.
 func (s *session) check() error {
 	s.mu.Lock()
 	ok := s.authed && !s.gone && !s.ended
 	box := s.box
 	s.mu.Unlock()
-	if ok && signin.Valid(s.srv.opts.Directory(), box) {
-		return nil
+	dir := s.srv.opts.Directory()
+	if ok && signin.Valid(dir, box) {
+		return s.checkSelected(dir)
 	}
 	s.end()
 	return errEnded
@@ -81,9 +92,7 @@ func (s *session) check() error {
 
 func (s *session) Close() error {
 	s.srv.remove(s)
-	if s.unwatch != nil {
-		s.unwatch()
-	}
+	s.stopWatches()
 	s.mu.Lock()
 	s.sel = nil
 	s.mu.Unlock()
@@ -101,32 +110,40 @@ func (s *session) Login(username, password string) error {
 	if err := s.srv.opts.Store.EnsureMailbox(s.ctx, m.StorageID); err != nil {
 		return s.fail(err)
 	}
-	s.unwatch = s.srv.opts.Store.Watch(m.StorageID, s.onChange)
 	s.mu.Lock()
 	s.box, s.authed = m, true
 	s.mu.Unlock()
+	s.syncWatches(s.srv.opts.Directory())
 	return nil
 }
 
-// onChange is the storage callback: it runs under the store's write lock
-// and only queues.
-func (s *session) onChange(c storage.Change) {
-	s.mu.Lock()
-	switch c.Kind {
-	case storage.MailboxDeleted:
-		s.gone = true
-	case storage.Appended, storage.Expunged, storage.FlagsChanged:
-		// A session reports its own flag changes itself (STORE, FETCH
-		// setting \Seen); appends and expunges always go through the
-		// queue so that sequence numbers are only ever changed here.
-		if s.sel != nil && s.sel.name == c.Folder && !(c.Kind == storage.FlagsChanged && c.Origin == s) {
-			s.sel.queue = append(s.sel.queue, c)
+// onChange returns the storage callback for mailbox sid: it runs under the
+// store's write lock and only queues.
+func (s *session) onChange(sid string) func(storage.Change) {
+	return func(c storage.Change) {
+		s.mu.Lock()
+		switch c.Kind {
+		case storage.MailboxDeleted:
+			if sid == s.box.StorageID {
+				s.gone = true
+			}
+		case storage.Appended, storage.Expunged, storage.FlagsChanged:
+			// Another reader's own read state is no change for this one.
+			if c.Kind == storage.FlagsChanged && c.Reader != "" && c.Reader != s.box.StorageID {
+				break
+			}
+			// A session reports its own flag changes itself (STORE, FETCH
+			// setting \Seen); appends and expunges always go through the
+			// queue so that sequence numbers are only ever changed here.
+			if s.sel != nil && s.sel.t.sid == sid && s.sel.t.folder == c.Folder && !(c.Kind == storage.FlagsChanged && c.Origin == s) {
+				s.sel.queue = append(s.sel.queue, c)
+			}
 		}
-	}
-	s.mu.Unlock()
-	select {
-	case s.wake <- struct{}{}:
-	default:
+		s.mu.Unlock()
+		select {
+		case s.wake <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -158,7 +175,7 @@ func (s *session) fail(err error) error {
 }
 
 func errTryCreate(err error) error {
-	if errors.Is(err, storage.ErrNoFolder) {
+	if errors.Is(err, storage.ErrNoFolder) || err == errNoSuchFolder {
 		return &imap.Error{Type: imap.StatusResponseTypeNo, Code: imap.ResponseCodeTryCreate, Text: "No such folder"}
 	}
 	return err
@@ -177,7 +194,10 @@ func (s *session) Namespace() (*imap.NamespaceData, error) {
 	if err := s.check(); err != nil {
 		return nil, err
 	}
-	return &imap.NamespaceData{Personal: []imap.NamespaceDescriptor{{Delim: delim}}}, nil
+	return &imap.NamespaceData{
+		Personal: []imap.NamespaceDescriptor{{Delim: delim}},
+		Shared:   []imap.NamespaceDescriptor{{Prefix: sharedRoot + string(delim), Delim: delim}},
+	}, nil
 }
 
 const delim = '/'
@@ -191,14 +211,34 @@ func (s *session) Create(name string, options *imap.CreateOptions) error {
 	}
 	// A trailing delimiter only says that children are planned.
 	name = strings.TrimRight(name, string(delim))
-	return s.fail(s.srv.opts.Store.CreateFolder(s.ctx, s.id(), name))
+	t, err := s.resolve(s.srv.opts.Directory(), name)
+	if err != nil {
+		if reserved(name) {
+			return errReserved
+		}
+		return err
+	}
+	if !t.shared && reserved(name) {
+		return errReserved
+	}
+	if err := t.need(config.Write); err != nil {
+		return err
+	}
+	return s.fail(s.srv.opts.Store.CreateFolder(s.ctx, t.sid, t.folder))
 }
 
 func (s *session) Delete(name string) error {
 	if err := s.check(); err != nil {
 		return err
 	}
-	return s.fail(s.srv.opts.Store.DeleteFolder(s.ctx, s.id(), name))
+	t, err := s.resolve(s.srv.opts.Directory(), name)
+	if err != nil {
+		return err
+	}
+	if err := t.need(config.Write); err != nil {
+		return err
+	}
+	return s.fail(s.srv.opts.Store.DeleteFolder(s.ctx, t.sid, t.folder))
 }
 
 func (s *session) Rename(from, to string, _ *imap.RenameOptions) error {
@@ -206,36 +246,84 @@ func (s *session) Rename(from, to string, _ *imap.RenameOptions) error {
 		return err
 	}
 	to = strings.TrimRight(to, string(delim))
-	return s.fail(s.srv.opts.Store.RenameFolder(s.ctx, s.id(), from, to))
+	dir := s.srv.opts.Directory()
+	src, err := s.resolve(dir, from)
+	if err != nil {
+		return err
+	}
+	dst, err := s.resolve(dir, to)
+	if err != nil {
+		if reserved(to) && !src.shared {
+			return errReserved
+		}
+		return err
+	}
+	if src.sid != dst.sid {
+		return errAcrossMailboxes
+	}
+	if err := src.need(config.Write); err != nil {
+		return err
+	}
+	if !src.shared {
+		// Neither the folder nor any folder below it may end up under the
+		// names kept for other mailboxes.
+		folders, err := s.srv.opts.Store.ListFolders(s.ctx, src.sid)
+		if err != nil {
+			return s.fail(err)
+		}
+		for _, f := range folders {
+			if f.Name == src.folder || strings.HasPrefix(f.Name, src.folder+string(delim)) {
+				if reserved(dst.folder + strings.TrimPrefix(f.Name, src.folder)) {
+					return errReserved
+				}
+			}
+		}
+	}
+	return s.fail(s.srv.opts.Store.RenameFolder(s.ctx, src.sid, src.folder, dst.folder))
 }
 
 func (s *session) Subscribe(name string) error {
-	if err := s.check(); err != nil {
-		return err
-	}
-	return s.fail(s.srv.opts.Store.SetSubscribed(s.ctx, s.id(), name, true))
+	return s.subscribe(name, true)
 }
 
 func (s *session) Unsubscribe(name string) error {
+	return s.subscribe(name, false)
+}
+
+// subscribe changes the subscription of an own folder. Folders of other
+// mailboxes are always subscribed (iOS and Outlook show only those):
+// changing that is accepted and has no effect.
+func (s *session) subscribe(name string, on bool) error {
 	if err := s.check(); err != nil {
 		return err
 	}
-	return s.fail(s.srv.opts.Store.SetSubscribed(s.ctx, s.id(), name, false))
+	t, err := s.resolve(s.srv.opts.Directory(), name)
+	if t.shared && (err == nil || err == errNoSelect) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return s.fail(s.srv.opts.Store.SetSubscribed(s.ctx, t.sid, t.folder, on))
 }
 
 func (s *session) Status(name string, options *imap.StatusOptions) (*imap.StatusData, error) {
 	if err := s.check(); err != nil {
 		return nil, err
 	}
-	st, err := s.srv.opts.Store.FolderStatus(s.ctx, s.id(), name)
+	t, err := s.resolve(s.srv.opts.Directory(), name)
+	if err != nil {
+		return nil, err
+	}
+	st, err := s.srv.opts.Store.FolderStatusAs(s.ctx, t.sid, t.folder, t.reader)
 	if err != nil {
 		return nil, s.fail(err)
 	}
-	return s.statusData(st, options), nil
+	return s.statusData(t.name, st, options), nil
 }
 
-func (s *session) statusData(st storage.FolderStatus, options *imap.StatusOptions) *imap.StatusData {
-	d := &imap.StatusData{Mailbox: st.Name}
+func (s *session) statusData(name string, st storage.FolderStatus, options *imap.StatusOptions) *imap.StatusData {
+	d := &imap.StatusData{Mailbox: name}
 	u32 := func(n int) *uint32 { v := uint32(n); return &v }
 	if options.NumMessages {
 		d.NumMessages = u32(st.Messages)
@@ -274,13 +362,22 @@ func (s *session) List(w *imapserver.ListWriter, ref string, patterns []string, 
 		// LIST "" "": the hierarchy delimiter.
 		return w.WriteList(&imap.ListData{Attrs: []imap.MailboxAttr{imap.MailboxAttrNoSelect}, Delim: delim})
 	}
+	dir := s.srv.opts.Directory()
 	folders, err := s.srv.opts.Store.ListFolders(s.ctx, s.id())
 	if err != nil {
 		return s.fail(err)
 	}
-	byName := map[string]storage.Folder{}
+	byName, err := s.sharedFolders(dir)
+	if err != nil {
+		return s.fail(err)
+	}
 	for _, f := range folders {
-		byName[f.Name] = f
+		// An own folder named like a folder of a mailbox shared with the
+		// session is hidden by it (resolve gives the shared one).
+		if e, taken := byName[f.Name]; taken && !e.noSelect {
+			continue
+		}
+		byName[f.Name] = listEntry{folder: f, t: target{sid: s.id(), folder: f.Name, name: f.Name, rights: config.AllRights}}
 	}
 	// Parents that do not exist themselves (the hierarchy is only a naming
 	// convention) are listed as \Noselect when a pattern stops at their
@@ -304,8 +401,8 @@ func (s *session) List(w *imapserver.ListWriter, ref string, patterns []string, 
 		return false
 	}
 	subscribedChild := func(name string) bool {
-		for n, f := range byName {
-			if f.Subscribed && strings.HasPrefix(n, name+string(delim)) {
+		for n, e := range byName {
+			if e.folder.Subscribed && strings.HasPrefix(n, name+string(delim)) {
 				return true
 			}
 		}
@@ -339,8 +436,24 @@ func (s *session) List(w *imapserver.ListWriter, ref string, patterns []string, 
 		if !match(name) {
 			continue
 		}
-		f, exists := byName[name]
+		e, exists := byName[name]
+		f := e.folder
 		data := imap.ListData{Mailbox: name, Delim: delim}
+		if e.noSelect {
+			// The parents of other mailboxes' folders are always listed, so
+			// programs show them as a tree.
+			if options.SelectSpecialUse || options.SelectSubscribed && !options.SelectRecursiveMatch {
+				continue
+			}
+			data.Attrs = append(data.Attrs, imap.MailboxAttrNoSelect, imap.MailboxAttrHasChildren)
+			if options.SelectRecursiveMatch {
+				data.ChildInfo = &imap.ListDataChildInfo{Subscribed: true}
+			}
+			if err := w.WriteList(&data); err != nil {
+				return err
+			}
+			continue
+		}
 		if !exists {
 			// Only where a "%" pattern stops: with "*" the children are
 			// listed themselves.
@@ -392,9 +505,9 @@ func (s *session) List(w *imapserver.ListWriter, ref string, patterns []string, 
 			data.Attrs = append(data.Attrs, imap.MailboxAttr(f.SpecialUse))
 		}
 		if options.ReturnStatus != nil {
-			st, err := s.srv.opts.Store.FolderStatus(s.ctx, s.id(), name)
+			st, err := s.srv.opts.Store.FolderStatusAs(s.ctx, e.t.sid, e.t.folder, e.t.reader)
 			if err == nil {
-				data.Status = s.statusData(st, options.ReturnStatus)
+				data.Status = s.statusData(name, st, options.ReturnStatus)
 			} else if !errors.Is(err, storage.ErrNoFolder) {
 				return s.fail(err)
 			}
@@ -417,10 +530,22 @@ func (s *session) Append(name string, r imap.LiteralReader, options *imap.Append
 	if err := s.checkDisk(); err != nil {
 		return nil, err
 	}
-	res, err := s.srv.opts.Store.Append(s.ctx, s.id(), name, r, storage.AppendOptions{
+	dir := s.srv.opts.Directory()
+	t, err := s.resolve(dir, name)
+	if err != nil {
+		return nil, errTryCreate(err)
+	}
+	if err := t.need(config.Write); err != nil {
+		return nil, err
+	}
+	res, err := s.srv.opts.Store.Append(s.ctx, t.sid, t.folder, r, storage.AppendOptions{
 		Flags:   flags,
 		Date:    options.Time,
-		MaxSize: s.srv.opts.Directory().Limits().MaxMessageBytes,
+		MaxSize: dir.Limits().MaxMessageBytes,
+		Reader:  t.reader,
+		// The copy the program saves of mail sent for a mailbox that keeps
+		// copies itself is stored once (by Message-ID).
+		Dedupe: t.keepSent && s.isSent(t),
 	})
 	if err != nil {
 		return nil, s.fail(errTryCreate(err))

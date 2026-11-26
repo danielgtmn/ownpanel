@@ -86,9 +86,9 @@ It all works with standard programs: Thunderbird, Apple Mail/Calendar/Contacts, 
 |---|---|---|---|---|
 | G0 | Web entry point on the mail host: Caddy site, certificate, routing, DAV socket | S | — | [#85](https://github.com/danielgtmn/ownpanel/issues/85) |
 | G1 | Mailbox accounts: display name, self-service area, app passwords, organisations (built) | M | G0 | [#86](https://github.com/danielgtmn/ownpanel/issues/86) |
-| G2 | Filters and out-of-office (Sieve, ManageSieve) | L | G1 | [#87](https://github.com/danielgtmn/ownpanel/issues/87) |
-| G3 | Shared mailboxes, send as / on behalf, distribution groups | XL | G1 | [#88](https://github.com/danielgtmn/ownpanel/issues/88) |
-| G4a | Own calendars and contacts, discovery, sync, directory | XL | G1 | [#89](https://github.com/danielgtmn/ownpanel/issues/89) |
+| G2 | Filters and out-of-office (Sieve, ManageSieve) (built) | L | G1 | [#87](https://github.com/danielgtmn/ownpanel/issues/87) |
+| G3 | Shared mailboxes, send as / on behalf, distribution groups (built) | XL | G1 | [#88](https://github.com/danielgtmn/ownpanel/issues/88) |
+| G4a | Own calendars and contacts, discovery, sync, directory (built) | XL | G1 | [#89](https://github.com/danielgtmn/ownpanel/issues/89) |
 | G4b | Sharing calendars and address books | M | G4a | [#90](https://github.com/danielgtmn/ownpanel/issues/90) |
 | G5a | Free/busy, sending invitations, accepting replies | L | G4a | [#91](https://github.com/danielgtmn/ownpanel/issues/91) |
 | G5b | Server-side scheduling between mailboxes, rooms | XL | G5a | [#92](https://github.com/danielgtmn/ownpanel/issues/92) |
@@ -293,8 +293,8 @@ from the plan:
   the password hash at sign-in; at most 20 per mailbox. Every request checks
   the session against the directory (storage id, address, password hash),
   so a reset by the panel, a password change on another device or a
-  deleted mailbox end it at once; a conversion to shared will be added to
-  that check with G3 (mailbox kinds do not exist yet). The session that
+  deleted mailbox end it at once, and so does a conversion to shared (G3:
+  the check refuses shared mailboxes). The session that
   changes the password gets the new fingerprint and stays; the mailbox's
   other sessions are deleted. Idle 30 minutes, at most 12 hours; ended
   sessions are pruned every 10 minutes.
@@ -373,6 +373,156 @@ mailbox of their domain. The activity log records it, and the person sees
 **Limits:** at most 10 scripts per mailbox, 64 KiB each; step and time
 limits at runtime; scripts are parsed and checked when saved.
 
+**Library spike (G2):** `github.com/foxcpp/go-sieve` (fetched at
+`v0.0.0-20260523221512-9ae51b269e52` and read) is a clean RFC 5228
+interpreter with envelope, fileinto, imap4flags, variables, relational,
+copy, body, subaddress, environment and reject/ereject. It has **no**
+vacation, date/currentdate, include, duplicate, spamtest or mailbox
+(`mailboxexists`, `:create`), and no step or time limits (a run is bounded
+only by the script). Adding six extensions plus limits to a pre-1.0
+library we would have to fork was more work than writing exactly the
+subset: **own interpreter**, as expected.
+
+**Built (G2)** — how it turned out, and where it differs from the plan:
+
+- **`internal/mail/sieve`**: lexer, parser (nesting ≤ 32, lists ≤ 1024
+  strings, valid UTF-8, ≤ 64 KiB), a checking compiler into typed commands
+  and tests (`Compile`, errors with line numbers), and the runner
+  (`Script.Run`). Extensions: `fileinto`, `mailbox` (`mailboxexists`,
+  `:create`), `envelope`, `imap4flags`, `body` (`:raw`, `:text`,
+  `:content`), `copy`, `variables` (all modifiers, `string`), `relational`,
+  `date`/`currentdate` (every date part, `:zone`, `:originalzone`),
+  `vacation`, `vacation-seconds`, `include` (`:personal`, `:once`,
+  `:optional`, `return`, `global`; `:global` refused; depth ≤ 5, cycles
+  are errors), `duplicate` (`:handle`, `:header`, `:uniqueid`, `:seconds`,
+  `:last`; ≤ 30 days), `spamtest` and `spamtestplus` (`:percent`),
+  `regex` (≤ 1 KiB, Go RE2, captures as `${0}`…`${9}`), comparators
+  `i;octet`, `i;ascii-casemap`, `i;ascii-numeric`. `reject`/`ereject`
+  answer that they are not offered. Limits per run: 50,000 steps (commands,
+  tests, comparisons; long values cost more), 2 s, 100 actions, 512
+  variables of ≤ 16 KiB, one vacation; `:matches` has a work budget. The
+  parser and runner are fuzzed (`FuzzCompile`).
+- **Deviation:** the mailbox's own address is **not** offered "through
+  variables" (that needs the `environment` extension, which is not in the
+  list); it is in vacation's `:addresses` set implicitly, with the aliases
+  that deliver to the mailbox.
+- **`internal/mail/deliver`** runs the active script once per recipient
+  mailbox, after the spam checks, on port 25 (`smtpd`) and in submission
+  (mail between mailboxes). `envelope :to` is the RCPT that reached the
+  mailbox; spamtest maps the content score (1 clean … 10 junk; `:percent`
+  is score/threshold). Junk: keep and the implicit keep go to Junk, an
+  explicit `fileinto` moves it. A failed run, a missing folder (without
+  `:create`) or a redirect that may not happen keeps the message: filters
+  never lose mail. Compiled scripts are cached by content hash.
+- **Redirect:** never for Junk or DMARC failures (any policy), only when
+  the mailbox may forward (`config.Mailbox.NoForwarding`, set by the domain
+  owner, default allowed), at most 5 addresses per message, never to the
+  mailbox's own addresses. Loops: the copy gets `Delivered-To: <mailbox>`
+  and `X-Ownpanel-Loop: <opaque mark>` (a hash of host and storage id, not
+  the address); a message that already carries this mailbox's mark or
+  Delivered-To, 5 loop marks, more than 30 `Received` or a nesting of 5
+  is not redirected. Local targets are delivered directly (their filters
+  run), outside targets through the queue with SRS (a verified sender of
+  ours is kept) and the domain's hourly limit; refusals are
+  `delivery.not-forwarded` events.
+- **Two steps:** every recipient mailbox stores first (`Deliverer.Store`,
+  local forward targets included); forwards outside, replies and the
+  `duplicate` ids (RFC 7352: only for delivered mail) follow only once the
+  message is accepted (`Pending.Finish`), else reservations are taken back
+  (`Abort`). A local forward target that cannot store refuses the whole
+  message temporarily. Filters and port 25 read the header with the same
+  tolerant parser (`internal/mail/header`).
+- **Deviation (stricter):** out-of-office replies go only to confirmed
+  senders: SPF pass for the envelope sender's domain, or a passing DKIM
+  signature of the same organisational domain (mail between mailboxes
+  counts as confirmed). SPF none/neutral/softfail without such a signature
+  gets no reply, so forged senders of domains without SPF or DMARC get no
+  backscatter. Redirects and replies are refused while sending is blocked
+  for the mailbox, and forwards count against the mailbox's hourly and
+  daily limits as well as the domain's. `vacation :mime` keeps only the
+  `Content-*` fields of the reason. Regular expressions: values are cut to
+  64 KiB for `:regex`/`:matches`, programs over 2000 instructions and
+  repetitions over 50 are refused, and a match costs value × program size
+  steps. ManageSieve sign-ins count towards the sign-in network limit like
+  submission's. The simple settings are written with a compare-and-set
+  on the active script, and a generated script whose settings do not pass
+  the checks is not editable.
+- **Vacation** replies exactly under the rules listed above; once per
+  (sender, handle) and period in `mail.db` (`sieve_replies`; 1 to 90 days,
+  default 7; the record is taken back if the reply could not be queued).
+  Replies come from the mailbox's address (or `:from` if the mailbox may
+  send as it) with its display name, null sender, `Auto-Submitted:
+  auto-replied`, `In-Reply-To`, `References`, DKIM-signed for the From
+  domain, and are counted against the mailbox's and the domain's sending
+  limits. **Deviation:** reaching a limit skips the reply silently and does
+  not count as a limit hit, so outside mail cannot get a mailbox blocked.
+  Replies to mailboxes here go straight to their INBOX.
+- **Simple settings** (`internal/mail/rules`): out-of-office, forwarding
+  and filter rules generate the script `ownpanel`, which carries its
+  settings as JSON on one comment line; it can be edited as long as it is
+  exactly what its settings generate. Any other active script (or an
+  edited `ownpanel`) makes the page read-only and offers to replace it.
+  **Deviation:** instead of marked sections inside the person's own
+  script, there is one generated script; a hand-written script stays
+  stored (inactive) when replaced. Order: out-of-office, forwarding (without
+  a copy it stops the rest), then the rules (each ends with `stop`).
+- **ManageSieve** (`internal/mail/managesieve`, `-managesieve :4190`, the
+  listener `managesieve` in `/status` and Mail health): STARTTLS only;
+  before it only CAPABILITY, STARTTLS, NOOP and LOGOUT (others get `NO
+  (ENCRYPT-NEEDED)`), and data sent together with STARTTLS closes the
+  connection. AUTHENTICATE PLAIN only, through the IMAP sign-in
+  (`signin.Checker.Check`: app passwords, "only app passwords", throttle →
+  `NO (TRYLATER)`), re-checked before every command (a revoked app password
+  ends the session). All RFC 5804 commands listed above; PUTSCRIPT and
+  CHECKSCRIPT compile and answer `NO "line N: …"`; PUTSCRIPT never
+  activates. Limits: lines 8 KiB, scripts 64 KiB (larger literals up to
+  1 MiB are drained, beyond that the connection ends), 10 scripts, 3 failed
+  sign-ins, 20 commands before sign-in, 30 s / 5 min idle, connections per
+  IP as for SMTP and 500 in total. Not built: UNAUTHENTICATE and a
+  `_sieve._tcp` SRV record.
+- **Mail service API:** self-service `GET /account/api/filters`, `PUT
+  /account/api/out-of-office|forwarding|filters` (wiki/API.md); admin socket
+  `GET /mailboxes/{sid}/rules`, `PUT …/out-of-office`, `PUT …/forwarding`
+  (`config/rules.go`). `Status.Mailboxes[].OutOfOffice` tells whether a
+  reply is on now (only for the generated script).
+- **Panel:** `internal/panel/mailrules.go` (permission checks there:
+  mail read to see, mail write to change, own domains), API routes
+  `/api/mail/mailboxes/{id}/rules|out-of-office|forwarding|may-forward`,
+  MCP tools `get_/set_/clear_mailbox_out_of_office`, table
+  `mailbox_no_forwarding` (migration 0017, after G3's 0015/0016). The panel sees whether a reply
+  is on and its dates; text and forwarding address only if a panel user set
+  them. Activity: `mail.mailbox.out-of-office`, `mail.mailbox.forwarding`,
+  `mail.mailbox.may-forward` (never the text).
+- **mail.db:** G2's tables (`sieve_scripts`, `sieve_replies`,
+  `sieve_duplicates`) are migration 10, after G3's 8 and G4a's 9.
+
+**Built with G3 (the Manage right):**
+
+- **Self-service:** the four filter routes take `?mailbox=<address>`
+  (`account/filters.go`, `rulesTarget`): the signed-in mailbox, or one it
+  has Manage on per `directory.Rights` (shared, or personal through
+  self-delegation), checked on every request; grants across organisations
+  never reach `Rights`. Anything else is `404`. The answer carries
+  `mailbox`; out-of-office and forwarding record the managing mailbox as
+  `set_by` with the time. The page shows a choice "Your mailbox / …" above
+  the three sections (`AccountFilters`, `managedMailboxes` from `/me`'s
+  `access`).
+- **ManageSieve:** the PLAIN authorization identity may name a mailbox the
+  user has Manage on; the session then works on that mailbox's scripts.
+  Checked after the password (no hint whether the mailbox exists) and
+  again before every command (losing the right ends the session with BYE).
+- **Delivery:** a shared mailbox runs its own script like any mailbox.
+  **Decision:** `\Seen` from a filter (`imap4flags`, `keep`/`fileinto
+  :flags`) is dropped when storing into a shared mailbox (`deliver.store`),
+  because the read state there is per reader (`shared_seen`) and a stored
+  `\Seen` is nobody's; it would only reappear if the mailbox became
+  personal. Other flags are kept.
+- **Out-of-office from a shared mailbox:** `From` is the shared address;
+  `:from` accepts only the shared mailbox's own address and aliases
+  (`MaySendAs` of that mailbox), never the address of a holder.
+- **Panel:** unchanged; the domain owner manages a shared mailbox's
+  out-of-office and forwarding like any other.
+
 ## G3 — Shared mailboxes, delegation, distribution groups
 
 **Shared mailbox:** a mailbox of kind `shared`. It has no password and
@@ -439,6 +589,118 @@ MCP tools for kinds, grants and groups follow AGENTS.md.
 **Converting:** a personal mailbox can become shared (its password and app passwords are dropped,
 and its sessions end) and back (a password is set). Import (exists) works for shared mailboxes too.
 
+**Built (G3)** — how it turned out:
+
+- **Configuration** (`internal/mail/config/sharing.go`): `Mailbox.Kind`
+  (`""` = personal, `"shared"`), `Mailbox.Grants []{StorageID, Rights}`,
+  `Mailbox.KeepSentCopy`, `Alias.SenderPolicy` (`""`, `anyone`,
+  `organisation`, `members`) and `Alias.HideFromDirectory`, all
+  `omitempty`, so configurations without them hash as before. `Validate`
+  refuses a shared mailbox with a password or app passwords, keeping copies
+  on a personal one, an unknown kind or right, grants to itself, twice,
+  without rights, to a missing or shared mailbox or across organisations,
+  more than 100 grants, and a policy on the catch-all or an unknown one.
+  `DropInvalid` leaves out only the bad grants (the mailbox stays), turns
+  keep-sent-copy off on personal mailboxes and makes an invalid sender
+  policy `members` (the stricter choice).
+- **Rights** are `read`, `write` (implies read), `manage`, `send-as` and
+  `send-on-behalf`, on the grant's owner: a grant on a shared mailbox is
+  set by the domain owner or an admin; a grant on a personal mailbox is the
+  person's own sharing, set in the self-service area (`PUT
+  /account/api/delegations`, event `mailbox.grants-changed` with a revision
+  like the G1 account events). Domain owners and admins see those and may
+  remove them, but not add them. At most 100 grants per mailbox.
+- **Converting:** to shared drops the password, app passwords and
+  "mail programs only with app passwords", ends IMAP, SMTP and
+  self-service sessions (sign-in treats a shared mailbox like an unknown
+  address) and removes the access it had to other mailboxes (only personal
+  mailboxes hold grants). To personal
+  needs a new password and turns keep-sent-copy off; the mailbox's grants
+  stay and then count as the person's own sharing.
+- **The mail service checks again** (Decision 3): `internal/mail/directory`
+  re-applies the rules on every configuration load and ignores grants that
+  no longer fit (domain moved to another organisation, mailbox deleted or
+  made shared), logged as `mail: grant ignored`. The panel keeps them,
+  shows them with `active: false` ("not in effect") and leaves them out of
+  the push (logged as "left out of the push"); they work again once the
+  domains are grouped again.
+- **IMAP** (`internal/mail/imapd/shared.go`): folders under
+  `Shared/<address>/…`, listed in a plain `LIST` and always subscribed;
+  `UNSUBSCRIBE` is accepted and changes nothing. `Shared` and
+  `Shared/<address>` are `\Noselect` parents; `NAMESPACE` announces
+  `Shared/`. Own folder names `Shared/<something with @>/…` are reserved:
+  CREATE and RENAME refuse them, also for folders below a renamed parent.
+  Own folders of such names from before (an import, another server) are
+  kept, listed and reachable as long as no mailbox of that address is
+  shared with the person; then the shared mailbox's folder of the same name
+  wins. COPY/MOVE across mailboxes work: copying out needs Read,
+  copying or moving in needs Write on the destination, moving out needs
+  Write; quota is charged to the destination. RENAME across mailboxes is
+  refused. Removing a grant while one of its folders is selected, or
+  changing that mailbox's kind, ends that connection (`BYE Access to this
+  shared mailbox was removed or changed`); removing Write makes the
+  selected folder read-only, and CLOSE then closes it without expunging.
+  Each session applies configuration changes in order, always the latest.
+  New mail in a shared folder reaches IDLE sessions.
+- **Per-user `\Seen`** in `mail.db` migration 8, table `shared_seen`.
+  Deviation: the plan keyed it by (storage id, folder, uid, reader); it is
+  keyed by the message row and the reader instead, so the read state moves
+  with a message and goes with it. Unread counts, SEARCH, FETCH FLAGS, the
+  implicit `\Seen`, STORE and IDLE updates are per reader. Read-only
+  readers may still set and clear their own `\Seen` (not after EXAMINE).
+  Migration 8 also adds `messages.msgid` for de-duplicating sent copies.
+- **Submission** (`internal/mail/submission/session.go`): send-as allows
+  the shared address and its aliases as From and MAIL FROM; an alias
+  counts only when it delivers to that mailbox alone (send-as on one member
+  does not cover a group). On behalf
+  allows From = exactly the shared address only with a `Sender` holding
+  the signed-in mailbox's own address or one of its aliases; MAIL FROM may
+  be the shared address or stay the person's own. Both sending limits
+  count (one message once for each; the domain once), and so do those of
+  every other mailbox named in From or held as Sender through send-as; a
+  blocked mailbox among them cannot be sent for. **Keep a copy** stores the message in the
+  shared mailbox's `\Sent` folder, marked read for the sender, and skips a
+  later APPEND (or a repeated send) with the same Message-ID there.
+- **Distribution groups:** the policy of the addressed alias is checked at
+  submission against the signed-in mailbox and the mailbox it sends for,
+  and on port 25 against the envelope sender, which then needs SPF or DKIM
+  to pass for exactly its domain (stricter than the relaxed alignment for
+  other mail of our domains, so a sibling domain cannot speak for it;
+  loopback exempt). `members` counts the alias's targets, aliases of
+  member mailboxes and a member sending as a shared mailbox. Refusal:
+  `550 5.7.1 This address accepts mail only from certain senders`; the null
+  sender is refused for restricted groups.
+- **Panel:** migrations `0015_shared_mailboxes.sql` and
+  `0016_mailbox_grants_at.sql` (when the panel last changed a mailbox's
+  grants: pushed as `Mailbox.GrantsSetAt`, so an older self-delegation
+  reported late neither comes back in the panel nor stays in the mail
+  service's overlay, like a password reset). Late password or app password
+  changes of a mailbox that became shared are ignored, and `DropInvalid`
+  strips sign-in data from a shared mailbox instead of leaving it out; API and MCP tools as in
+  [[API|API]] and [[MCP|MCP]] (`set_mailbox_kind` only makes mailboxes
+  shared: making one personal needs a password). Activity actions
+  `mail.mailbox.kind`, `mail.mailbox.keep-sent-copy`, `mail.mailbox.grant`,
+  `mail.mailbox.grant-change`, `mail.mailbox.grant-remove` and
+  `mail.mailbox.grants-changed` (by the mailbox).
+- **Limits and deviations:**
+  - No ACL extension, as planned.
+  - Per-user `\Seen` only in shared mailboxes. In a delegated personal
+    mailbox everyone shares the owner's read state (like Exchange
+    delegates), so Read alone there is really read-only.
+  - Messages already read before a mailbox became shared, and imported
+    messages, are unread for each reader: the stored flag is nobody's read
+    state there.
+  - `manage` opens the mailbox's filters and out-of-office on the holder's
+    own page and through ManageSieve (see G2, "Built with G3"); a `\Seen`
+    set by a filter at delivery into a shared mailbox is dropped.
+  - Subscriptions of shared folders are fixed.
+  - `HideFromDirectory` is stored and pushed; it takes effect with the
+    address book (G4a).
+  - Only the addressed alias's policy is checked, not that of aliases it
+    expands to.
+  - "Own address" in `Sender` for on behalf accepts the person's aliases
+    too.
+
 ## G4a — Calendars, contacts, directory
 
 **Protocols:** CalDAV (RFC 4791) and CardDAV (RFC 6352) over WebDAV, plus sync
@@ -488,6 +750,134 @@ Synchronizer add-on.
 - Migration guides: Google via `.ics`/`.vcf` export or a CalDAV pull with an app password;
   Microsoft 365 via `.ics` and CSV export.
 
+**Built (G4a):** how it turned out, and where it differs from the plan:
+
+- **Packages:** `internal/mail/dav` (the HTTP handler: tree, sign-in,
+  PROPFIND/PROPPATCH/REPORT/MKCALENDAR/MKCOL/GET/PUT/DELETE, the
+  directory, import/export helpers), `internal/mail/davobj` (iCalendar and
+  vCard: checks, index spans, filters, time zones, splitting and joining
+  files) and `internal/mail/storage/dav.go` (collections, objects,
+  deletions; migration 8). Hooks: `web.Options.DAV` and
+  `server.Options.DAVHandler` (wired in `cmd/ownpaneld/mail.go`),
+  `server.SignIn()`, `mailsetup.ClientSettings.DAVURL`/`WithDAV`, the panel's
+  record list and three account API routes.
+- **Tree:** `/dav/principals/<address>/`, `/dav/calendars/<address>/<calendar>/<object>`,
+  `/dav/addressbooks/<address>/<book>/<object>`, the directory at
+  `/dav/addressbooks/<address>/directory/` (a reserved name).
+  `/.well-known/caldav|carddav` answer `GET`, `HEAD`, `PROPFIND` and
+  `OPTIONS` with `301` to `/dav/`. `OPTIONS` needs no sign-in; the `DAV`
+  header is `1, 3, access-control, calendar-access, addressbook,
+  extended-mkcol` (no locking).
+- **Sign-in:** HTTP Basic on every request through the mail programs'
+  `signin.Checker` (`Check`: main password unless AppPasswordsOnly, or an
+  app password; its cache makes repeated requests one HMAC). Requests for
+  another host than the mail host answer 404. 3000 requests per mailbox in
+  5 minutes, then `429` with `Retry-After`.
+- **Authorisation:** `dav.Authorizer` (`Home`, `Collection` returning a
+  privilege set) decides on every request; G4a's `OwnOnly` gives a mailbox
+  all privileges on its own homes and nothing on others (404). G4b plugs a
+  share-aware implementation in there. The directory is always read-only.
+- **Storage:** files under `dav/<storage_id>/<collection id>/` in the mail
+  data directory with the same durability as messages (temporary file,
+  fsync, rename, fsync of the directory, then the index commit); replaced
+  and deleted files go through `trash/` like messages. Tables
+  `dav_collections` (seq, pruned_seq), `dav_objects` (UID, component,
+  size, `start_at`/`end_at`, file, seq) and `dav_deletions`. Every change
+  takes the collection's next sequence number. ETags, ctags and sync tokens
+  are derived from the **DAV epoch** (`meta.dav_epoch`), the collection and
+  that number, not stored: the start-up check sets a new epoch when it
+  found rows without files or indexed stray files, or the `restored` marker
+  exists, which changes all of them at once. Files without a row are
+  removed (a write that crashed before its commit, never acknowledged, so
+  the client's retry works); only after a restore are they indexed again,
+  when they are a valid object of an existing collection whose UID is not
+  taken, under the name the UID gives (`<uid>.ics` when simple).
+  Deletions older than 90 days are pruned hourly (`dav.Handler.Run`); a
+  token older than the kept deletions, of another collection or epoch, or
+  not ours answers `403 valid-sync-token`.
+- **Quota:** DAV bytes, plus 512 bytes per object and 128 per kept
+  deletion record for their index rows, are added to
+  `mailboxes.used_bytes` (not to the message count). At most 10 000
+  deletion records are kept per collection; trimming the oldest raises
+  `pruned_seq`, so older tokens get `403 valid-sync-token`. IMAP
+  appends, delivery and the self-service page see the total; a PUT that would pass the quota answers `507` with
+  `quota-not-exceeded`. `quota-used-bytes`/`quota-available-bytes` on homes
+  and collections.
+- **Default collections** ("Calendar" `calendar`, "Contacts" `contacts`)
+  are created on the first DAV or self-service request when the mailbox has
+  no collection of that kind; deleting the last calendar brings a new
+  empty one back on the next request.
+- **Objects:** one VEVENT or VTODO (with its overrides, same UID) per
+  calendar resource, or one vCard with a UID; VJOURNAL and others are
+  refused (`supported-calendar-component`). Data is stored byte for byte,
+  so the ETag of a PUT is valid. Limits as planned: 1 MiB per object (413
+  with `max-resource-size`), 100 collections per mailbox and 100 000
+  objects per collection (`507`), XML bodies 1 MiB / depth 32 / 20 000
+  elements, content lines with more than 8 KiB of parameters refused.
+- **Time ranges:** the index keeps the span of all occurrences; queries
+  pre-filter on it and then evaluate the full filter. Recurrence is
+  expanded with rrule-go up to 20 000 occurrences and **20 years** after
+  the start (a rule that may go on is open-ended in the index and matches
+  ranges beyond the horizon). TZIDs resolve as an IANA name (also at the
+  end of Mozilla/Citadel ids), the VTIMEZONE's X-LIC-LOCATION, a list of
+  common Windows names, the VTIMEZONE's standard offset as a fixed zone
+  (approximate), else UTC; floating times, dates and approximated zones
+  are widened by 14 hours in both directions, so no reader's zone misses
+  them (clients filter again). The Go time zone database is built in.
+- **Reports:** calendar-query (comp/prop/param filters, text-match,
+  time-range), calendar-multiget, addressbook-query (with `limit`),
+  addressbook-multiget, sync-collection (level 1; `limit` ignored),
+  expand-property (answered like PROPFIND of the named properties, not
+  expanded), principal-property-search and principal-search-property-set
+  (empty until G5). `calendar-data`/`address-data` are returned whole:
+  `<expand>`, `<limit-recurrence-set>` and partial retrieval are ignored.
+- **PROPPATCH:** displayname, description and Apple's calendar-color are
+  kept; Apple's calendar-order, calendar-timezone and
+  schedule-calendar-transp are accepted and not kept; anything else fails
+  the request (403/424). MKCALENDAR takes displayname, description, colour
+  and the component set (VEVENT, VTODO); address books come with extended
+  MKCOL (RFC 5689). COPY, MOVE and LOCK are not offered.
+- **Directory:** vCard 3.0 cards of the organisation's mailboxes (FN and N
+  from the display name) and aliases (not the catch-all, not addresses
+  that are mailboxes), generated per configuration and cached; a field
+  `HideFromDirectory` on mailboxes or aliases (G3) is honoured when present
+  (looked up by name). Its ETags are hashes of the cards; its sync token
+  is a hash of all of them: the current token gives no changes, any other
+  one `403 valid-sync-token` (a full sync, which is small).
+- **Discovery records:** SRV `_caldavs._tcp`/`_carddavs._tcp` `0 1 443
+  <mail host>.` and TXT `path=/dav/` per mail domain, optional
+  (recommended), listed and written with the others only when the mail
+  host serves the web socket (`selfServiceProblem() == ""`).
+- **Apple profile:** `com.apple.caldav.account` and
+  `com.apple.carddav.account` payloads (host, 443, SSL, user name, principal
+  URL, no password) when `ClientSettings.DAVURL` is set: always on the
+  self-service page, in the panel when the mail host serves the web socket.
+- **Thunderbird:** autoconfig cannot carry calendars; Thunderbird 115+
+  finds them from the address or the mail host through the SRV/TXT records
+  and `/.well-known` (documented in [[E-Mail|E-Mail]]).
+- **Self-service:** `GET /account/api/collections`, `GET
+  …/collections/{kind}/{name}/export`, `POST …/import` (10 MB, UID-based
+  replace); the page lists calendars and address books with import and
+  download and shows the settings for programs.
+- **Export and backup:** the mailbox export zip gains
+  `calendars/<name>.ics` and `contacts/<name>.vcf`, listed under `dav` in `manifest.json` (the zip import skips exactly those entries; mail folders of any name come
+  back); the backup copies `dav/` with the rest of the data directory;
+  deleting a mailbox deletes its collections.
+- **Libraries (spike):** `emersion/go-webdav` was read and **not used**:
+  its CalDAV/CardDAV servers own the request handling (fixed `Backend`
+  interfaces, no sync-collection in the server, no privilege sets, no
+  quota, PROPPATCH unimplemented, path layout and well-known redirect
+  fixed, XML types internal), so using it would have meant working around
+  most of it. The handler and the XML (encoding/xml with our own limits)
+  are ours. Used: `emersion/go-ical` (parsing iCalendar, which pulls in
+  `teambition/rrule-go` for RRULE expansion) and `emersion/go-vcard`
+  (parsing vCards). Time zones, recurrence sets, filters and writing
+  files are ours; go-ical's own time zone lookup (`time.LoadLocation` of
+  the TZID only) and its encoder (no line folding) are not used.
+- **Not built:** sharing (G4b), scheduling and free/busy (G5), COPY/MOVE,
+  partial retrieval and server-side expansion, sync `limit`, a web
+  calendar (G6).
+
 ## G4b — Sharing calendars and address books
 
 A person shares a collection with mailboxes of the same organisation, read
@@ -535,15 +925,15 @@ decided in its own design.
 
 ## Libraries
 
-None of these are in the module today; a spike decides before each phase:
+A spike decides before each phase:
 
-- **Sieve:** `foxcpp/go-sieve` is, from memory, small, pre-1.0 and without
-  `vacation`. Expect our own interpreter for the extension list above,
-  with a parser fuzzed in tests.
-- **DAV:** `emersion/go-webdav` for the XML types and basic handlers. Expect
-  our own layer for sync, privileges, quota, sharing and scheduling.
-- **iCalendar/vCard:** `emersion/go-ical` (from memory, it wraps an RRULE
-  library for recurrence sets) and `emersion/go-vcard`.
+- **Sieve:** decided in G2: our own interpreter (`internal/mail/sieve`);
+  `foxcpp/go-sieve` lacks vacation, date, include, duplicate, spamtest,
+  mailbox and runtime limits (see the spike in G2).
+- **DAV:** decided in G4a: our own handler and XML on `encoding/xml`;
+  `emersion/go-webdav` was not a fit (see G4a, built).
+- **iCalendar/vCard:** `emersion/go-ical` (with `teambition/rrule-go` for
+  RRULE) and `emersion/go-vcard` for parsing (G4a).
 
 ## Permissions
 
@@ -552,7 +942,7 @@ None of these are in the module today; a spike decides before each phase:
 | Group domains into organisations | yes (logged) | own domains | no |
 | Make a mailbox shared / personal / resource | yes | own domains | no |
 | Grant access to a shared mailbox, groups | yes | own domains, same organisation | no |
-| Delegate own mailbox | — | — | yes, same organisation |
+| Delegate own mailbox | see, remove | see, remove (own domains) | yes, same organisation |
 | Own password, display name, app passwords | reset only | reset only | yes |
 | Filters, out-of-office | set/clear (logged) | set/clear for own domains (logged) | yes |
 | Share own calendars / address books | — | — | yes, same organisation |
