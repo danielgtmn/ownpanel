@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -180,4 +181,52 @@ func (s *Server) Deliver(url string, appID int64, event, deliveryID string, body
 	}
 	req.Header = s.Headers(appID, event, deliveryID, body)
 	return http.DefaultClient.Do(req)
+}
+
+// DevDelivery is for clicking through in development (fakegithub -dev):
+// GET /_dev/push?repo=owner/name&branch=main&message=…&author=… answers
+// with the body of a push delivery to the first installation that sees
+// the repository, and the headers GitHub would send with it as
+// X-Dev-<header> (X-Dev-X-Hub-Signature-256, …), so it can be sent to the
+// panel with curl. Never enable it outside development.
+func (s *Server) devPush(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	owner, name, _ := strings.Cut(q.Get("repo"), "/")
+	s.mu.Lock()
+	var repoID, instID, appID int64
+	for _, rp := range s.repos {
+		if rp.Owner == owner && rp.Name == name {
+			repoID = rp.ID
+		}
+	}
+	for _, i := range s.insts {
+		if repoID != 0 && slices.ContainsFunc(s.reposOf(i), func(rp Repo) bool { return rp.ID == repoID }) {
+			instID, appID = i.ID, i.AppID
+			break
+		}
+	}
+	s.mu.Unlock()
+	if instID == 0 {
+		message(w, http.StatusNotFound, "no installation sees that repository")
+		return
+	}
+	branch := q.Get("branch")
+	if branch == "" {
+		branch = "main"
+	}
+	author := q.Get("author")
+	if author == "" {
+		author = s.User
+	}
+	body := s.PushPayload(Push{RepoID: repoID, InstallationID: instID, Ref: "refs/heads/" + branch, After: q.Get("sha"),
+		Message: q.Get("message"), AuthorName: author, AuthorLogin: author, Pusher: author})
+	id := q.Get("delivery")
+	if id == "" {
+		id = secret(8) + "-" + secret(4)
+	}
+	for k, v := range s.Headers(appID, "push", id, body) {
+		w.Header()["X-Dev-"+k] = v
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(body)
 }
