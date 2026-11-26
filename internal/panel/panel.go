@@ -25,6 +25,7 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/deploy"
 	"github.com/danielgtmn/ownpanel/internal/dns"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/github"
 	"github.com/danielgtmn/ownpanel/internal/store"
 	"github.com/danielgtmn/panzerschrank"
 )
@@ -89,6 +90,10 @@ type Config struct {
 	// Resolver if it can, else (only when Resolver is nil too) asking the
 	// authoritative nameservers.
 	MXResolver dns.MXResolver
+
+	// GitHub is where GitHub connections are made (github.go); nil means
+	// github.com. Tests pass a client for a fake.
+	GitHub *github.Client
 }
 
 // Service owns every use case of the panel.
@@ -162,6 +167,13 @@ type Service struct {
 	// (mailaccounts.go).
 	appKeyMu sync.Mutex
 	appKey   string
+
+	// github talks to GitHub; githubFlows are connections waiting for the
+	// person to come back from GitHub; githubRepos caches repository
+	// lists (github.go).
+	github      *github.Client
+	githubFlows githubFlows
+	githubRepos githubRepoCache
 }
 
 // New returns a Service. It rejects invalid web server options up front, and
@@ -193,6 +205,10 @@ func New(cfg Config) (*Service, error) {
 		mail:           cfg.Mail,
 		mx:             cfg.MXResolver,
 		certs:          newMailCerts(cfg.MailTLSDir, cfg.Caddy.TLSMode),
+		github:         cfg.GitHub,
+	}
+	if s.github == nil {
+		s.github = DefaultGitHub()
 	}
 	if cfg.MailHost != "" {
 		d, err := store.NormalizeDomain(cfg.MailHost)

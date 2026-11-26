@@ -54,6 +54,7 @@ type Manifest struct {
 // App is an App created through the fake.
 type App struct {
 	ID            int64
+	Name          string
 	Slug          string
 	ClientID      string
 	Owner         string
@@ -314,7 +315,7 @@ func (s *Server) createCode(m Manifest, org string) (string, error) {
 		return '-'
 	}, name), "-")
 	s.apps[id] = &App{
-		ID: id, Slug: slug, ClientID: "Iv23fake" + strconv.FormatInt(id, 10), Owner: owner, OwnerType: ownerType,
+		ID: id, Name: name, Slug: slug, ClientID: "Iv23fake" + strconv.FormatInt(id, 10), Owner: owner, OwnerType: ownerType,
 		Manifest: m, Key: key, WebhookSecret: secret(16), ClientSecret: secret(20),
 	}
 	code := secret(10)
@@ -442,7 +443,7 @@ func (s *Server) appJSON(a *App) map[string]any {
 	return map[string]any{
 		"id": a.ID, "slug": a.Slug, "node_id": "A_" + a.Slug, "client_id": a.ClientID,
 		"owner": map[string]any{"login": a.Owner, "type": a.OwnerType, "id": 1},
-		"name":  a.Manifest.Name, "description": a.Manifest.Description, "external_url": a.Manifest.URL,
+		"name":  a.Name, "description": a.Manifest.Description, "external_url": a.Manifest.URL,
 		"html_url":    s.webURL() + "/apps/" + a.Slug,
 		"permissions": a.Manifest.DefaultPermissions, "events": a.Manifest.DefaultEvents,
 		"created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
