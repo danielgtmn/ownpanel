@@ -10,6 +10,13 @@ import (
 	"github.com/danielgtmn/panzerschrank"
 )
 
+// The tools of mailrules.go and their annotations (see TestToolsAndAnnotations).
+var _ = expectTools(map[string]toolWant{
+	"get_mailbox_out_of_office":   {readOnly: true, idempotent: true},
+	"set_mailbox_out_of_office":   {idempotent: true},
+	"clear_mailbox_out_of_office": {destructive: true, idempotent: true},
+})
+
 // rulesMail is a mail service that keeps one out-of-office reply.
 type rulesMail struct {
 	importMail

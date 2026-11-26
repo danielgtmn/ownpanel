@@ -9,6 +9,15 @@ import (
 	"github.com/danielgtmn/panzerschrank"
 )
 
+// The tools of mailaccounts.go and their annotations (see TestToolsAndAnnotations).
+var _ = expectTools(map[string]toolWant{
+	"list_mail_organisations":      {readOnly: true, idempotent: true},
+	"set_mail_organisation":        {},
+	"delete_mail_organisation":     {destructive: true},
+	"set_mail_domain_organisation": {idempotent: true},
+	"set_mailbox_display_name":     {idempotent: true},
+})
+
 func TestMailAccountTools(t *testing.T) {
 	e := newEnvWith(t, "", func(c *panel.Config) {
 		box, err := panzerschrank.OpenKeyFile(filepath.Join(t.TempDir(), panzerschrank.KeyFile))
