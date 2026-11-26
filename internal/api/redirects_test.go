@@ -144,10 +144,10 @@ func TestDNSZoneRoutes(t *testing.T) {
 
 	rec := d.root("POST", zones, `{"name":"fresh.com"}`)
 	if rec.Code != 201 || rec.Body.String() != `{"connection_id":`+id+`,"connection_name":"main","name":"fresh.com","read_only":false,`+
-		`"nameservers":["hydrogen.ns.hetzner.com","oxygen.ns.hetzner.com","helium.ns.hetzner.de"]}`+"\n" {
+		`"nameservers":["hydrogen.ns.hetzner.com","oxygen.ns.hetzner.com","helium.ns.hetzner.de"],"adopted":true,"used_by":[]}`+"\n" {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body)
 	}
-	wantKeys(t, rec.Body.Bytes(), "name", "connection_id", "connection_name", "read_only", "nameservers")
+	wantKeys(t, rec.Body.Bytes(), "name", "connection_id", "connection_name", "read_only", "nameservers", "adopted", "used_by")
 	rec = d.root("GET", "/api/dns/zones", "")
 	if !strings.Contains(rec.Body.String(), `"name":"fresh.com","read_only":false,"nameservers":["hydrogen.ns.hetzner.com"`) {
 		t.Fatalf("zone list: %s", rec.Body)

@@ -19,6 +19,8 @@ import {
   type PanelSettings,
 } from '../../shared/settings/index.ts'
 import { ErrorState, FormDialog, LoadingState, PageHeader, Section } from '../../shared/ui/index.ts'
+import { useSession } from '../../shared/session/index.ts'
+import { ConnectedAccountsSection } from './ConnectedAccountsSection.tsx'
 import { ipAccessNotice } from './rules.ts'
 import { MailSection } from './MailSection.tsx'
 import { UpdatesSection } from './UpdatesSection.tsx'
@@ -212,7 +214,7 @@ function Loaded({ initial }: { initial: PanelSettings }) {
 
   return (
     <>
-      <PageHeader title="Settings" description="How people reach this panel, the sites and the mail on this server." />
+      <PageHeader title="Settings" description="Your connected accounts, and how people reach this panel, the sites and the mail on this server." />
       {notice ? (
         <div className="notice settings-notice">
           <p>{notice}</p>
@@ -221,6 +223,7 @@ function Loaded({ initial }: { initial: PanelSettings }) {
           )}
         </div>
       ) : null}
+      <ConnectedAccountsSection />
       <AddressesSection settings={settings} onSaved={setSettings} />
       <PanelAddressSection settings={settings} onSaved={setSettings} open={panelOpen} onOpenChange={setPanelOpen} />
       <CertificateSection settings={settings} onSaved={setSettings} />
@@ -230,13 +233,27 @@ function Loaded({ initial }: { initial: PanelSettings }) {
   )
 }
 
-export function SettingsPage() {
+function MemberSettings() {
+  return (
+    <>
+      <PageHeader title="Settings" description="The accounts this panel may use for you." />
+      <ConnectedAccountsSection />
+    </>
+  )
+}
+
+function ServerSettings() {
   const settings = useResource(getSettings, 'settings')
-  usePageTitle('Settings')
 
   if (settings.status === 'loading') return <LoadingState label="Loading settings…" />
   if (settings.status === 'error') {
     return <ErrorState title="Couldn't load the settings" message={errorMessage(settings.error)} onRetry={settings.retry} />
   }
   return <Loaded initial={settings.data} />
+}
+
+export function SettingsPage() {
+  const { user } = useSession()
+  usePageTitle('Settings')
+  return user.role === 'admin' ? <ServerSettings /> : <MemberSettings />
 }

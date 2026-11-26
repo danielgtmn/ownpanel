@@ -89,6 +89,7 @@ Access tokens let scripts, CI and AI agents use the API and MCP without a passwo
 | Change or delete DNS records | yes | no | yes | no |
 | Add, check, remove DNS connections | yes | no | yes | no |
 | List DNS connections | yes | yes | yes | no |
+| Choose which DNS domains are in the panel | yes | no | yes | no |
 | Manage access tokens | yes | no | no | no |
 | Change own password or e-mail address | yes | no | no | no |
 | List, create, change, delete users; read activity log | admins only | no | admins only | no |
@@ -119,6 +120,7 @@ Admins can read the newest entries (web interface: **Activity**; API: `GET /api/
 | `site.publish`, `site.make-live` | new version, version switched |
 | `site.upload-link` | upload link created |
 | `dns.connect`, `dns.disconnect` | DNS connection added or removed |
+| `dns.zone.adopt`, `dns.zone.release` | a domain is managed in the panel, or no longer |
 | `dns.record.set`, `dns.record.delete`, `dns.point` | DNS changes |
 
 Passwords, tokens, links to choose a new password and DNS API tokens are never logged, and e-mail addresses are not written to the activity log; TXT values longer than 60 characters are replaced by their length. Failed sign-ins are not logged.

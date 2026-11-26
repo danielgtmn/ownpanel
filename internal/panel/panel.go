@@ -25,8 +25,8 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/deploy"
 	"github.com/danielgtmn/ownpanel/internal/dns"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
-	"github.com/danielgtmn/ownpanel/internal/secrets"
 	"github.com/danielgtmn/ownpanel/internal/store"
+	"github.com/danielgtmn/panzerschrank"
 )
 
 // WebServer is what the service needs from the web server.
@@ -49,7 +49,7 @@ type Config struct {
 
 	// Secrets encrypts the tokens of DNS connections. Without it no DNS
 	// connection can be added or used.
-	Secrets *secrets.Box
+	Secrets *panzerschrank.Box
 	// ServerIPs are the server's public addresses from -server-ip, which
 	// domains should point at (see ParseServerIPs). Set, they override (and
 	// lock) the addresses from the settings.
@@ -119,7 +119,7 @@ type Service struct {
 	startupGrace time.Duration
 	startupRetry time.Duration
 
-	secrets     *secrets.Box
+	secrets     *panzerschrank.Box
 	serverIPs   []netip.Addr
 	newProvider func(provider, token string) (dns.Provider, error)
 	resolver    dns.Resolver

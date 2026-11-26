@@ -1,7 +1,7 @@
 import './dns.css'
 import { startsWith, type Family, type FamilyRow } from '../../shared/families/index.ts'
 import { hrefFor } from '../../shared/routing/index.ts'
-import { PlugIcon, RecordsIcon } from '../../shared/ui/index.ts'
+import { RecordsIcon } from '../../shared/ui/index.ts'
 import type { PanelModule } from '../types.ts'
 
 export function zoneRows(family: Family): FamilyRow[] {
@@ -20,7 +20,7 @@ export const dnsModule: PanelModule = {
   label: 'DNS',
   basePath: '/dns',
   page: () => import('./DnsPage.tsx').then((page) => page.DnsPage),
-  railEntry: { label: 'DNS connections', icon: PlugIcon },
+  railEntry: { label: 'DNS domains', icon: RecordsIcon },
   overviewRow: { label: 'DNS', icon: RecordsIcon, count: (sources) => sources.zones.length },
   familyRows: zoneRows,
 }

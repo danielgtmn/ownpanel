@@ -312,6 +312,9 @@ func TestToolsAndAnnotations(t *testing.T) {
 		"delete_mail_organisation":     {destructive: true},
 		"set_mail_domain_organisation": {idempotent: true},
 		"set_mailbox_display_name":     {idempotent: true},
+		"list_dns_domains":             {readOnly: true, idempotent: true},
+		"manage_dns_domain":            {idempotent: true},
+		"stop_managing_dns_domain":     {},
 	}
 	got := map[string]bool{}
 	for _, tool := range res.Tools {

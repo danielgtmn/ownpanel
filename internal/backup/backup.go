@@ -14,8 +14,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/danielgtmn/ownpanel/internal/secrets"
 	"github.com/danielgtmn/ownpanel/internal/store"
+	"github.com/danielgtmn/panzerschrank"
 )
 
 // DBFile is the database's name inside the data directory.
@@ -37,7 +37,7 @@ const RestoredMarker = "restored"
 
 // files are copied as they are if they exist: the key for the secrets in
 // the database (without it, DNS connections cannot be used after a restore).
-var files = []string{secrets.KeyFile}
+var files = []string{panzerschrank.KeyFile}
 
 // Create writes a tar.gz of dataDir to out (mode 0600, must not exist). It
 // is safe while the daemon runs: the database is copied with VACUUM INTO.

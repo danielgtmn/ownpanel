@@ -1,28 +1,35 @@
 import { confirm } from '@ui-sdk/react/alert-dialog'
 import { Button } from '@ui-sdk/react/button'
 import { toast } from '@ui-sdk/react/toast'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { errorMessage } from '../../shared/api/index.ts'
+import {
+  checkConnection,
+  connectionHealth,
+  createConnection,
+  deleteConnection,
+  isOwnConnection,
+  listConnections,
+  providerLabel,
+  zoneCountLabel,
+  type Connection,
+  type NewConnection,
+} from '../../shared/dns/index.ts'
 import { formatDate, formatDateTime, isoTimestamp } from '../../shared/format/index.ts'
-import type { Resource } from '../../shared/hooks/index.ts'
-import { clearQuery, useQuery } from '../../shared/routing/index.ts'
+import { useResource } from '../../shared/hooks/index.ts'
+import { addDomainHref, clearQuery, useQuery } from '../../shared/routing/index.ts'
 import { useSession } from '../../shared/session/index.ts'
 import { EmptyState, ErrorState, LoadingState, Section } from '../../shared/ui/index.ts'
-import { AddDomainDialog } from './AddDomainDialog.tsx'
-import { checkConnection, createConnection, createZone, deleteConnection } from './api.ts'
 import { ConnectDialog } from './ConnectDialog.tsx'
-import type { Connection, NewConnection, Zone } from './types.ts'
-import { connectionHealth, isOwnConnection, providerLabel, zoneCountLabel } from './zones.ts'
 
 type RowProps = {
   connection: Connection
   own: boolean
   onCheck: (connection: Connection) => Promise<void>
   onRemove: (connection: Connection) => Promise<void>
-  onAddDomain: (connection: Connection) => void
 }
 
-function ConnectionRow({ connection, own, onCheck, onRemove, onAddDomain }: RowProps) {
+function AccountRow({ connection, own, onCheck, onRemove }: RowProps) {
   const health = connectionHealth(connection, formatDateTime)
   const count = zoneCountLabel(connection.zone_count)
   return (
@@ -35,7 +42,7 @@ function ConnectionRow({ connection, own, onCheck, onRemove, onAddDomain }: RowP
           <li>
             Added <time dateTime={isoTimestamp(connection.created_at)}>{formatDate(connection.created_at)}</time>
           </li>
-          {count ? <li>{count}</li> : null}
+          {count ? <li>{count} in the account</li> : null}
         </ul>
         <p className="connection-health" data-tone={health.tone}>
           {health.text}
@@ -47,11 +54,6 @@ function ConnectionRow({ connection, own, onCheck, onRemove, onAddDomain }: RowP
         ) : null}
       </div>
       <div className="record-actions">
-        {own ? (
-          <Button onClick={() => onAddDomain(connection)}>
-            Add domain<span className="visually-hidden"> to {connection.name}</span>
-          </Button>
-        ) : null}
         {own ? (
           <Button pendingAnnouncement="Checking" onClick={() => onCheck(connection)}>
             Check again<span className="visually-hidden"> for {connection.name}</span>
@@ -65,43 +67,21 @@ function ConnectionRow({ connection, own, onCheck, onRemove, onAddDomain }: RowP
   )
 }
 
-type Props = {
-  connections: Resource<Connection[]>
-  onChanged: () => Promise<void>
-}
-
-export function ConnectionsSection({ connections, onChanged }: Props) {
+/** The accounts at DNS providers. Connecting one only gives access; its domains are chosen under DNS. */
+export function ConnectedAccountsSection() {
   const { user } = useSession()
+  const connections = useResource(listConnections, 'dns-connections')
+  const wantsConnect = useQuery().has('connect')
   const [connecting, setConnecting] = useState(false)
-  const [addingTo, setAddingTo] = useState<Connection | null>(null)
-  const wantsAdd = useQuery().has('add')
-  const ready = connections.status === 'ready' ? connections.data : null
-
-  // "Add a domain" from the sidebar: with one connection of your own, open its dialog; with none, offer to connect.
-  const own = wantsAdd && ready ? ready.filter((connection) => isOwnConnection(connection, user)) : null
-  const askedToConnect = own?.length === 0
-  const askedToAdd = own?.length === 1 ? own[0] : null
-  const askedToChoose = (own?.length ?? 0) > 1
-
-  useEffect(() => {
-    if (!askedToChoose) return
-    toast.info('Choose the connection to add the domain to.')
-    clearQuery()
-  }, [askedToChoose])
-
-  async function addDomain(connection: Connection, name: string): Promise<Zone> {
-    const zone = await createZone(connection.id, name)
-    toast.success(`${zone.name} was added to ${connection.name}.`)
-    void onChanged()
-    return zone
-  }
 
   async function create(connection: NewConnection) {
     const created = await createConnection(connection)
     setConnecting(false)
     clearQuery()
-    toast.success(`${created.name} is connected.`)
-    await onChanged()
+    toast.success(`${created.name} is connected. Choose under DNS which of its domains to manage here.`, {
+      action: { label: 'Choose domains', onAction: () => (window.location.hash = addDomainHref()) },
+    })
+    await connections.reload()
   }
 
   async function check(connection: Connection) {
@@ -112,15 +92,15 @@ export function ConnectionsSection({ connections, onChanged }: Props) {
     } catch (error) {
       toast.error(errorMessage(error))
     }
-    await onChanged()
+    await connections.reload()
   }
 
   async function remove(connection: Connection) {
     const yes = await confirm({
       title: `Remove ${connection.name}?`,
       description:
-        "You can't manage its domains here anymore until you connect again. DNS records at Hetzner are not changed by removing the connection.",
-      confirmLabel: 'Remove connection',
+        "Its domains are no longer managed here until you connect it again. Nothing at Hetzner is changed or deleted.",
+      confirmLabel: 'Remove account',
       cancelLabel: 'Cancel',
     })
     if (!yes) return
@@ -130,7 +110,7 @@ export function ConnectionsSection({ connections, onChanged }: Props) {
     } catch (error) {
       toast.error(errorMessage(error))
     }
-    await onChanged()
+    await connections.reload()
   }
 
   const connectButton = (
@@ -141,14 +121,14 @@ export function ConnectionsSection({ connections, onChanged }: Props) {
 
   return (
     <Section
-      title="DNS connections"
-      description="Connect the company that manages your domains, so you can change their DNS records here."
+      title="Connected accounts"
+      description="Accounts at the company that manages your domains. Connecting one gives the panel access; you choose under DNS which of its domains to manage here."
       actions={connections.status === 'ready' && connections.data.length > 0 ? connectButton : null}
     >
-      {connections.status === 'loading' ? <LoadingState label="Loading your DNS connections…" /> : null}
+      {connections.status === 'loading' ? <LoadingState label="Loading your connected accounts…" /> : null}
       {connections.status === 'error' ? (
         <ErrorState
-          title="Couldn't load your DNS connections"
+          title="Couldn't load your connected accounts"
           message={errorMessage(connections.error)}
           onRetry={connections.retry}
         />
@@ -156,41 +136,31 @@ export function ConnectionsSection({ connections, onChanged }: Props) {
       {connections.status === 'ready' && connections.data.length === 0 ? (
         <EmptyState
           inSection
-          title="No DNS connection yet"
-          description="Connect Hetzner to see your domains and manage their DNS records."
+          title="No account connected yet"
+          description="Connect Hetzner to manage the DNS records of your domains here."
           action={connectButton}
         />
       ) : null}
       {connections.status === 'ready' && connections.data.length > 0 ? (
-        <ul className="record-list" aria-label="DNS connections">
+        <ul className="record-list" aria-label="Connected accounts">
           {connections.data.map((connection) => (
-            <ConnectionRow
+            <AccountRow
               key={connection.id}
               connection={connection}
               own={isOwnConnection(connection, user)}
               onCheck={check}
               onRemove={remove}
-              onAddDomain={setAddingTo}
             />
           ))}
         </ul>
       ) : null}
       <ConnectDialog
-        open={connecting || askedToConnect}
+        open={connecting || wantsConnect}
         onOpenChange={(open) => {
           setConnecting(open)
           if (!open) clearQuery()
         }}
         onSubmit={create}
-      />
-      <AddDomainDialog
-        connection={addingTo ?? askedToAdd}
-        onOpenChange={(open) => {
-          if (open) return
-          setAddingTo(null)
-          clearQuery()
-        }}
-        onCreate={addDomain}
       />
     </Section>
   )

@@ -298,9 +298,7 @@ function Rail({
           </TipTrigger>
           <MenuContent side="right" align="start">
             <MenuItem render={<a href={hrefWithQuery(['sites'], { new: '1' })} />}>New site</MenuItem>
-            <MenuItem render={<a href={hrefWithQuery(['dns'], { add: '1' })} />}>
-              Add a domain at your DNS provider
-            </MenuItem>
+            <MenuItem render={<a href={hrefWithQuery(['dns'], { add: '1' })} />}>Add a domain</MenuItem>
             <MenuItem render={<a href={hrefWithQuery(['redirects'], { new: '1' })} />}>New redirect</MenuItem>
             <MenuItem render={<a href={hrefWithQuery(['mail'], { new: '1' })} />}>Turn on e-mail for a domain</MenuItem>
           </MenuContent>

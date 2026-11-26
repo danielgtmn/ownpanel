@@ -4,8 +4,8 @@ ownpanel can
 
 - show whether the domains of a site or of a domain redirect point at the server,
 - set them up with one click ("point to this server"),
-- add and delete whole domains (zones) at **Hetzner**, showing the nameservers to enter at the registrar,
-- edit the DNS records of zones hosted at **Hetzner**.
+- manage the DNS records of the domains (zones) you choose, from your accounts at **Hetzner**,
+- add and delete whole domains (zones) at **Hetzner**, showing the nameservers to enter at the registrar.
 
 Only Hetzner is supported. It uses the DNS part of the Hetzner Cloud API (`api.hetzner.cloud`), the DNS in the Hetzner Console. The old `dns.hetzner.com` API was shut down in May 2026 and is not supported; zones that still live only there are not visible.
 
@@ -24,7 +24,9 @@ They must be public addresses unless `-tls` is `internal` or `off` (the document
 
 1. In the Hetzner Console, open the **project** that holds your zones.
 2. Go to **Security**, then **API tokens**, and create a token with **Read & Write** access.
-3. In ownpanel, open **DNS** and choose **Connect Hetzner**: a name (1 to 64 characters, unique among your connections) and the token.
+3. In ownpanel, open **Settings**, section **Connected accounts**, and choose **Connect Hetzner**: a name (1 to 64 characters, unique among your connections) and the token. Every person sees Settings; members only see their connected accounts there.
+
+Connecting an account only gives the panel access. **None of its domains shows up in the panel yet**: you choose them (next section).
 
 A token covers exactly one project. For zones in several projects, add one connection per project.
 
@@ -46,7 +48,29 @@ Adding, checking and removing connections needs a password sign-in or an access 
 - Access tokens limited to some sites cannot use DNS connections, zones or records. They can see the domain status of their sites and use "point to this server" for them.
 - `read` tokens can list zones and records.
 
-## Adding and deleting domains
+## Which domains are in the panel
+
+The DNS page and the sidebar list the domains that are **in the panel**:
+
+- domains you chose to manage here (**DNS → Add domain**, or **Manage DNS here** on a domain's page), and
+- every zone of your own connections that something of yours uses: a domain of your sites, of your whole-domain redirects or your mail domains, and for administrators the panel's own domain (a name below the zone counts too, like `shop.example.com` for `example.com`). Those are in the panel automatically and stay while they are used. Another person's site on a name in your zone does not bring it into your panel, but it still keeps the zone from being deleted at Hetzner (below).
+
+**Add domain** offers two ways:
+
+- **Choose one from your accounts**: a list of the zones of your connected accounts that are not in the panel yet, grouped by account when you have several. Choosing one changes nothing at Hetzner.
+- **Create a new one** at Hetzner (below). A created domain is in the panel right away.
+
+The page of a domain (**`#/d/<domain>`**) offers **Manage DNS here** when one of your accounts has its zone, or a link to create it when none has.
+
+**Stop managing here** on a zone's page takes a chosen domain out of the panel. The zone and its records stay at Hetzner unchanged, and you can add it again any time. A domain that something of yours uses cannot be taken out; the page says what uses it.
+
+Entering a domain without managing its DNS here is not possible: a domain appears in the panel through a site, redirect, mail domain or a managed zone.
+
+Upgrading from a version before this existed adopts nothing: zones that something of yours uses stay visible, all others disappear from the sidebar but stay available under **Add domain**. Nothing is deleted at Hetzner.
+
+API: `GET /api/dns/zones` lists the zones in the panel, `GET /api/dns/zones/available` the others; `PUT /api/dns/connections/{id}/zones/{zone}/managed` starts managing a zone, `DELETE` on the same path stops (`409` while it is used). Both need what adding connections needs.
+
+## Adding and deleting domains at Hetzner
 
 A domain (zone) can be created in one of your connections: `POST /api/dns/connections/{id}/zones` with `{"name": "example.com"}`.
 
@@ -54,9 +78,9 @@ A domain (zone) can be created in one of your connections: `POST /api/dns/connec
 - Hetzner creates it as a primary zone with a default TTL of 3600 seconds, adds the SOA record and NS records of its nameservers, and assigns three nameservers. They are returned in `nameservers` (and listed with every zone): **enter them at the domain's registrar**, otherwise the records here are not used.
 - A domain that already exists at Hetzner, in this or another project, is refused.
 
-Deleting a domain removes the zone with all its records: `DELETE /api/dns/connections/{id}/zones/{zone}` with `{"confirm": "<zone name>"}`; the name must be repeated exactly.
+Deleting a domain removes the zone with all its records at Hetzner (on its page: **Delete domain**, with the name typed to confirm). This is separate from **Stop managing here**, which deletes nothing: `DELETE /api/dns/connections/{id}/zones/{zone}` with `{"confirm": "<zone name>"}`; the name must be repeated exactly.
 
-- It is refused while any site, redirect or the panel itself uses the domain or a name below it, whoever they belong to. The answer lists what uses it (things of other people without their names). Remove those first.
+- It is refused while any site, redirect, mail domain or the panel itself uses the domain or a name below it, whoever they belong to. The answer lists what uses it (things of other people without their names). Remove those first.
 - A zone that is protected against deletion at Hetzner is refused; remove the protection in the Hetzner Console first.
 
 Both work only through **your own** connections, with a password sign-in or an access token with `write` access to all sites.
@@ -122,8 +146,8 @@ It needs `write` access to the site (or to be allowed to change the domain redir
 
 ## Activity log
 
-`dns.connect`, `dns.disconnect`, `dns.record.set`, `dns.record.delete`, `dns.point`, `dns.zone.create` and `dns.zone.delete` are recorded. Tokens never are, and TXT values longer than 60 characters are left out.
+`dns.connect`, `dns.disconnect`, `dns.record.set`, `dns.record.delete`, `dns.point`, `dns.zone.create`, `dns.zone.delete`, `dns.zone.adopt` (managing a zone here) and `dns.zone.release` (no longer) are recorded. Tokens never are, and TXT values longer than 60 characters are left out.
 
-## Not available through MCP
+## Through MCP
 
-The MCP tools only check domains (`check_site_domains`); managing DNS connections, domains and records is done in the web interface or the API ([[API|API]]).
+`check_site_domains` checks a site's domains. `list_dns_domains` lists the domains in the panel (with `available`, the others of your connected accounts), `manage_dns_domain` and `stop_managing_dns_domain` choose them ([[MCP|MCP]]). Connecting accounts and changing records is done in the web interface or the API ([[API|API]]).
