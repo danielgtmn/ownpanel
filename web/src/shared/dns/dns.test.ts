@@ -6,7 +6,7 @@ import { groupByAccount, staysBecause, zoneKey, zonesNamed } from './zones.ts'
 
 function connection(overrides: Partial<Connection> = {}): Connection {
   return {
-    id: 1,
+    id: '1',
     provider: 'hetzner',
     name: 'Main',
     owner: 'ana',
@@ -19,7 +19,7 @@ function connection(overrides: Partial<Connection> = {}): Connection {
   }
 }
 
-function zone(connection_id: number, connection_name: string, name: string, overrides: Partial<Zone> = {}): Zone {
+function zone(connection_id: string, connection_name: string, name: string, overrides: Partial<Zone> = {}): Zone {
   return { connection_id, connection_name, name, read_only: false, nameservers: [], adopted: false, used_by: [], ...overrides }
 }
 
@@ -62,7 +62,7 @@ describe('connected accounts', () => {
 
 describe('choosing domains', () => {
   it('groups the domains to choose from by account, both by name', () => {
-    const groups = groupByAccount([zone(2, 'Work', 'b.org'), zone(1, 'Home', 'z.com'), zone(2, 'Work', 'a.org')])
+    const groups = groupByAccount([zone('2', 'Work', 'b.org'), zone('1', 'Home', 'z.com'), zone('2', 'Work', 'a.org')])
     expect(groups.map((group) => [group.connectionName, group.zones.map((z) => z.name)])).toEqual([
       ['Home', ['z.com']],
       ['Work', ['a.org', 'b.org']],
@@ -71,14 +71,14 @@ describe('choosing domains', () => {
   })
 
   it('finds the zones of a domain', () => {
-    const zones = [zone(1, 'A', 'example.com'), zone(2, 'B', 'example.com'), zone(1, 'A', 'other.org')]
-    expect(zonesNamed(zones, 'Example.COM.').map((z) => z.connection_id)).toEqual([1, 2])
+    const zones = [zone('1', 'A', 'example.com'), zone('2', 'B', 'example.com'), zone('1', 'A', 'other.org')]
+    expect(zonesNamed(zones, 'Example.COM.').map((z) => z.connection_id)).toEqual(['1', '2'])
     expect(zonesNamed(zones, 'nope.net')).toEqual([])
   })
 
   it('says why a used domain stays', () => {
-    expect(staysBecause(zone(1, 'A', 'example.com'))).toBeNull()
-    expect(staysBecause(zone(1, 'A', 'example.com', { used_by: ['the site blog (blog.example.com)', 'e-mail for example.com'] }))).toBe(
+    expect(staysBecause(zone('1', 'A', 'example.com'))).toBeNull()
+    expect(staysBecause(zone('1', 'A', 'example.com', { used_by: ['the site blog (blog.example.com)', 'e-mail for example.com'] }))).toBe(
       'example.com stays here while it is used by the site blog (blog.example.com), e-mail for example.com.',
     )
   })
@@ -90,13 +90,13 @@ describe('domain requests', () => {
   it('lists managed and available domains, tolerating missing fields', async () => {
     const fetchMock = vi.fn(async (url: string) =>
       url.endsWith('/available')
-        ? json({ zones: [{ connection_id: 1, connection_name: 'A', name: 'x.org', read_only: false }], problems: null })
+        ? json({ zones: [{ connection_id: '1', connection_name: 'A', name: 'x.org', read_only: false }], problems: null })
         : json({ zones: null }),
     )
     vi.stubGlobal('fetch', fetchMock)
     await expect(listZones()).resolves.toEqual({ zones: [], problems: [] })
     await expect(listAvailableZones()).resolves.toEqual({
-      zones: [zone(1, 'A', 'x.org')],
+      zones: [zone('1', 'A', 'x.org')],
       problems: [],
     })
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(['/api/dns/zones', '/api/dns/zones/available'])
@@ -106,13 +106,13 @@ describe('domain requests', () => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
       init?.method === 'DELETE'
         ? new Response(null, { status: 204 })
-        : json({ connection_id: 4, connection_name: 'Main', name: 'example.com', read_only: false, nameservers: null, adopted: true, used_by: null }),
+        : json({ connection_id: '4', connection_name: 'Main', name: 'example.com', read_only: false, nameservers: null, adopted: true, used_by: null }),
     )
     vi.stubGlobal('fetch', fetchMock)
-    const adopted = await adoptZone(4, 'example.com')
+    const adopted = await adoptZone('4', 'example.com')
     expect(adopted).toMatchObject({ adopted: true, used_by: [], nameservers: [] })
-    await releaseZone(4, 'example.com')
-    await createZone(4, 'example.com')
+    await releaseZone('4', 'example.com')
+    await createZone('4', 'example.com')
     expect(fetchMock.mock.calls.map(([url, init]) => `${init?.method} ${url}`)).toEqual([
       'PUT /api/dns/connections/4/zones/example.com/managed',
       'DELETE /api/dns/connections/4/zones/example.com/managed',

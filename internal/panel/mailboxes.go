@@ -16,7 +16,7 @@ import (
 
 // Mailbox is what callers see of a mailbox; never its password hash.
 type Mailbox struct {
-	ID          int64     `json:"id"`
+	ID          string    `json:"id"`
 	Address     string    `json:"address"`
 	Domain      string    `json:"domain"`
 	LocalPart   string    `json:"local_part"`
@@ -76,7 +76,7 @@ type MailboxLimits struct {
 
 // MailAlias is what callers see of an alias.
 type MailAlias struct {
-	ID        int64     `json:"id"`
+	ID        string    `json:"id"`
 	Address   string    `json:"address"`
 	Domain    string    `json:"domain"`
 	LocalPart string    `json:"local_part"`
@@ -93,7 +93,7 @@ type MailAlias struct {
 
 func mailboxView(m store.Mailbox, usage map[string]config.MailboxStatus) Mailbox {
 	v := Mailbox{
-		ID: m.ID, Address: m.LocalPart + "@" + m.Domain, Domain: m.Domain, LocalPart: m.LocalPart, Owner: m.Owner,
+		ID: idString(m.ID), Address: m.LocalPart + "@" + m.Domain, Domain: m.Domain, LocalPart: m.LocalPart, Owner: m.Owner,
 		QuotaBytes: m.QuotaBytes, SendPerHour: m.SendPerHour, SendPerDay: m.SendPerDay, CreatedAt: m.CreatedAt,
 		DisplayName: m.DisplayName, AppPasswordsOnly: m.AppPasswordsOnly,
 		Kind: m.Kind, KeepSentCopy: m.KeepSentCopy, SharedWith: []MailboxGrant{}, AccessTo: []MailboxAccess{},
@@ -117,7 +117,7 @@ func mailboxView(m store.Mailbox, usage map[string]config.MailboxStatus) Mailbox
 
 func aliasView(a store.MailAlias) MailAlias {
 	return MailAlias{
-		ID: a.ID, Address: a.LocalPart + "@" + a.Domain, Domain: a.Domain, LocalPart: a.LocalPart, CatchAll: a.LocalPart == "*",
+		ID: idString(a.ID), Address: a.LocalPart + "@" + a.Domain, Domain: a.Domain, LocalPart: a.LocalPart, CatchAll: a.LocalPart == "*",
 		Targets: slices.Clone(a.Targets), Owner: a.Owner, CreatedAt: a.CreatedAt,
 		SenderPolicy: a.SenderPolicy, HideFromDirectory: a.HideFromDirectory,
 	}
@@ -144,8 +144,12 @@ func (s *Service) mailUsage(ctx context.Context) map[string]config.MailboxStatus
 
 // visibleMailbox returns a mailbox the actor may see; others answer
 // NotFound like missing ones.
-func (s *Service) visibleMailbox(ctx context.Context, a Actor, id int64) (store.Mailbox, error) {
+func (s *Service) visibleMailbox(ctx context.Context, a Actor, mailboxID string) (store.Mailbox, error) {
 	if err := needMailRead(a); err != nil {
+		return store.Mailbox{}, err
+	}
+	id, err := storeID(mailboxID, "mailbox")
+	if err != nil {
 		return store.Mailbox{}, err
 	}
 	m, err := s.store.Mailbox(ctx, id)
@@ -205,7 +209,7 @@ func (s *Service) Mailboxes(ctx context.Context, a Actor, domain string) ([]Mail
 }
 
 // MailboxOf returns one mailbox.
-func (s *Service) MailboxOf(ctx context.Context, a Actor, id int64) (Mailbox, error) {
+func (s *Service) MailboxOf(ctx context.Context, a Actor, id string) (Mailbox, error) {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return Mailbox{}, err
@@ -345,7 +349,7 @@ func (s *Service) CreateMailbox(ctx context.Context, a Actor, domain string, in 
 
 // SetMailboxPassword replaces a mailbox's password. Mail clients signed in
 // with the old one have to sign in again.
-func (s *Service) SetMailboxPassword(ctx context.Context, a Actor, id int64, password string) error {
+func (s *Service) SetMailboxPassword(ctx context.Context, a Actor, id string, password string) error {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return err
@@ -366,7 +370,7 @@ func (s *Service) SetMailboxPassword(ctx context.Context, a Actor, id int64, pas
 	// What the mailbox changed itself is recorded first, so the push below
 	// includes it and the reset takes effect at once (catchUpMailEvents).
 	s.catchUpMailEvents(ctx)
-	if err := s.store.SetMailboxPassword(ctx, id, hash); err != nil {
+	if err := s.store.SetMailboxPassword(ctx, m.ID, hash); err != nil {
 		return storeError(err)
 	}
 	s.record(ctx, a, "mail.mailbox.password", m.LocalPart+"@"+m.Domain, "")
@@ -375,7 +379,7 @@ func (s *Service) SetMailboxPassword(ctx context.Context, a Actor, id int64, pas
 
 // SetMailboxLimits changes a mailbox's quota and send limits. Only admins
 // may raise them.
-func (s *Service) SetMailboxLimits(ctx context.Context, a Actor, id int64, in MailboxLimits) (Mailbox, error) {
+func (s *Service) SetMailboxLimits(ctx context.Context, a Actor, id string, in MailboxLimits) (Mailbox, error) {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return Mailbox{}, err
@@ -390,7 +394,7 @@ func (s *Service) SetMailboxLimits(ctx context.Context, a Actor, id int64, in Ma
 	if next == m {
 		return mailboxView(m, nil), nil
 	}
-	if err := s.store.SetMailboxLimits(ctx, id, next.QuotaBytes, next.SendPerHour, next.SendPerDay); err != nil {
+	if err := s.store.SetMailboxLimits(ctx, m.ID, next.QuotaBytes, next.SendPerHour, next.SendPerDay); err != nil {
 		return Mailbox{}, storeError(err)
 	}
 	s.record(ctx, a, "mail.mailbox.limits", m.LocalPart+"@"+m.Domain, limitsDetail(next))
@@ -399,7 +403,7 @@ func (s *Service) SetMailboxLimits(ctx context.Context, a Actor, id int64, in Ma
 
 // DeleteMailbox removes a mailbox; the mail service deletes its stored
 // mail (retried later if it cannot be reached now).
-func (s *Service) DeleteMailbox(ctx context.Context, a Actor, id int64) error {
+func (s *Service) DeleteMailbox(ctx context.Context, a Actor, id string) error {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return err
@@ -407,7 +411,7 @@ func (s *Service) DeleteMailbox(ctx context.Context, a Actor, id int64) error {
 	if err := needMailWrite(a); err != nil {
 		return err
 	}
-	if _, err := s.store.DeleteMailbox(ctx, id); err != nil {
+	if _, err := s.store.DeleteMailbox(ctx, m.ID); err != nil {
 		return storeError(err)
 	}
 	s.record(ctx, a, "mail.mailbox.delete", m.LocalPart+"@"+m.Domain, "")
@@ -416,7 +420,7 @@ func (s *Service) DeleteMailbox(ctx context.Context, a Actor, id int64) error {
 
 // UnblockMailbox lets a mailbox the mail service blocked send again
 // (admins only).
-func (s *Service) UnblockMailbox(ctx context.Context, a Actor, id int64) error {
+func (s *Service) UnblockMailbox(ctx context.Context, a Actor, id string) error {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return err
@@ -448,8 +452,12 @@ func mailServiceError(err error) error {
 // ---- aliases ----
 
 // visibleAlias returns an alias the actor may see.
-func (s *Service) visibleAlias(ctx context.Context, a Actor, id int64) (store.MailAlias, error) {
+func (s *Service) visibleAlias(ctx context.Context, a Actor, aliasID string) (store.MailAlias, error) {
 	if err := needMailRead(a); err != nil {
+		return store.MailAlias{}, err
+	}
+	id, err := storeID(aliasID, "alias")
+	if err != nil {
 		return store.MailAlias{}, err
 	}
 	al, err := s.store.MailAlias(ctx, id)
@@ -514,7 +522,7 @@ func (s *Service) MailAliases(ctx context.Context, a Actor, domain string) ([]Ma
 }
 
 // MailAliasOf returns one alias.
-func (s *Service) MailAliasOf(ctx context.Context, a Actor, id int64) (MailAlias, error) {
+func (s *Service) MailAliasOf(ctx context.Context, a Actor, id string) (MailAlias, error) {
 	al, err := s.visibleAlias(ctx, a, id)
 	if err != nil {
 		return MailAlias{}, err
@@ -565,7 +573,7 @@ func (s *Service) CreateMailAlias(ctx context.Context, a Actor, domain, local st
 
 // UpdateMailAlias replaces an alias's local part and targets, and with
 // group its distribution group settings (without, they stay).
-func (s *Service) UpdateMailAlias(ctx context.Context, a Actor, id int64, local string, targets []string, group ...AliasGroup) (MailAlias, error) {
+func (s *Service) UpdateMailAlias(ctx context.Context, a Actor, id string, local string, targets []string, group ...AliasGroup) (MailAlias, error) {
 	cur, err := s.visibleAlias(ctx, a, id)
 	if err != nil {
 		return MailAlias{}, err
@@ -588,7 +596,7 @@ func (s *Service) UpdateMailAlias(ctx context.Context, a Actor, id int64, local 
 	if g.SenderPolicy, err = aliasGroupPolicy(l, g.SenderPolicy); err != nil {
 		return MailAlias{}, err
 	}
-	saved, err := s.store.UpdateMailAlias(ctx, store.MailAlias{ID: id, LocalPart: l, Targets: t,
+	saved, err := s.store.UpdateMailAlias(ctx, store.MailAlias{ID: cur.ID, LocalPart: l, Targets: t,
 		SenderPolicy: g.SenderPolicy, HideFromDirectory: g.HideFromDirectory})
 	if err != nil {
 		return MailAlias{}, storeError(err)
@@ -605,7 +613,7 @@ func (s *Service) UpdateMailAlias(ctx context.Context, a Actor, id int64, local 
 }
 
 // DeleteMailAlias removes an alias.
-func (s *Service) DeleteMailAlias(ctx context.Context, a Actor, id int64) error {
+func (s *Service) DeleteMailAlias(ctx context.Context, a Actor, id string) error {
 	cur, err := s.visibleAlias(ctx, a, id)
 	if err != nil {
 		return err
@@ -613,7 +621,7 @@ func (s *Service) DeleteMailAlias(ctx context.Context, a Actor, id int64) error 
 	if err := needMailWrite(a); err != nil {
 		return err
 	}
-	if err := s.store.DeleteMailAlias(ctx, id); err != nil {
+	if err := s.store.DeleteMailAlias(ctx, cur.ID); err != nil {
 		return storeError(err)
 	}
 	s.record(ctx, a, "mail.alias.delete", cur.LocalPart+"@"+cur.Domain, aliasDetail(cur.Targets))

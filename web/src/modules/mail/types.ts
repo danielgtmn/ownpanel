@@ -44,7 +44,7 @@ export type MailboxUsage = {
 }
 
 export type Mailbox = {
-  id: number
+  id: string
   address: string
   domain: string
   local_part: string
@@ -73,7 +73,7 @@ export type MailboxKind = 'personal' | 'shared'
 // Rights are "read", "write", "manage", "send-as", "send-on-behalf" (src/shared/sharing).
 // active false: the two mailboxes are no longer in the same organisation, so the access doesn't count.
 export type MailboxAccessor = {
-  mailbox_id: number
+  mailbox_id: string
   address: string
   display_name: string
   rights: string[]
@@ -81,7 +81,7 @@ export type MailboxAccessor = {
 }
 
 export type MailboxAccess = {
-  mailbox_id: number
+  mailbox_id: string
   address: string
   kind: MailboxKind
   rights: string[]
@@ -142,7 +142,7 @@ export type AppPassword = {
 export type NewAppPassword = AppPassword & { password: string }
 
 export type MailAlias = {
-  id: number
+  id: string
   address: string
   domain: string
   local_part: string
@@ -214,7 +214,8 @@ export type MailRecords = {
   can_apply: boolean
   // Why the panel cannot set the records up itself; empty when it can.
   apply_note?: string
-  connection_id: number | null
+  // "" when no connected account manages the domain.
+  connection_id: string
   zone: string
 }
 

@@ -7,8 +7,8 @@ import { visibleModules } from '../modules.ts'
 import { loadPointStates, loadSources } from './data.ts'
 import { ALL, currentRow, familyRows, overviewRows, railEntries, selectTile } from './selection.ts'
 
-const admin: User = { id: 1, name: 'anna', email: '', role: 'admin', created_at: '2026-01-01T00:00:00Z' }
-const member: User = { id: 2, name: 'max', email: '', role: 'member', created_at: '2026-01-01T00:00:00Z' }
+const admin: User = { id: '1', name: 'anna', email: '', role: 'admin', created_at: '2026-01-01T00:00:00Z' }
+const member: User = { id: '2', name: 'max', email: '', role: 'member', created_at: '2026-01-01T00:00:00Z' }
 
 const sources: DomainSources = {
   sites: [
@@ -16,8 +16,8 @@ const sources: DomainSources = {
     { name: 'shop', domains: ['shop.de', 'shop.example.com'], live: false },
     { name: 'draft', domains: [], live: false },
   ],
-  zones: [{ connectionId: 3, connectionName: 'Hetzner', name: 'example.com' }],
-  redirects: [{ id: 1, source: 'go.shop.de', target: 'https://shop.de' }],
+  zones: [{ connectionId: '3', connectionName: 'Hetzner', name: 'example.com' }],
+  redirects: [{ id: '1', source: 'go.shop.de', target: 'https://shop.de' }],
 }
 const families = buildFamilies(sources)
 const available = visibleModules(modules, admin)
@@ -124,10 +124,10 @@ describe('loadSources', () => {
     const fetchMock = vi.fn(async (url: string) => {
       const bodies: Record<string, unknown> = {
         '/api/sites': [{ name: 'blog', domains: ['blog.example.com'], current_release: '20260101-000000' }],
-        '/api/dns/zones': { zones: [{ connection_id: 1, connection_name: 'H', name: 'example.com' }], problems: [] },
+        '/api/dns/zones': { zones: [{ connection_id: '1', connection_name: 'H', name: 'example.com' }], problems: [] },
         '/api/redirects': [
-          { id: 1, source_domain: 'go.example.com', source_path: '', target: 'https://x.org' },
-          { id: 2, source_domain: 'blog.example.com', source_path: '/old', target: '/new' },
+          { id: '1', source_domain: 'go.example.com', source_path: '', target: 'https://x.org' },
+          { id: '2', source_domain: 'blog.example.com', source_path: '/old', target: '/new' },
         ],
         '/api/settings': { panel_domain: 'panel.example.com' },
         '/api/settings/checks': { dns: { state: 'points_here' } },
@@ -143,8 +143,8 @@ describe('loadSources', () => {
     const result = await loadSources()
     expect(result).toEqual({
       sites: [{ name: 'blog', domains: ['blog.example.com'], live: true, release: '20260101-000000' }],
-      zones: [{ connectionId: 1, connectionName: 'H', name: 'example.com' }],
-      redirects: [{ id: 1, source: 'go.example.com', target: 'https://x.org' }],
+      zones: [{ connectionId: '1', connectionName: 'H', name: 'example.com' }],
+      redirects: [{ id: '1', source: 'go.example.com', target: 'https://x.org' }],
       pathRedirectHosts: ['blog.example.com'],
     })
     expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain('/api/settings')

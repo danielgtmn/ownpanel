@@ -157,14 +157,14 @@ func decode[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
 	return v
 }
 
-func (e *env) createToken(access string, sites string) (int64, string) {
+func (e *env) createToken(access string, sites string) (string, string) {
 	e.t.Helper()
 	rec := e.as("POST", "/api/tokens", `{"name":"t","access":"`+access+`","sites":`+sites+`}`)
 	if rec.Code != 201 {
 		e.t.Fatalf("token: %d %s", rec.Code, rec.Body)
 	}
 	tok := decode[struct {
-		ID    int64  `json:"id"`
+		ID    string `json:"id"`
 		Token string `json:"token"`
 	}](e.t, rec)
 	return tok.ID, tok.Token

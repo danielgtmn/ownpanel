@@ -262,15 +262,15 @@ func TestMailboxSetupOf(t *testing.T) {
 	w := newMailWorld(t)
 	ctx := context.Background()
 	for _, a := range []Actor{bob, bobRead, admin} {
-		s, err := w.svc.MailboxSetupOf(ctx, a, w.bobBox)
+		s, err := w.svc.MailboxSetupOf(ctx, a, idString(w.bobBox))
 		if err != nil || s.Address != "info@bobsite.example.com" || s.Client.Server != testMailHost {
 			t.Fatalf("%s: %+v %v", a.Name, s, err)
 		}
 	}
-	_, err := w.svc.MailboxSetupOf(ctx, bob, w.rootBox)
+	_, err := w.svc.MailboxSetupOf(ctx, bob, idString(w.rootBox))
 	wantKind(t, err, NotFound)
-	_, err = w.svc.MailboxSetupOf(ctx, bobLimited, w.bobBox)
+	_, err = w.svc.MailboxSetupOf(ctx, bobLimited, idString(w.bobBox))
 	wantKind(t, err, Forbidden)
-	_, err = w.svc.MailboxSetupOf(ctx, nobody, w.bobBox)
+	_, err = w.svc.MailboxSetupOf(ctx, nobody, idString(w.bobBox))
 	wantKind(t, err, Unauthenticated)
 }

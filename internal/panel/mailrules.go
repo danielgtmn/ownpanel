@@ -156,7 +156,7 @@ func rulesError(err error) error {
 }
 
 // MailboxRulesOf shows a mailbox's out-of-office and forwarding.
-func (s *Service) MailboxRulesOf(ctx context.Context, a Actor, id int64) (MailboxRules, error) {
+func (s *Service) MailboxRulesOf(ctx context.Context, a Actor, id string) (MailboxRules, error) {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return MailboxRules{}, err
@@ -165,7 +165,7 @@ func (s *Service) MailboxRulesOf(ctx context.Context, a Actor, id int64) (Mailbo
 	if err != nil {
 		return MailboxRules{}, err
 	}
-	may, err := s.store.MailboxMayForward(ctx, id)
+	may, err := s.store.MailboxMayForward(ctx, m.ID)
 	if err != nil {
 		return MailboxRules{}, storeError(err)
 	}
@@ -180,7 +180,7 @@ func (s *Service) MailboxRulesOf(ctx context.Context, a Actor, id int64) (Mailbo
 
 // SetMailboxOutOfOffice sets or clears a mailbox's out-of-office reply
 // for the domain owner. The person sees who set it.
-func (s *Service) SetMailboxOutOfOffice(ctx context.Context, a Actor, id int64, in OutOfOfficeInput) (MailboxRules, error) {
+func (s *Service) SetMailboxOutOfOffice(ctx context.Context, a Actor, id string, in OutOfOfficeInput) (MailboxRules, error) {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return MailboxRules{}, err
@@ -200,7 +200,7 @@ func (s *Service) SetMailboxOutOfOffice(ctx context.Context, a Actor, id int64, 
 	if err != nil {
 		return MailboxRules{}, err
 	}
-	may, err := s.store.MailboxMayForward(ctx, id)
+	may, err := s.store.MailboxMayForward(ctx, m.ID)
 	if err != nil {
 		return MailboxRules{}, storeError(err)
 	}
@@ -226,7 +226,7 @@ func (s *Service) SetMailboxOutOfOffice(ctx context.Context, a Actor, id int64, 
 
 // SetMailboxForwarding sets or clears a mailbox's forwarding for the
 // domain owner.
-func (s *Service) SetMailboxForwarding(ctx context.Context, a Actor, id int64, in ForwardingInput) (MailboxRules, error) {
+func (s *Service) SetMailboxForwarding(ctx context.Context, a Actor, id string, in ForwardingInput) (MailboxRules, error) {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return MailboxRules{}, err
@@ -234,7 +234,7 @@ func (s *Service) SetMailboxForwarding(ctx context.Context, a Actor, id int64, i
 	if err := needMailWrite(a); err != nil {
 		return MailboxRules{}, err
 	}
-	may, err := s.store.MailboxMayForward(ctx, id)
+	may, err := s.store.MailboxMayForward(ctx, m.ID)
 	if err != nil {
 		return MailboxRules{}, storeError(err)
 	}
@@ -278,7 +278,7 @@ func (s *Service) SetMailboxForwarding(ctx context.Context, a Actor, id int64, i
 
 // SetMailboxMayForward allows or forbids the mailbox's filters to forward
 // mail (allowed by default).
-func (s *Service) SetMailboxMayForward(ctx context.Context, a Actor, id int64, allowed bool) error {
+func (s *Service) SetMailboxMayForward(ctx context.Context, a Actor, id string, allowed bool) error {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return err
@@ -286,14 +286,14 @@ func (s *Service) SetMailboxMayForward(ctx context.Context, a Actor, id int64, a
 	if err := needMailWrite(a); err != nil {
 		return err
 	}
-	cur, err := s.store.MailboxMayForward(ctx, id)
+	cur, err := s.store.MailboxMayForward(ctx, m.ID)
 	if err != nil {
 		return storeError(err)
 	}
 	if cur == allowed {
 		return nil
 	}
-	if err := s.store.SetMailboxMayForward(ctx, id, allowed); err != nil {
+	if err := s.store.SetMailboxMayForward(ctx, m.ID, allowed); err != nil {
 		return storeError(err)
 	}
 	detail := "allowed"

@@ -42,7 +42,7 @@ function AccountSelect({ accounts, value, onChange }: { accounts: Connection[]; 
         </SelectTrigger>
         <SelectContent>
           {accounts.map((account) => (
-            <SelectItem key={account.id} value={String(account.id)}>
+            <SelectItem key={account.id} value={account.id}>
               {account.name}
             </SelectItem>
           ))}
@@ -58,7 +58,7 @@ export function AddDomainForm({ accounts, available, domain, onAdopt, onCreate }
   const [mode, setMode] = useState<Mode>(available.zones.length > 0 && (!domain || preselected) ? 'choose' : 'create')
   const first = groups[0]?.zones[0]
   const [picked, setPicked] = useState(preselected ? zoneKey(preselected) : first ? zoneKey(first) : '')
-  const [account, setAccount] = useState(String(accounts[0]?.id ?? ''))
+  const [account, setAccount] = useState(accounts[0]?.id ?? '')
   const [name, setName] = useState(preselected ? '' : (domain ?? ''))
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -74,7 +74,7 @@ export function AddDomainForm({ accounts, available, domain, onAdopt, onCreate }
       }
       run = () => onAdopt(zone)
     } else {
-      const connection = accounts.find((candidate) => String(candidate.id) === account)
+      const connection = accounts.find((candidate) => candidate.id === account)
       const problem = validateZoneName(name) ?? (connection ? null : 'Choose an account.')
       if (problem || !connection) {
         setError(problem)

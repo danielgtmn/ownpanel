@@ -19,37 +19,37 @@ import {
 
 const list: ZoneList = {
   zones: [
-    { connection_id: 2, connection_name: 'B', name: 'zeta.org', read_only: false, nameservers: [], adopted: true, used_by: [] },
-    { connection_id: 1, connection_name: 'A', name: 'alpha.com', read_only: true, nameservers: [], adopted: false, used_by: ['the site blog (alpha.com)'] },
+    { connection_id: '2', connection_name: 'B', name: 'zeta.org', read_only: false, nameservers: [], adopted: true, used_by: [] },
+    { connection_id: '1', connection_name: 'A', name: 'alpha.com', read_only: true, nameservers: [], adopted: false, used_by: ['the site blog (alpha.com)'] },
   ],
-  problems: [{ connection_id: 3, connection_name: 'Old', error: 'The API token was rejected.' }],
+  problems: [{ connection_id: '3', connection_name: 'Old', error: 'The API token was rejected.' }],
 }
 
 describe('zone list', () => {
   it('sorts domains and turns problems into notices', () => {
     const view = describeZones(list)
     expect(view.rows.map((row) => row.name)).toEqual(['alpha.com', 'zeta.org'])
-    expect(view.rows[0]).toMatchObject({ connectionId: 1, readOnly: true, usedBy: ['the site blog (alpha.com)'] })
+    expect(view.rows[0]).toMatchObject({ connectionId: '1', readOnly: true, usedBy: ['the site blog (alpha.com)'] })
     expect(view.notices).toEqual([
-      { key: 3, text: "Couldn't load the domains from Old. The API token was rejected." },
+      { key: '3', text: "Couldn't load the domains from Old. The API token was rejected." },
     ])
   })
 
   it('still names the connection when the reason is empty', () => {
-    expect(problemMessage({ connection_id: 1, connection_name: 'X', error: '  ' })).toBe(
+    expect(problemMessage({ connection_id: '1', connection_name: 'X', error: '  ' })).toBe(
       "Couldn't load the domains from X.",
     )
   })
 
   it('finds a domain by connection and name', () => {
-    expect(findZone(list, 1, 'alpha.com')?.read_only).toBe(true)
-    expect(findZone(list, 2, 'alpha.com')).toBeUndefined()
+    expect(findZone(list, '1', 'alpha.com')?.read_only).toBe(true)
+    expect(findZone(list, '2', 'alpha.com')).toBeUndefined()
   })
 
   it('reads the connection id from the address', () => {
-    expect(parseConnectionId('12')).toBe(12)
-    expect(parseConnectionId('0')).toBeNull()
-    expect(parseConnectionId('x')).toBeNull()
+    expect(parseConnectionId('12')).toBe('12')
+    expect(parseConnectionId('c-7f')).toBe('c-7f')
+    expect(parseConnectionId('')).toBeNull()
     expect(parseConnectionId(undefined)).toBeNull()
   })
 })
@@ -63,21 +63,21 @@ describe('record requests', () => {
     new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 
   it('encodes every path segment', () => {
-    expect(recordsPath(4, 'example.com')).toBe('/dns/connections/4/zones/example.com/records')
-    expect(recordPath(4, 'example.com', '@', 'A')).toBe('/dns/connections/4/zones/example.com/records/%40/A')
-    expect(recordPath(4, 'example.com', '*', 'A')).toBe('/dns/connections/4/zones/example.com/records/%2A/A')
-    expect(recordPath(4, 'example.com', '*.dev', 'A')).toContain('/%2A.dev/')
-    expect(recordPath(4, 'example.com', '_dmarc', 'TXT')).toBe(
+    expect(recordsPath('4', 'example.com')).toBe('/dns/connections/4/zones/example.com/records')
+    expect(recordPath('4', 'example.com', '@', 'A')).toBe('/dns/connections/4/zones/example.com/records/%40/A')
+    expect(recordPath('4', 'example.com', '*', 'A')).toBe('/dns/connections/4/zones/example.com/records/%2A/A')
+    expect(recordPath('4', 'example.com', '*.dev', 'A')).toContain('/%2A.dev/')
+    expect(recordPath('4', 'example.com', '_dmarc', 'TXT')).toBe(
       '/dns/connections/4/zones/example.com/records/_dmarc/TXT',
     )
-    expect(recordPath(4, 'a/b', 'x y', 'A')).toBe('/dns/connections/4/zones/a%2Fb/records/x%20y/A')
+    expect(recordPath('4', 'a/b', 'x y', 'A')).toBe('/dns/connections/4/zones/a%2Fb/records/x%20y/A')
   })
 
   it('sends PUT with ttl and values and the change header', async () => {
     const record = { name: '@', type: 'A', ttl: null, values: ['1.2.3.4'], locked: false }
     const fetchMock = vi.fn(async () => json(record))
     vi.stubGlobal('fetch', fetchMock)
-    await expect(saveRecord(4, 'example.com', '@', 'A', { ttl: null, values: ['1.2.3.4'] })).resolves.toEqual(record)
+    await expect(saveRecord('4', 'example.com', '@', 'A', { ttl: null, values: ['1.2.3.4'] })).resolves.toEqual(record)
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('/api/dns/connections/4/zones/example.com/records/%40/A')
     expect(init.method).toBe('PUT')
@@ -88,7 +88,7 @@ describe('record requests', () => {
   it('sends DELETE and accepts an empty answer', async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 204 }))
     vi.stubGlobal('fetch', fetchMock)
-    await expect(deleteRecord(4, 'example.com', '_dmarc', 'TXT')).resolves.toBeUndefined()
+    await expect(deleteRecord('4', 'example.com', '_dmarc', 'TXT')).resolves.toBeUndefined()
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('/api/dns/connections/4/zones/example.com/records/_dmarc/TXT')
     expect(init.method).toBe('DELETE')
@@ -96,14 +96,14 @@ describe('record requests', () => {
 
   it('tolerates empty lists from the server', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json(null)))
-    await expect(listRecords(1, 'example.com')).resolves.toEqual([])
+    await expect(listRecords('1', 'example.com')).resolves.toEqual([])
     vi.stubGlobal('fetch', vi.fn(async () => json({ zones: null, problems: null })))
     await expect(listZones()).resolves.toEqual({ zones: [], problems: [] })
   })
 
   it('surfaces the server message', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'Hetzner is busy. Try again soon.' }, 429)))
-    await expect(listRecords(1, 'example.com')).rejects.toMatchObject({
+    await expect(listRecords('1', 'example.com')).rejects.toMatchObject({
       status: 429,
       message: 'Hetzner is busy. Try again soon.',
     })
@@ -171,14 +171,14 @@ describe('adding and deleting domains', () => {
       init?.method === 'DELETE'
         ? new Response(null, { status: 204 })
         : new Response(
-            JSON.stringify({ name: 'example.com', connection_id: 4, connection_name: 'Main', read_only: false, nameservers: null }),
+            JSON.stringify({ name: 'example.com', connection_id: '4', connection_name: 'Main', read_only: false, nameservers: null }),
             { status: 201, headers: { 'Content-Type': 'application/json' } },
           ),
     )
     vi.stubGlobal('fetch', fetchMock)
-    const zone = await createZone(4, 'example.com')
+    const zone = await createZone('4', 'example.com')
     expect(zone.nameservers).toEqual([])
-    await deleteZone(4, 'example.com', 'example.com')
+    await deleteZone('4', 'example.com', 'example.com')
     expect(fetchMock.mock.calls.map(([url, init]) => `${init?.method} ${url} ${String(init?.body)}`)).toEqual([
       'POST /api/dns/connections/4/zones {"name":"example.com"}',
       'DELETE /api/dns/connections/4/zones/example.com {"confirm":"example.com"}',
@@ -190,13 +190,13 @@ describe('adding and deleting domains', () => {
       'fetch',
       vi.fn(async () => new Response(JSON.stringify({ error: 'The domain example.com is still in use by the site blog (example.com); remove those first' }), { status: 409 })),
     )
-    const error = await deleteZone(4, 'example.com', 'example.com').catch((caught: unknown) => caught)
+    const error = await deleteZone('4', 'example.com', 'example.com').catch((caught: unknown) => caught)
     expect(usesFromMessage((error as Error).message)).toEqual(['The site blog (example.com)'])
   })
 })
 
 describe('add domain form', () => {
-  const account = (id: number, name: string) => ({
+  const account = (id: string, name: string) => ({
     id,
     provider: 'hetzner' as const,
     name,
@@ -207,7 +207,7 @@ describe('add domain form', () => {
     can_write: true,
     zone_count: 1,
   })
-  const zone = (connection_id: number, connection_name: string, name: string) => ({
+  const zone = (connection_id: string, connection_name: string, name: string) => ({
     connection_id,
     connection_name,
     name,
@@ -220,7 +220,7 @@ describe('add domain form', () => {
     renderToStaticMarkup(
       <Dialog>
         <AddDomainForm
-          accounts={[account(1, 'Home')]}
+          accounts={[account('1', 'Home')]}
           available={{ zones: [], problems: [] }}
           onAdopt={async () => undefined}
           onCreate={async () => undefined}
@@ -230,7 +230,7 @@ describe('add domain form', () => {
     )
 
   it('starts with choosing when the accounts have domains that aren’t managed here', () => {
-    const html = render({ available: { zones: [zone(1, 'Home', 'example.com')], problems: [] } })
+    const html = render({ available: { zones: [zone('1', 'Home', 'example.com')], problems: [] } })
     expect(html).toContain('Choose one from your accounts')
     expect(html).toContain("Domains in Home that aren&#x27;t managed here yet")
     expect(html).not.toContain('New domain')
@@ -245,8 +245,8 @@ describe('add domain form', () => {
 
   it('creates a prefilled domain that no account has, and lets you pick the account', () => {
     const html = render({
-      accounts: [account(1, 'Home'), account(2, 'Work')],
-      available: { zones: [zone(1, 'Home', 'other.org')], problems: [] },
+      accounts: [account('1', 'Home'), account('2', 'Work')],
+      available: { zones: [zone('1', 'Home', 'other.org')], problems: [] },
       domain: 'fresh.com',
     })
     expect(html).toContain('value="fresh.com"')

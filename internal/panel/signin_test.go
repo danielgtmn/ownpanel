@@ -122,7 +122,7 @@ func TestMoveUserWithUnusableHash(t *testing.T) {
 		t.Fatalf("unmoved: %+v", un)
 	}
 	pw := "a-new-password"
-	if _, err := svc.UpdateUser(ctx, admin, 1, UserUpdate{Password: &pw}); err != nil {
+	if _, err := svc.UpdateUser(ctx, admin, "1", UserUpdate{Password: &pw}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := svc.Login(ctx, Credentials{Name: "root", Password: pw}); err != nil {
@@ -384,7 +384,7 @@ func TestOwnEmailNeedsThePassword(t *testing.T) {
 
 	// Admins change other people's addresses without a password.
 	e := "alice@example.org"
-	if _, err := svc.UpdateUser(ctx, admin, a.UserID, UserUpdate{Email: &e}); err != nil {
+	if _, err := svc.UpdateUser(ctx, admin, idString(a.UserID), UserUpdate{Email: &e}); err != nil {
 		t.Fatal(err)
 	}
 }

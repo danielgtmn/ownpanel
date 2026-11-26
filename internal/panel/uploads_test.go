@@ -19,7 +19,7 @@ func tokenActor(t *testing.T, svc *Service, name string) (Actor, int64) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return a, nt.ID
+	return a, mustStoreID(nt.ID)
 }
 
 func TestUploadLinkSingleUseAndExpiry(t *testing.T) {
@@ -134,7 +134,7 @@ func TestUploadLinkEndsWithItsToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.DeleteToken(ctx, admin, id); err != nil {
+	if err := svc.DeleteToken(ctx, admin, idString(id)); err != nil {
 		t.Fatal(err)
 	}
 	_, err = svc.PublishWithUploadLink(ctx, link.ID, tarGz(t, map[string]string{"index.html": "x"}))

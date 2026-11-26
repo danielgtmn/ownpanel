@@ -16,7 +16,7 @@ func TestLateAccountEventsOnSharedMailbox(t *testing.T) {
 	w := newMailWorld(t)
 	svc := w.svc
 	box, _ := svc.store.Mailbox(ctx, w.bobBox)
-	if _, err := svc.SetMailboxKind(ctx, bob, w.bobBox, "shared", ""); err != nil {
+	if _, err := svc.SetMailboxKind(ctx, bob, idString(w.bobBox), "shared", ""); err != nil {
 		t.Fatal(err)
 	}
 	key, err := svc.appPasswordKey(ctx)

@@ -101,7 +101,7 @@ func TestPermissionMatrix(t *testing.T) {
 			}
 			return err
 		}, []Kind{ok, ok, Forbidden, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
-		{"delete user", func(w world, a Actor) error { return w.svc.DeleteUser(ctx, a, 2) },
+		{"delete user", func(w world, a Actor) error { return w.svc.DeleteUser(ctx, a, "2") },
 			[]Kind{Conflict, Conflict, Forbidden, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
 		{"activity", func(w world, a Actor) error { _, err := w.svc.Activities(ctx, a, 10); return err },
 			[]Kind{ok, ok, Forbidden, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
@@ -126,7 +126,7 @@ func TestPermissionMatrix(t *testing.T) {
 			[]Kind{ok, Forbidden, ok, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
 		{"set another person's e-mail address", func(w world, a Actor) error {
 			e := "bob@example.org"
-			_, err := w.svc.UpdateUser(ctx, a, 2, UserUpdate{Email: &e})
+			_, err := w.svc.UpdateUser(ctx, a, "2", UserUpdate{Email: &e})
 			return err
 		}, []Kind{ok, ok, Forbidden, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
 		{"sync", func(w world, a Actor) error { return w.svc.Sync(ctx, a) },

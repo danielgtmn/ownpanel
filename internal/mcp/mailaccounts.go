@@ -50,7 +50,7 @@ type domainOrganisationInput struct {
 }
 
 type displayNameInput struct {
-	ID          int64  `json:"id" jsonschema:"mailbox id from list_mailboxes"`
+	ID          string `json:"id" jsonschema:"mailbox id from list_mailboxes"`
 	DisplayName string `json:"display_name" jsonschema:"the name shown as sender and in address books, at most 64 characters, without < > or quotes; empty removes it"`
 }
 

@@ -5,7 +5,7 @@ import { normalizeHost, registrableDomain } from './suffix.ts'
 // What an address of a domain is used for.
 export type AddressUse =
   | { kind: 'site'; site: string; live: boolean }
-  | { kind: 'redirect'; id: number; target: string }
+  | { kind: 'redirect'; id: string; target: string }
   | { kind: 'none' }
 
 // wildcard: a DNS record like *.example.com that answers for every name without its own record.

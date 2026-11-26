@@ -586,3 +586,12 @@ func mustSites(t *testing.T, svc *Service) []Site {
 	}
 	return list
 }
+
+// mustStoreID is the store key of a public id in tests.
+func mustStoreID(id string) int64 {
+	n, err := storeID(id, "record")
+	if err != nil {
+		panic(err)
+	}
+	return n
+}

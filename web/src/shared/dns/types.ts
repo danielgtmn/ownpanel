@@ -1,7 +1,7 @@
 // A connected account at a DNS provider. It only grants access: none of its domains is managed in the panel until
 // chosen, or until something (a site, a redirect, e-mail, the panel itself) uses it.
 export type Connection = {
-  id: number
+  id: string
   provider: 'hetzner'
   name: string
   owner: string
@@ -19,7 +19,7 @@ export type NewConnection = {
 }
 
 export type Zone = {
-  connection_id: number
+  connection_id: string
   connection_name: string
   name: string
   read_only: boolean
@@ -31,7 +31,7 @@ export type Zone = {
 }
 
 export type ZoneProblem = {
-  connection_id: number
+  connection_id: string
   connection_name: string
   error: string
 }

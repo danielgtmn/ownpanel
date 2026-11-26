@@ -31,7 +31,7 @@ function DnsOffer({ domain }: { domain: string }) {
     try {
       await adoptZone(zone.connection_id, zone.name)
       toast.success(`${zone.name} is now managed here.`)
-      navigate('dns', String(zone.connection_id), zone.name)
+      navigate('dns', zone.connection_id, zone.name)
     } catch (error) {
       toast.error(errorMessage(error))
     }
@@ -150,7 +150,7 @@ function FamilyContent({ family, sources, states }: { family: Family; sources: D
             {family.zones.map((zone) => (
               <li className="record-row family-row" key={`${zone.connectionId}/${zone.name}`}>
                 <div className="family-row-head">
-                  <a className="family-row-name" href={hrefFor('dns', String(zone.connectionId), zone.name)}>
+                  <a className="family-row-name" href={hrefFor('dns', zone.connectionId, zone.name)}>
                     DNS records of {zone.name}
                   </a>
                   <span className="muted">{zone.connectionName}</span>

@@ -44,7 +44,7 @@ var RedirectCodes = []int{301, 302, 307, 308}
 // Redirect is what callers see of a redirect. SourcePath "" is a domain
 // redirect; otherwise an exact path ("/old") or a prefix ("/blog/*").
 type Redirect struct {
-	ID           int64     `json:"id"`
+	ID           string    `json:"id"`
 	Owner        string    `json:"owner"`
 	SourceDomain string    `json:"source_domain"`
 	SourcePath   string    `json:"source_path"`
@@ -67,7 +67,7 @@ type RedirectInput struct {
 
 func redirectView(r store.Redirect) Redirect {
 	return Redirect{
-		ID: r.ID, Owner: r.Owner, SourceDomain: r.SourceDomain, SourcePath: r.SourcePath, Target: r.Target,
+		ID: idString(r.ID), Owner: r.Owner, SourceDomain: r.SourceDomain, SourcePath: r.SourcePath, Target: r.Target,
 		Code: r.Code, KeepPath: r.KeepPath, KeepQuery: r.KeepQuery, CreatedAt: r.CreatedAt,
 	}
 }
@@ -119,8 +119,12 @@ func needRedirectWrite(a Actor) error {
 
 // visibleRedirect returns a redirect the actor may see; others answer
 // NotFound like missing ones.
-func (s *Service) visibleRedirect(ctx context.Context, a Actor, id int64) (store.Redirect, map[string]store.Site, error) {
+func (s *Service) visibleRedirect(ctx context.Context, a Actor, redirectID string) (store.Redirect, map[string]store.Site, error) {
 	if err := needAuth(a); err != nil {
+		return store.Redirect{}, nil, err
+	}
+	id, err := storeID(redirectID, "redirect")
+	if err != nil {
 		return store.Redirect{}, nil, err
 	}
 	r, err := s.store.Redirect(ctx, id)
@@ -393,7 +397,7 @@ func (s *Service) SiteRedirects(ctx context.Context, a Actor, siteName string) (
 }
 
 // Redirect returns one redirect.
-func (s *Service) Redirect(ctx context.Context, a Actor, id int64) (Redirect, error) {
+func (s *Service) Redirect(ctx context.Context, a Actor, id string) (Redirect, error) {
 	r, _, err := s.visibleRedirect(ctx, a, id)
 	if err != nil {
 		return Redirect{}, err
@@ -431,7 +435,7 @@ func (s *Service) CreateRedirect(ctx context.Context, a Actor, in RedirectInput)
 
 // UpdateRedirect replaces a redirect. The actor must be allowed to manage
 // both the redirect as it was and as it will be.
-func (s *Service) UpdateRedirect(ctx context.Context, a Actor, id int64, in RedirectInput) (Redirect, error) {
+func (s *Service) UpdateRedirect(ctx context.Context, a Actor, id string, in RedirectInput) (Redirect, error) {
 	cur, sites, err := s.visibleRedirect(ctx, a, id)
 	if err != nil {
 		return Redirect{}, err
@@ -456,7 +460,7 @@ func (s *Service) UpdateRedirect(ctx context.Context, a Actor, id int64, in Redi
 	if err := s.othersMailDomainName(ctx, a, []string{r.SourceDomain}, []string{cur.SourceDomain}); err != nil {
 		return Redirect{}, err
 	}
-	r.ID = id
+	r.ID = cur.ID
 	saved, err := s.store.UpdateRedirect(ctx, r, MaxRedirectsPerUser)
 	if err != nil {
 		return Redirect{}, s.redirectStoreError(a, err, sites)
@@ -470,7 +474,7 @@ func (s *Service) UpdateRedirect(ctx context.Context, a Actor, id int64, in Redi
 }
 
 // DeleteRedirect removes a redirect.
-func (s *Service) DeleteRedirect(ctx context.Context, a Actor, id int64) error {
+func (s *Service) DeleteRedirect(ctx context.Context, a Actor, id string) error {
 	cur, _, err := s.visibleRedirect(ctx, a, id)
 	if err != nil {
 		return err
@@ -478,7 +482,7 @@ func (s *Service) DeleteRedirect(ctx context.Context, a Actor, id int64) error {
 	if err := needRedirectWrite(a); err != nil {
 		return err
 	}
-	if err := s.store.DeleteRedirect(ctx, id); err != nil {
+	if err := s.store.DeleteRedirect(ctx, cur.ID); err != nil {
 		return storeError(err)
 	}
 	s.record(ctx, a, "redirect.delete", redirectSource(cur.SourceDomain, cur.SourcePath), redirectDetail(cur))

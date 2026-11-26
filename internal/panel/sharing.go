@@ -30,7 +30,7 @@ import (
 
 // MailboxGrant is a mailbox that has access to the mailbox shown.
 type MailboxGrant struct {
-	MailboxID   int64    `json:"mailbox_id"`
+	MailboxID   string   `json:"mailbox_id"`
 	Address     string   `json:"address"`
 	DisplayName string   `json:"display_name"`
 	Rights      []string `json:"rights"`
@@ -41,7 +41,7 @@ type MailboxGrant struct {
 
 // MailboxAccess is a mailbox the mailbox shown has access to.
 type MailboxAccess struct {
-	MailboxID int64    `json:"mailbox_id"`
+	MailboxID string   `json:"mailbox_id"`
 	Address   string   `json:"address"`
 	Kind      string   `json:"kind"`
 	Rights    []string `json:"rights"`
@@ -131,20 +131,20 @@ func (s *Service) addSharing(ctx context.Context, views []Mailbox) ([]Mailbox, e
 	if err != nil {
 		return nil, err
 	}
-	byID := make(map[int64]int, len(views))
+	byID := make(map[string]int, len(views))
 	for i := range views {
 		byID[views[i].ID] = i
 	}
 	for _, g := range grants {
 		active := orgs[g.MailboxDomain] != "" && orgs[g.MailboxDomain] == orgs[g.GranteeDomain]
-		if i, ok := byID[g.MailboxID]; ok {
+		if i, ok := byID[idString(g.MailboxID)]; ok {
 			views[i].SharedWith = append(views[i].SharedWith, MailboxGrant{
-				MailboxID: g.GranteeID, Address: g.GranteeAddress, DisplayName: g.GranteeName, Rights: g.Rights, Active: active,
+				MailboxID: idString(g.GranteeID), Address: g.GranteeAddress, DisplayName: g.GranteeName, Rights: g.Rights, Active: active,
 			})
 		}
-		if i, ok := byID[g.GranteeID]; ok {
+		if i, ok := byID[idString(g.GranteeID)]; ok {
 			views[i].AccessTo = append(views[i].AccessTo, MailboxAccess{
-				MailboxID: g.MailboxID, Address: g.MailboxAddress, Kind: g.MailboxKind, Rights: g.Rights, Active: active,
+				MailboxID: idString(g.MailboxID), Address: g.MailboxAddress, Kind: g.MailboxKind, Rights: g.Rights, Active: active,
 			})
 		}
 	}
@@ -164,7 +164,7 @@ func (s *Service) mailboxWithSharing(ctx context.Context, m store.Mailbox, usage
 // loses its password and app passwords (mail programs and the self-service
 // area are signed out) and the access it had to other mailboxes; one made
 // personal needs a password.
-func (s *Service) SetMailboxKind(ctx context.Context, a Actor, id int64, kind, password string) (Mailbox, error) {
+func (s *Service) SetMailboxKind(ctx context.Context, a Actor, id string, kind, password string) (Mailbox, error) {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return Mailbox{}, err
@@ -187,7 +187,7 @@ func (s *Service) SetMailboxKind(ctx context.Context, a Actor, id int64, kind, p
 		}
 		// What the mailbox changed itself is recorded first.
 		s.catchUpMailEvents(ctx)
-		if err := s.store.MakeMailboxShared(ctx, id); err != nil {
+		if err := s.store.MakeMailboxShared(ctx, m.ID); err != nil {
 			return Mailbox{}, storeError(err)
 		}
 		s.record(ctx, a, "mail.mailbox.kind", addr, "now shared: its password and app passwords were removed and it was signed out everywhere")
@@ -199,12 +199,12 @@ func (s *Service) SetMailboxKind(ctx context.Context, a Actor, id int64, kind, p
 		if err != nil {
 			return Mailbox{}, newError(Internal, err)
 		}
-		if err := s.store.MakeMailboxPersonal(ctx, id, hash); err != nil {
+		if err := s.store.MakeMailboxPersonal(ctx, m.ID, hash); err != nil {
 			return Mailbox{}, storeError(err)
 		}
 		s.record(ctx, a, "mail.mailbox.kind", addr, "now personal, with a new password")
 	}
-	next, err := s.store.Mailbox(ctx, id)
+	next, err := s.store.Mailbox(ctx, m.ID)
 	if err != nil {
 		return Mailbox{}, storeError(err)
 	}
@@ -217,7 +217,7 @@ func (s *Service) SetMailboxKind(ctx context.Context, a Actor, id int64, kind, p
 
 // SetMailboxKeepSentCopy switches whether a shared mailbox keeps a copy of
 // the mail sent as or on behalf of it in its Sent folder.
-func (s *Service) SetMailboxKeepSentCopy(ctx context.Context, a Actor, id int64, on bool) (Mailbox, error) {
+func (s *Service) SetMailboxKeepSentCopy(ctx context.Context, a Actor, id string, on bool) (Mailbox, error) {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return Mailbox{}, err
@@ -229,7 +229,7 @@ func (s *Service) SetMailboxKeepSentCopy(ctx context.Context, a Actor, id int64,
 		return Mailbox{}, errorf(Invalid, "only shared mailboxes keep copies of the mail sent for them")
 	}
 	if m.KeepSentCopy != on {
-		if err := s.store.SetMailboxKeepSentCopy(ctx, id, on); err != nil {
+		if err := s.store.SetMailboxKeepSentCopy(ctx, m.ID, on); err != nil {
 			return Mailbox{}, storeError(err)
 		}
 		detail := "off"
@@ -249,7 +249,7 @@ func (s *Service) SetMailboxKeepSentCopy(ctx context.Context, a Actor, id int64,
 
 // SetMailboxGrant gives the personal mailbox with address grantee access to
 // the shared mailbox id with rights, or changes its rights.
-func (s *Service) SetMailboxGrant(ctx context.Context, a Actor, id int64, grantee string, rights []string) (Mailbox, error) {
+func (s *Service) SetMailboxGrant(ctx context.Context, a Actor, id string, grantee string, rights []string) (Mailbox, error) {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return Mailbox{}, err
@@ -319,7 +319,7 @@ func (s *Service) granteeFor(ctx context.Context, m store.Mailbox, address strin
 
 // RemoveMailboxGrant takes the access of mailbox granteeID to mailbox id
 // away (a shared mailbox, or a personal one its owner shared).
-func (s *Service) RemoveMailboxGrant(ctx context.Context, a Actor, id, granteeID int64) (Mailbox, error) {
+func (s *Service) RemoveMailboxGrant(ctx context.Context, a Actor, id, granteeID string) (Mailbox, error) {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return Mailbox{}, err
@@ -327,13 +327,13 @@ func (s *Service) RemoveMailboxGrant(ctx context.Context, a Actor, id, granteeID
 	if err := needMailWrite(a); err != nil {
 		return Mailbox{}, err
 	}
-	grants, err := s.store.MailboxGrants(ctx, id, 0)
+	grants, err := s.store.MailboxGrants(ctx, m.ID, 0)
 	if err != nil {
 		return Mailbox{}, storeError(err)
 	}
 	var found *store.MailboxGrant
 	for i := range grants {
-		if grants[i].GranteeID == granteeID {
+		if idString(grants[i].GranteeID) == granteeID {
 			found = &grants[i]
 		}
 	}
@@ -345,7 +345,7 @@ func (s *Service) RemoveMailboxGrant(ctx context.Context, a Actor, id, granteeID
 		// pushed back over this one.
 		s.catchUpMailEvents(ctx)
 	}
-	if err := s.store.DeleteMailboxGrant(ctx, id, granteeID); err != nil {
+	if err := s.store.DeleteMailboxGrant(ctx, m.ID, found.GranteeID); err != nil {
 		return Mailbox{}, storeError(err)
 	}
 	s.record(ctx, a, "mail.mailbox.grant-remove", m.LocalPart+"@"+m.Domain, found.GranteeAddress)

@@ -95,8 +95,12 @@ type UserUpdate struct {
 
 // UpdateUser changes a user's role, e-mail address and/or password (admins
 // only). A new password ends all of the user's sessions.
-func (s *Service) UpdateUser(ctx context.Context, a Actor, id int64, up UserUpdate) (User, error) {
+func (s *Service) UpdateUser(ctx context.Context, a Actor, userID string, up UserUpdate) (User, error) {
 	if err := needAdmin(a); err != nil {
+		return User{}, err
+	}
+	id, err := storeID(userID, "user")
+	if err != nil {
 		return User{}, err
 	}
 	u, err := s.store.User(ctx, id)
@@ -168,8 +172,12 @@ func (s *Service) recordPartial(ctx context.Context, a Actor, name string, chang
 
 // DeleteUser removes a user (admins only). Refused while the user owns
 // sites, and for the last admin.
-func (s *Service) DeleteUser(ctx context.Context, a Actor, id int64) error {
+func (s *Service) DeleteUser(ctx context.Context, a Actor, userID string) error {
 	if err := needAdmin(a); err != nil {
+		return err
+	}
+	id, err := storeID(userID, "user")
+	if err != nil {
 		return err
 	}
 	u, err := s.store.User(ctx, id)
@@ -190,7 +198,7 @@ func (s *Service) DeleteUser(ctx context.Context, a Actor, id int64) error {
 
 // Activity is one entry of the activity log.
 type Activity struct {
-	ID     int64     `json:"id"`
+	ID     string    `json:"id"`
 	At     time.Time `json:"at"`
 	Actor  string    `json:"actor"`
 	Action string    `json:"action"`
@@ -216,7 +224,7 @@ func (s *Service) Activities(ctx context.Context, a Actor, limit int) ([]Activit
 	}
 	out := make([]Activity, 0, len(list))
 	for _, e := range list {
-		out = append(out, Activity(e))
+		out = append(out, Activity{ID: idString(e.ID), At: e.At, Actor: e.Actor, Action: e.Action, Target: e.Target, Detail: e.Detail})
 	}
 	return out, nil
 }

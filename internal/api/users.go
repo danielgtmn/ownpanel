@@ -18,17 +18,6 @@ func (s *Server) activityRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/activity", s.listActivity)
 }
 
-// pathID parses the {id} path value; a malformed one answers 404 like an
-// unknown id.
-func pathID(w http.ResponseWriter, r *http.Request, what string) (int64, bool) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id <= 0 {
-		writeError(w, http.StatusNotFound, what+" not found")
-		return 0, false
-	}
-	return id, true
-}
-
 func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := s.Panel.Users(r.Context(), actorOf(r))
 	if err != nil {
@@ -57,10 +46,7 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "user")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	var body struct {
 		Role     *string `json:"role"`
 		Password *string `json:"password"`
@@ -78,10 +64,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "user")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	if err := s.Panel.DeleteUser(r.Context(), actorOf(r), id); err != nil {
 		writeFailure(w, err)
 		return
