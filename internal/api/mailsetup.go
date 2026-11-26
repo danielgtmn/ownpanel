@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/danielgtmn/ownpanel/internal/caddy"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/mailsetup"
 	"github.com/danielgtmn/ownpanel/internal/panel"
 )
 
@@ -274,118 +274,17 @@ func (s *Server) autodiscover(w http.ResponseWriter, r *http.Request, domain str
 
 // ---- Apple devices ----
 
-// profileUUID is a stable UUID (version 5 layout) for a part of the
-// profile of address, so downloading it again replaces the installed one.
-func profileUUID(part, address, host string) string {
-	h := sha256.Sum256([]byte("ownpanel mail profile\x00" + part + "\x00" + address + "\x00" + host))
-	b := h[:16]
-	b[6] = (b[6] & 0x0f) | 0x50
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%X-%X-%X-%X-%X", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}
-
-// plist writes an Apple property list of dictionaries, strings, integers
-// and booleans; every string is escaped.
-type plist struct{ bytes.Buffer }
-
-func (p *plist) key(k string) {
-	p.WriteString("<key>")
-	_ = xml.EscapeText(p, []byte(k))
-	p.WriteString("</key>")
-}
-
-func (p *plist) str(k, v string) {
-	p.key(k)
-	p.WriteString("<string>")
-	_ = xml.EscapeText(p, []byte(v))
-	p.WriteString("</string>\n")
-}
-
-func (p *plist) integer(k string, v int) {
-	p.key(k)
-	p.WriteString("<integer>" + strconv.Itoa(v) + "</integer>\n")
-}
-
-func (p *plist) boolean(k string, v bool) {
-	p.key(k)
-	if v {
-		p.WriteString("<true/>\n")
-	} else {
-		p.WriteString("<false/>\n")
-	}
-}
-
-// AppleMailProfile is an unsigned configuration profile with one mail
-// account (com.apple.mail.managed) for the mailbox; the device asks for
-// the password when the profile is installed.
-func AppleMailProfile(set panel.MailboxSetup) []byte {
-	c := set.Client
-	addr := set.Address
-	var p plist
-	p.WriteString(xml.Header)
-	p.WriteString(`<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">` + "\n")
-	p.WriteString("<plist version=\"1.0\">\n<dict>\n")
-	p.key("PayloadContent")
-	p.WriteString("\n<array>\n<dict>\n")
-	p.str("EmailAccountType", "EmailTypeIMAP")
-	p.str("EmailAccountDescription", addr)
-	p.str("EmailAddress", addr)
-	p.str("IncomingMailServerHostName", c.Server)
-	p.integer("IncomingMailServerPortNumber", c.IMAPPort)
-	p.boolean("IncomingMailServerUseSSL", true)
-	p.str("IncomingMailServerUsername", addr)
-	p.str("IncomingMailServerAuthentication", "EmailAuthPassword")
-	p.str("OutgoingMailServerHostName", c.Server)
-	p.integer("OutgoingMailServerPortNumber", c.SMTPPort)
-	p.boolean("OutgoingMailServerUseSSL", true)
-	p.str("OutgoingMailServerUsername", addr)
-	p.str("OutgoingMailServerAuthentication", "EmailAuthPassword")
-	p.boolean("OutgoingPasswordSameAsIncomingPassword", true)
-	p.str("PayloadDescription", "Mail account "+addr)
-	p.str("PayloadDisplayName", addr)
-	p.str("PayloadIdentifier", "ownpanel.mail."+profileUUID("account", addr, c.Server))
-	p.str("PayloadType", "com.apple.mail.managed")
-	p.str("PayloadUUID", profileUUID("account", addr, c.Server))
-	p.integer("PayloadVersion", 1)
-	p.WriteString("</dict>\n</array>\n")
-	p.str("PayloadDescription", "Sets up the mail account "+addr+". The password is asked for when the profile is installed.")
-	p.str("PayloadDisplayName", "Mail: "+addr)
-	p.str("PayloadIdentifier", "ownpanel.mail.profile."+profileUUID("profile", addr, c.Server))
-	p.boolean("PayloadRemovalDisallowed", false)
-	p.str("PayloadType", "Configuration")
-	p.str("PayloadUUID", profileUUID("profile", addr, c.Server))
-	p.integer("PayloadVersion", 1)
-	p.WriteString("</dict>\n</plist>\n")
-	return p.Bytes()
-}
-
-// profileFileName keeps the characters of an address that are safe in a
-// file name everywhere.
-func profileFileName(address string) string {
-	name := strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '@', r == '-', r == '_':
-			return r
-		}
-		return '-'
-	}, address)
-	return name + ".mobileconfig"
-}
-
 func (s *Server) appleMailProfile(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "mailbox")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	set, err := s.Panel.MailboxSetupOf(r.Context(), actorOf(r), id)
 	if err != nil {
 		writeFailure(w, err)
 		return
 	}
-	body := AppleMailProfile(set)
+	body := mailsetup.AppleProfile(set.Address, set.Client)
 	h := w.Header()
-	h.Set("Content-Type", "application/x-apple-aspen-config")
-	h.Set("Content-Disposition", `attachment; filename="`+profileFileName(set.Address)+`"`)
+	h.Set("Content-Type", mailsetup.ProfileContentType)
+	h.Set("Content-Disposition", `attachment; filename="`+mailsetup.ProfileFileName(set.Address)+`"`)
 	h.Set("Cache-Control", "no-store")
 	h.Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(http.StatusOK)

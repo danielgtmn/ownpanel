@@ -104,7 +104,7 @@ func TestRedirectValidation(t *testing.T) {
 // /old on bobsite. Both Hetzner projects also hold an unused zone spare.com.
 type redirectWorld struct {
 	*dnsWorld
-	bobDomain, rootDomain, bobPath int64
+	bobDomain, rootDomain, bobPath string
 }
 
 func newRedirectWorld(t *testing.T) *redirectWorld {
@@ -112,7 +112,7 @@ func newRedirectWorld(t *testing.T) *redirectWorld {
 	d := newDNSWorld(t)
 	ctx := context.Background()
 	w := &redirectWorld{dnsWorld: d}
-	mk := func(a Actor, in RedirectInput) int64 {
+	mk := func(a Actor, in RedirectInput) string {
 		t.Helper()
 		r, err := d.svc.CreateRedirect(ctx, a, in)
 		if err != nil {
@@ -152,9 +152,15 @@ func TestRedirectPermissionMatrix(t *testing.T) {
 	}{
 		{"site redirects", func(w *redirectWorld, a Actor) error { _, err := w.svc.SiteRedirects(ctx, a, "bobsite"); return err },
 			[]Kind{ok, ok, ok, ok, ok, ok, N, U}},
-		{"get bob's domain redirect", func(w *redirectWorld, a Actor) error { _, err := w.svc.Redirect(ctx, a, w.bobDomain); return err },
+		{"get bob's domain redirect", func(w *redirectWorld, a Actor) error {
+			_, err := w.svc.Redirect(ctx, a, w.bobDomain)
+			return err
+		},
 			[]Kind{ok, ok, ok, ok, N, ok, N, U}},
-		{"get bob's path redirect", func(w *redirectWorld, a Actor) error { _, err := w.svc.Redirect(ctx, a, w.bobPath); return err },
+		{"get bob's path redirect", func(w *redirectWorld, a Actor) error {
+			_, err := w.svc.Redirect(ctx, a, w.bobPath)
+			return err
+		},
 			[]Kind{ok, ok, ok, ok, ok, ok, N, U}},
 		{"create path redirect", func(w *redirectWorld, a Actor) error {
 			_, err := w.svc.CreateRedirect(ctx, a, RedirectInput{SourceDomain: "bobsite.example.com", SourcePath: "/x", Target: "/y", Code: 301})

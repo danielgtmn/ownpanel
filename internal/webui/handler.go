@@ -5,6 +5,7 @@ package webui
 
 import (
 	"bytes"
+	"html"
 	"io"
 	"io/fs"
 	"net/http"
@@ -31,6 +32,33 @@ const ContentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 
 // other page address gets index.html so deep links survive a reload. Paths
 // below /api/ are never answered here. A nil fsys means no app is built in.
 func Handler(fsys fs.FS) http.Handler {
+	return handler(fsys, nil)
+}
+
+// AccountMeta names the meta tag that tells the web app it was opened on
+// the mail host (AccountHandler); its content is the mail host.
+const AccountMeta = "ownpanel-mail-host"
+
+// AccountHandler serves the web app on the mail host, where mailbox users
+// sign in to their own account (wiki/Groupware-Architecture.md, "G0"):
+// like Handler, but index.html carries a meta tag AccountMeta with the mail
+// host, so the app shows the account area instead of the panel, and the
+// panel's API and MCP are never answered here.
+func AccountHandler(fsys fs.FS, mailHost func() string) http.Handler {
+	return handler(fsys, func(index []byte) []byte {
+		tag := []byte(`<meta name="` + AccountMeta + `" content="` + html.EscapeString(mailHost()) + `" />`)
+		i := bytes.Index(index, []byte("<head>"))
+		if i < 0 {
+			return append(append([]byte(nil), tag...), index...)
+		}
+		i += len("<head>")
+		out := append([]byte(nil), index[:i]...)
+		out = append(out, tag...)
+		return append(out, index[i:]...)
+	})
+}
+
+func handler(fsys fs.FS, rewriteIndex func([]byte) []byte) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
@@ -43,7 +71,8 @@ func Handler(fsys fs.FS) http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
+		if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") ||
+			(rewriteIndex != nil && (r.URL.Path == "/mcp" || strings.HasPrefix(r.URL.Path, "/mcp/"))) {
 			http.NotFound(w, r)
 			return
 		}
@@ -62,6 +91,15 @@ func Handler(fsys fs.FS) http.Handler {
 			name = indexFile
 		}
 		switch {
+		case name == indexFile && rewriteIndex != nil:
+			b, err := fs.ReadFile(fsys, indexFile)
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+			h.Set("Cache-Control", "no-cache")
+			http.ServeContent(w, r, indexFile, time.Time{}, bytes.NewReader(rewriteIndex(b)))
+			return
 		case name == indexFile:
 			h.Set("Cache-Control", "no-cache")
 		case strings.HasPrefix(name, "assets/"):

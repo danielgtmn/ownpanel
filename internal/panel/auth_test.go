@@ -56,7 +56,11 @@ func withClock(svc *Service) *clock {
 var alice = NewUser{Name: "Alice", Password: "alice-password-1", Role: "member"}
 
 func TestLoginSessionsAndPasswordChange(t *testing.T) {
-	svc, _, _ := newService(t)
+	eachStore(t, testLoginSessionsAndPasswordChange)
+}
+
+func testLoginSessionsAndPasswordChange(t *testing.T, open openStore) {
+	svc, _, _ := newServiceOn(t, open)
 	clk := withClock(svc)
 	ctx := context.Background()
 	if _, err := svc.CreateUser(ctx, admin, alice); err != nil {
@@ -147,14 +151,18 @@ func TestLastAdminProtection(t *testing.T) {
 	bad := "owner"
 	_, err = svc.UpdateUser(ctx, other, admin.UserID, UserUpdate{Role: &bad})
 	wantKind(t, err, Invalid)
-	_, err = svc.UpdateUser(ctx, other, 999, UserUpdate{Role: &member})
+	_, err = svc.UpdateUser(ctx, other, "999", UserUpdate{Role: &member})
 	wantKind(t, err, NotFound)
 }
 
 // TestLoginThrottling: failed sign-ins count per user, from wherever they
 // come, in a window that starts with the first failure.
 func TestLoginThrottling(t *testing.T) {
-	svc, _, _ := newService(t)
+	eachStore(t, testLoginThrottling)
+}
+
+func testLoginThrottling(t *testing.T, open openStore) {
+	svc, _, _ := newServiceOn(t, open)
 	clk := withClock(svc)
 	ctx := context.Background()
 	svc.CreateUser(ctx, admin, alice)
@@ -195,7 +203,7 @@ func TestLoginThrottling(t *testing.T) {
 	}
 	// Trying the e-mail address counts for the same user.
 	email := "alice@example.org"
-	if _, err := svc.UpdateUser(ctx, admin, 2, UserUpdate{Email: &email}); err != nil {
+	if _, err := svc.UpdateUser(ctx, admin, "2", UserUpdate{Email: &email}); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < loginMaxPerName; i++ {
@@ -238,11 +246,9 @@ func TestLoginThrottlingPerAddress(t *testing.T) {
 	}
 }
 
-// TestSuccessfulSignInsDoNotCountAgainstTheAddress is what the panel did
-// before sesam and what sesam's documentation of MaxAttemptsPerClient
-// says; sesam v0.3.0 counts every sign-in against the address.
+// TestSuccessfulSignInsDoNotCountAgainstTheAddress: people behind one
+// address (an office, a NAT) can keep signing in; only failures count.
 func TestSuccessfulSignInsDoNotCountAgainstTheAddress(t *testing.T) {
-	t.Skip("sesam v0.3.0 counts successful sign-ins against the per-address limit; to be fixed in sesam")
 	svc, _, _ := newService(t)
 	withClock(svc)
 	ctx := context.Background()
@@ -263,7 +269,7 @@ func TestPasswordChecksAreBounded(t *testing.T) {
 	}
 	_, _, err := svc.Login(ctx, Credentials{Name: "alice", Password: "alice-password-1", ClientIP: "1.2.3.4"})
 	wantKind(t, err, Throttled)
-	a := Actor{UserID: 2, Name: "alice", Via: ViaSession}
+	a := Actor{UserID: "2", Name: "alice", Via: ViaSession}
 	wantKind(t, svc.ChangePassword(ctx, a, "alice-password-1", "alice-password-2"), Throttled)
 	wantKind(t, svc.ResetPassword(ctx, "token", "alice-password-2"), Throttled)
 	<-svc.passwordChecks
@@ -508,5 +514,16 @@ func TestActivityLog(t *testing.T) {
 	}
 	if !strings.HasPrefix(all[0], "root|user.create") {
 		t.Fatalf("newest first: %s", all[0])
+	}
+}
+
+func TestClientKey(t *testing.T) {
+	for in, want := range map[string]string{
+		"192.0.2.7": "192.0.2.7", "::ffff:192.0.2.7": "192.0.2.7", "2001:db8:1:2:3::4": "2001:db8:1::/48",
+		"fe80::1%eth0": "fe80::/48", "not an ip": "not an ip",
+	} {
+		if got := clientKey(in); got != want {
+			t.Errorf("clientKey(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

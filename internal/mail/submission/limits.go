@@ -90,35 +90,52 @@ func (l *Limiter) limits(dir *directory.Directory, box config.Mailbox, now time.
 }
 
 // Check refuses when a limit is already reached, without counting (at
-// MAIL FROM, so a client learns early).
-func (l *Limiter) Check(ctx context.Context, dir *directory.Directory, box config.Mailbox) error {
+// MAIL FROM, so a client learns early). The limits of every box count: the
+// signed-in mailbox and those it sends for (shared mailboxes).
+func (l *Limiter) Check(ctx context.Context, dir *directory.Directory, boxes ...config.Mailbox) error {
 	now := l.now()
-	limits, dom := l.limits(dir, box, now)
-	for i, lim := range limits {
-		n, err := l.store.CountMarks(ctx, lim.Key, lim.Since)
-		if err != nil {
-			l.log.Error("submission: count sends", "err", err)
-			return errLocal
-		}
-		if n >= lim.Max {
-			l.refused(ctx, box, dom, i, lim.Max, now)
-			return errRateLimited
+	for _, box := range boxes {
+		limits, dom := l.limits(dir, box, now)
+		for i, lim := range limits {
+			n, err := l.store.CountMarks(ctx, lim.Key, lim.Since)
+			if err != nil {
+				l.log.Error("submission: count sends", "err", err)
+				return errLocal
+			}
+			if n >= lim.Max {
+				l.refused(ctx, box, dom, i, lim.Max, now)
+				return errRateLimited
+			}
 		}
 	}
 	return nil
 }
 
-// Reserve counts one message, or refuses it when a limit is reached.
-func (l *Limiter) Reserve(ctx context.Context, dir *directory.Directory, box config.Mailbox) error {
+// Reserve counts one message against the limits of every box (all or
+// nothing; a domain counts once), or refuses it when a limit is reached.
+func (l *Limiter) Reserve(ctx context.Context, dir *directory.Directory, boxes ...config.Mailbox) error {
 	now := l.now()
-	limits, dom := l.limits(dir, box, now)
-	i, err := l.store.ReserveSend(ctx, limits, now)
+	var all []storage.SendLimit
+	type origin struct {
+		box   config.Mailbox
+		dom   string
+		which int
+	}
+	var from []origin
+	for _, box := range boxes {
+		limits, dom := l.limits(dir, box, now)
+		for i, lim := range limits {
+			all = append(all, lim)
+			from = append(from, origin{box, dom, i})
+		}
+	}
+	i, err := l.store.ReserveSend(ctx, all, now)
 	if err != nil {
 		l.log.Error("submission: count sends", "err", err)
 		return errLocal
 	}
 	if i >= 0 {
-		l.refused(ctx, box, dom, i, limits[i].Max, now)
+		l.refused(ctx, from[i].box, from[i].dom, from[i].which, all[i].Max, now)
 		return errRateLimited
 	}
 	return nil

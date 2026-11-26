@@ -73,6 +73,25 @@ type Error struct {
 	// contain details, so front doors should not forward it.
 	Msg string
 	Err error // underlying cause, if any
+	// Code, when set, tells programs what happened independent of Msg
+	// (the API answers it as "code").
+	Code string
+}
+
+// Error codes (Error.Code).
+const (
+	// CodeHandWrittenFilters: the mailbox's filters were written in a mail
+	// program; the change replaces them only with "replace".
+	CodeHandWrittenFilters = "hand_written_filters"
+)
+
+// CodeOf returns the code of err, or "".
+func CodeOf(err error) string {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Code
+	}
+	return ""
 }
 
 func (e *Error) Error() string { return e.Msg }

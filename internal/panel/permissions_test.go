@@ -12,12 +12,12 @@ import (
 // Users of the permission tests: root (1, admin, from newService),
 // bob (2, member). Sites: rootsite (root), bobsite and bobother (bob).
 var (
-	bob          = Actor{UserID: 2, Name: "bob", Via: ViaSession}
-	bobRead      = Actor{UserID: 2, Name: "bob", Via: ViaToken, ReadOnly: true, tokenName: "r"}
-	bobLimited   = Actor{UserID: 2, Name: "bob", Via: ViaToken, Sites: []string{"bobsite"}, tokenName: "l"}
-	rootRead     = Actor{UserID: 1, Name: "root", Admin: true, Via: ViaToken, ReadOnly: true, tokenName: "r"}
-	rootLimited  = Actor{UserID: 1, Name: "root", Admin: true, Via: ViaToken, Sites: []string{"rootsite"}, tokenName: "l"}
-	rootWriteTok = Actor{UserID: 1, Name: "root", Admin: true, Via: ViaToken, tokenName: "w"}
+	bob          = Actor{UserID: "2", Name: "bob", Via: ViaSession}
+	bobRead      = Actor{UserID: "2", Name: "bob", Via: ViaToken, ReadOnly: true, tokenName: "r"}
+	bobLimited   = Actor{UserID: "2", Name: "bob", Via: ViaToken, Sites: []string{"bobsite"}, tokenName: "l"}
+	rootRead     = Actor{UserID: "1", Name: "root", Admin: true, Via: ViaToken, ReadOnly: true, tokenName: "r"}
+	rootLimited  = Actor{UserID: "1", Name: "root", Admin: true, Via: ViaToken, Sites: []string{"rootsite"}, tokenName: "l"}
+	rootWriteTok = Actor{UserID: "1", Name: "root", Admin: true, Via: ViaToken, tokenName: "w"}
 	nobody       = Actor{}
 )
 
@@ -101,7 +101,7 @@ func TestPermissionMatrix(t *testing.T) {
 			}
 			return err
 		}, []Kind{ok, ok, Forbidden, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
-		{"delete user", func(w world, a Actor) error { return w.svc.DeleteUser(ctx, a, 2) },
+		{"delete user", func(w world, a Actor) error { return w.svc.DeleteUser(ctx, a, "2") },
 			[]Kind{Conflict, Conflict, Forbidden, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
 		{"activity", func(w world, a Actor) error { _, err := w.svc.Activities(ctx, a, 10); return err },
 			[]Kind{ok, ok, Forbidden, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
@@ -116,11 +116,17 @@ func TestPermissionMatrix(t *testing.T) {
 			}
 			return err
 		}, []Kind{ok, Forbidden, ok, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
-		{"set own e-mail address", func(w world, a Actor) error { _, err := w.svc.SetOwnEmail(ctx, a, "me@example.org"); return err },
+		{"set own e-mail address", func(w world, a Actor) error {
+			_, err := w.svc.SetOwnEmail(ctx, a, "wrong", "me@example.org")
+			if KindOf(err) == Invalid { // permitted; the current password is wrong
+				return nil
+			}
+			return err
+		},
 			[]Kind{ok, Forbidden, ok, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
 		{"set another person's e-mail address", func(w world, a Actor) error {
 			e := "bob@example.org"
-			_, err := w.svc.UpdateUser(ctx, a, 2, UserUpdate{Email: &e})
+			_, err := w.svc.UpdateUser(ctx, a, "2", UserUpdate{Email: &e})
 			return err
 		}, []Kind{ok, ok, Forbidden, Forbidden, Forbidden, Forbidden, Forbidden, Unauthenticated}},
 		{"sync", func(w world, a Actor) error { return w.svc.Sync(ctx, a) },

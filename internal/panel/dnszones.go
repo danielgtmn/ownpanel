@@ -53,7 +53,7 @@ func newZoneName(name string) (string, error) {
 
 // CreateDNSZone creates a zone for a domain in one of the actor's own
 // connections and returns it with the nameservers to set at the registrar.
-func (s *Service) CreateDNSZone(ctx context.Context, a Actor, connID int64, name string) (DNSZone, error) {
+func (s *Service) CreateDNSZone(ctx context.Context, a Actor, connID string, name string) (DNSZone, error) {
 	if err := needZoneManage(a); err != nil {
 		return DNSZone{}, err
 	}
@@ -96,6 +96,7 @@ func (s *Service) CreateDNSZone(ctx context.Context, a Actor, connID int64, name
 		slog.Error("could not mark a created DNS zone as managed", "connection", c.ID, "zone", z.Name, "err", err)
 	} else {
 		v.Adopted = true
+		s.dropHandEntry(ctx, a, z.Name)
 	}
 	return v, nil
 }
@@ -125,7 +126,7 @@ func (s *Service) domainUses(ctx context.Context, a Actor) ([]domainUse, error) 
 			continue
 		}
 		name, visible := site.Name, a.canSee(site)
-		own := visible && a.UserID != 0 && site.OwnerID == a.UserID
+		own := visible && a.UserID != "" && site.OwnerID == a.UserID
 		uses = append(uses, domainUse{domains: site.Domains, own: own, what: func(in []string) string {
 			if visible {
 				return fmt.Sprintf("the site %s (%s)", name, strings.Join(in, ", "))
@@ -142,7 +143,7 @@ func (s *Service) domainUses(ctx context.Context, a Actor) ([]domainUse, error) 
 			continue // path redirects are on site domains, listed above
 		}
 		d, visible := r.SourceDomain, a.canSeeRedirect(r, byName)
-		own := visible && a.UserID != 0 && r.OwnerID == a.UserID
+		own := visible && a.UserID != "" && r.OwnerID == a.UserID
 		uses = append(uses, domainUse{domains: []string{d}, own: own, what: func([]string) string {
 			if visible {
 				return "the redirect of " + d
@@ -156,7 +157,7 @@ func (s *Service) domainUses(ctx context.Context, a Actor) ([]domainUse, error) 
 	}
 	for _, md := range mailDomains {
 		d, visible := md.Domain, a.canSeeMail(md.OwnerID)
-		own := visible && a.UserID != 0 && md.OwnerID == a.UserID
+		own := visible && a.UserID != "" && md.OwnerID == a.UserID
 		uses = append(uses, domainUse{domains: []string{d}, own: own, what: func([]string) string {
 			if visible {
 				return "e-mail for " + d
@@ -207,7 +208,7 @@ func (s *Service) zoneUsers(ctx context.Context, a Actor, zone string, ownOnly b
 
 // DeleteDNSZone deletes a zone with all its records at the provider.
 // confirm must repeat the zone's name.
-func (s *Service) DeleteDNSZone(ctx context.Context, a Actor, connID int64, zone, confirm string) error {
+func (s *Service) DeleteDNSZone(ctx context.Context, a Actor, connID string, zone, confirm string) error {
 	if err := needZoneManage(a); err != nil {
 		return err
 	}
@@ -256,7 +257,7 @@ func (s *Service) DeleteDNSZone(ctx context.Context, a Actor, connID int64, zone
 // ---- choosing which zones are managed in the panel ----
 
 type zoneKey struct {
-	conn int64
+	conn string
 	zone string
 }
 
@@ -276,7 +277,7 @@ func (s *Service) adoptedZones(ctx context.Context, a Actor) (map[zoneKey]bool, 
 // AdoptDNSZone starts managing a zone of one of the actor's own connections
 // in the panel. Nothing changes at the provider. Adopting a zone again is
 // fine.
-func (s *Service) AdoptDNSZone(ctx context.Context, a Actor, connID int64, zone string) (DNSZone, error) {
+func (s *Service) AdoptDNSZone(ctx context.Context, a Actor, connID string, zone string) (DNSZone, error) {
 	if err := needDNSManage(a); err != nil {
 		return DNSZone{}, err
 	}
@@ -292,6 +293,7 @@ func (s *Service) AdoptDNSZone(ctx context.Context, a Actor, connID int64, zone 
 	if err != nil {
 		return DNSZone{}, storeError(err)
 	}
+	s.dropHandEntry(ctx, a, z.Name)
 	if created {
 		s.record(ctx, a, "dns.zone.adopt", z.Name, fmt.Sprintf("connection %q", c.Name))
 	}
@@ -303,10 +305,23 @@ func (s *Service) AdoptDNSZone(ctx context.Context, a Actor, connID int64, zone 
 	return v, nil
 }
 
+// dropHandEntry forgets the actor's entry for a domain entered by hand once
+// its DNS is managed here, so the domain is not in the panel twice. Failing
+// to do so is only logged: the entry is harmless and can be removed later.
+func (s *Service) dropHandEntry(ctx context.Context, a Actor, zone string) {
+	err := s.store.RemoveDomain(context.WithoutCancel(ctx), a.UserID, zone)
+	switch {
+	case err == nil:
+		s.record(ctx, a, "domain.remove", zone, "DNS is now managed in the panel")
+	case !errors.Is(err, store.ErrNotFound):
+		slog.Error("could not forget a domain entered by hand", "zone", zone, "err", err)
+	}
+}
+
 // ReleaseDNSZone stops managing a zone in the panel; nothing is deleted at
 // the provider. A zone that the actor's own things use stays in the panel
 // anyway, so it is refused with what uses it.
-func (s *Service) ReleaseDNSZone(ctx context.Context, a Actor, connID int64, zone string) error {
+func (s *Service) ReleaseDNSZone(ctx context.Context, a Actor, connID string, zone string) error {
 	if err := needDNSManage(a); err != nil {
 		return err
 	}

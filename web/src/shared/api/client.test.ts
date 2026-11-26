@@ -82,6 +82,15 @@ describe('request', () => {
     expect((error as ApiError).message).toBe('domain example.com is used by another site')
   })
 
+  it('carries the machine-readable code when the server gives one', async () => {
+    mockFetch(json({ error: 'Written in a mail program', code: 'hand_written_filters' }, 409))
+    const error = (await request('/x').catch((caught: unknown) => caught)) as ApiError
+    expect(error.code).toBe('hand_written_filters')
+    mockFetch(json({ error: 'plain' }, 409))
+    const plain = (await request('/x').catch((caught: unknown) => caught)) as ApiError
+    expect(plain.code).toBe('')
+  })
+
   it('falls back to a readable message when the body is not JSON', async () => {
     mockFetch(new Response('<html>bad gateway</html>', { status: 502 }))
     const error = (await request('/sites').catch((caught: unknown) => caught)) as ApiError

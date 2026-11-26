@@ -1,5 +1,5 @@
 export type Activity = {
-  id: number
+  id: string
   at: string
   actor: string
   action: string

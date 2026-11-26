@@ -18,7 +18,7 @@ describe('describeActivity', () => {
     ['account.password', '', 'anna changed their password'],
     ['account.login', '', 'anna signed in'],
     ['account.email', '', 'anna changed their e-mail address'],
-    ['account.password_reset', '', 'Someone chose a new password with a link sent by e-mail'],
+    ['account.password_reset', 'anna', 'anna chose a new password with a link sent by e-mail'],
     ['account.password_reset_failed', '', 'A link to choose a new password could not be sent'],
     ['setup', '', 'anna set up the panel'],
     ['setup.complete', '', 'anna finished setting up the panel'],
@@ -112,6 +112,14 @@ describe('nextLimit', () => {
   })
 })
 
+describe('describeActivity for older entries', () => {
+  it('keeps the old wording for password resets that did not name the person', () => {
+    expect(describeActivity({ actor: 'reset link', action: 'account.password_reset', target: '' })).toBe(
+      'Someone chose a new password with a link sent by e-mail',
+    )
+  })
+})
+
 describe('describeActor', () => {
   it('names the access token in plain words', () => {
     expect(describeActor('admin via token deploy script')).toBe('admin (with the access token “deploy script”)')
@@ -171,6 +179,80 @@ describe('mail service sentences', () => {
     expect(describeActivity({ actor: 'mail', action: 'mail.delivery.not-forwarded', target: '' })).toBe(
       'Mail was not forwarded',
     )
+  })
+})
+
+describe('organisations, display names and app passwords', () => {
+  it.each([
+    ['mail.organisation.create', 'Acme', 'anna created the organisation Acme'],
+    ['mail.organisation.rename', 'Acme Ltd', 'anna renamed an organisation to Acme Ltd'],
+    ['mail.organisation.delete', 'Acme', 'anna deleted the organisation Acme'],
+    ['mail.domain.organisation', 'example.com', 'anna changed the organisation of example.com'],
+    ['mail.mailbox.display-name', 'info@example.com', 'anna changed the display name of info@example.com'],
+    ['mail.mailbox.app-passwords-only', 'info@example.com', 'anna changed how mail programs sign in to info@example.com'],
+    ['mail.mailbox.app-password-create', 'info@example.com', 'anna created an app password for info@example.com'],
+    ['mail.mailbox.app-password-revoke', 'info@example.com', 'anna revoked an app password of info@example.com'],
+  ])('describes %s', (action, target, sentence) => {
+    expect(describeActivity(entry(action, target))).toBe(sentence)
+  })
+
+  it('describes what a mailbox changed itself', () => {
+    const self = (action: string) =>
+      describeActivity({ actor: 'info@example.com', action, target: 'info@example.com' })
+    expect(self('mail.mailbox.password-changed')).toBe('info@example.com changed its password')
+    expect(self('mail.mailbox.display-name-changed')).toBe('info@example.com changed its display name')
+    expect(self('mail.mailbox.app-passwords-only')).toBe('info@example.com changed how mail programs sign in to it')
+    expect(self('mail.mailbox.app-password-created')).toBe('info@example.com created an app password')
+    expect(self('mail.mailbox.app-password-revoked')).toBe('info@example.com revoked an app password')
+    expect(describeActivity({ actor: 'mail', action: 'mail.mailbox.app-password-revoked', target: '' })).toBe(
+      'An app password was revoked',
+    )
+  })
+
+  it.each([
+    ['mail.organisation.create', '', ''],
+    ['mail.organisation.rename', 'was Acme', 'Was Acme'],
+    ['mail.organisation.delete', 'its domains now stand alone: a.org, b.org', 'Its domains now stand alone: a.org, b.org'],
+    ['mail.organisation.delete', '', ''],
+    ['mail.domain.organisation', 'stands alone', 'Stands alone'],
+    ['mail.domain.organisation', 'into Acme', 'Now part of Acme'],
+    ['mail.domain.organisation', 'into Acme with a.org, b.org', 'Now part of Acme · Together with a.org, b.org'],
+    [
+      'mail.domain.organisation',
+      'into Acme with a.org (domains of different owners)',
+      'Now part of Acme · Together with a.org · Domains of different owners',
+    ],
+    ['mail.domain.organisation', 'into Acme (domains of different owners)', 'Now part of Acme · Domains of different owners'],
+    ['mail.mailbox.display-name', 'now Anna Muster', 'Now Anna Muster'],
+    ['mail.mailbox.display-name', 'removed', 'Removed'],
+    ['mail.mailbox.display-name-changed', 'now Anna', 'Now Anna'],
+    [
+      'mail.mailbox.display-name-changed',
+      'now Anna (not taken: changed in the panel at the same time)',
+      'Now Anna · Not taken: it was changed in the panel at the same time',
+    ],
+    ['mail.mailbox.app-passwords-only', 'on', 'Only app passwords work in mail programs'],
+    ['mail.mailbox.app-passwords-only', 'off', 'The mailbox password works in mail programs again'],
+    [
+      'mail.mailbox.app-passwords-only',
+      'on (not taken: changed in the panel at the same time)',
+      'Only app passwords work in mail programs · Not taken: it was changed in the panel at the same time',
+    ],
+    ['mail.mailbox.app-password-create', 'Phone', 'Phone'],
+    ['mail.mailbox.app-password-revoke', 'Laptop', 'Laptop'],
+    ['mail.mailbox.app-password-created', 'Phone', 'Phone'],
+    [
+      'mail.mailbox.app-password-revoked',
+      'Phone (not taken: changed in the panel at the same time)',
+      'Phone · Not taken: it was changed in the panel at the same time',
+    ],
+    [
+      'mail.mailbox.password-changed',
+      '(not taken: changed in the panel at the same time)',
+      'Not taken: it was changed in the panel at the same time',
+    ],
+  ])('%s %s', (action, detail, want) => {
+    expect(describeDetail({ action, detail })).toBe(want)
   })
 })
 

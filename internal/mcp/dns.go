@@ -10,7 +10,7 @@ import (
 )
 
 type dnsDomainInfo struct {
-	ConnectionID   int64    `json:"connection_id" jsonschema:"id of your DNS connection that holds the domain"`
+	ConnectionID   string   `json:"connection_id" jsonschema:"id of your DNS connection that holds the domain"`
 	ConnectionName string   `json:"connection_name" jsonschema:"name of that DNS connection"`
 	Domain         string   `json:"domain" jsonschema:"the domain (zone), e.g. example.com"`
 	ReadOnly       bool     `json:"read_only" jsonschema:"the provider does not allow changing its records"`
@@ -27,7 +27,7 @@ func dnsDomainInfoOf(z panel.DNSZone) dnsDomainInfo {
 }
 
 type dnsProblemInfo struct {
-	ConnectionID   int64  `json:"connection_id" jsonschema:"id of the DNS connection"`
+	ConnectionID   string `json:"connection_id" jsonschema:"id of the DNS connection"`
 	ConnectionName string `json:"connection_name" jsonschema:"name of the DNS connection"`
 	Error          string `json:"error" jsonschema:"why its domains could not be listed"`
 }
@@ -42,7 +42,7 @@ type dnsDomainsOutput struct {
 }
 
 type dnsDomainInput struct {
-	ConnectionID int64  `json:"connection_id" jsonschema:"id of your DNS connection that holds the domain, from list_dns_domains"`
+	ConnectionID string `json:"connection_id" jsonschema:"id of your DNS connection that holds the domain, from list_dns_domains"`
 	Domain       string `json:"domain" jsonschema:"the domain (zone), e.g. example.com"`
 }
 

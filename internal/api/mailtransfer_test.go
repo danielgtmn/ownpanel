@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -26,7 +27,7 @@ type fakeTransferService struct {
 	offsets  []int64
 	resumes  []config.ImportResume
 	jobs     []config.ImportJob
-	canceled []int64
+	canceled []string
 }
 
 func (f *fakeTransferService) CheckImport(_ context.Context, _ string, src config.ImportSource) (config.ImportCheck, error) {
@@ -40,7 +41,7 @@ func (f *fakeTransferService) CheckImport(_ context.Context, _ string, src confi
 }
 
 func (f *fakeTransferService) addJob(j config.ImportJob) config.ImportJob {
-	j.ID = int64(len(f.jobs) + 1)
+	j.ID = strconv.Itoa(len(f.jobs) + 1)
 	f.jobs = append(f.jobs, j)
 	return j
 }
@@ -58,7 +59,7 @@ func (f *fakeTransferService) CreateUpload(_ context.Context, sid string, req co
 	return f.addJob(config.ImportJob{StorageID: sid, Kind: config.ImportFile, State: config.ImportUploading, FileName: req.Name, FileSize: req.Size}), nil
 }
 
-func (f *fakeTransferService) UploadPart(_ context.Context, _ string, _ int64, offset int64, part io.Reader, size int64) (int64, error) {
+func (f *fakeTransferService) UploadPart(_ context.Context, _, _ string, offset int64, part io.Reader, size int64) (int64, error) {
 	b, err := io.ReadAll(io.LimitReader(part, size))
 	if err != nil {
 		return 0, err
@@ -70,14 +71,16 @@ func (f *fakeTransferService) UploadPart(_ context.Context, _ string, _ int64, o
 	return offset + int64(len(b)), nil
 }
 
-func (f *fakeTransferService) job(sid string, id int64) (config.ImportJob, error) {
-	if id < 1 || int(id) > len(f.jobs) || f.jobs[id-1].StorageID != sid {
-		return config.ImportJob{}, &config.Error{Status: 404, Msg: "unknown import"}
+func (f *fakeTransferService) job(sid, id string) (config.ImportJob, error) {
+	for _, j := range f.jobs {
+		if j.ID == id && j.StorageID == sid {
+			return j, nil
+		}
 	}
-	return f.jobs[id-1], nil
+	return config.ImportJob{}, &config.Error{Status: 404, Msg: "unknown import"}
 }
 
-func (f *fakeTransferService) ResumeImport(_ context.Context, sid string, id int64, r config.ImportResume) (config.ImportJob, error) {
+func (f *fakeTransferService) ResumeImport(_ context.Context, sid, id string, r config.ImportResume) (config.ImportJob, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resumes = append(f.resumes, r)
@@ -90,7 +93,7 @@ func (f *fakeTransferService) ImportJobs(_ context.Context, _ string) ([]config.
 	return append([]config.ImportJob{}, f.jobs...), nil
 }
 
-func (f *fakeTransferService) ImportJob(_ context.Context, sid string, id int64) (config.ImportJob, error) {
+func (f *fakeTransferService) ImportJob(_ context.Context, sid, id string) (config.ImportJob, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	j, err := f.job(sid, id)
@@ -98,7 +101,7 @@ func (f *fakeTransferService) ImportJob(_ context.Context, sid string, id int64)
 	return j, err
 }
 
-func (f *fakeTransferService) CancelImport(_ context.Context, _ string, id int64) error {
+func (f *fakeTransferService) CancelImport(_ context.Context, _, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.canceled = append(f.canceled, id)
@@ -149,14 +152,14 @@ func TestMailTransferRoutes(t *testing.T) {
 		t.Fatalf("answer %s", rec.Body)
 	}
 	j := decode[panel.MailImport](t, rec)
-	if j.ID != 1 || j.Address != "info@example.com" || j.Host != "imap.example.org" || !mail.jobs[0].Choices.IncludeJunk {
+	if j.ID != "1" || j.Address != "info@example.com" || j.Host != "imap.example.org" || !mail.jobs[0].Choices.IncludeJunk {
 		t.Fatalf("job %s", rec.Body)
 	}
 
 	// A file in two parts.
 	rec = e.as("POST", base+"/uploads", `{"name":"old.mbox","size":6}`)
 	wantStatus(t, rec, 201, "")
-	if j := decode[panel.MailImport](t, rec); j.ID != 2 || j.State != config.ImportUploading || j.FileName != "old.mbox" {
+	if j := decode[panel.MailImport](t, rec); j.ID != "2" || j.State != config.ImportUploading || j.FileName != "old.mbox" {
 		t.Fatalf("upload %s", rec.Body)
 	}
 	rec = e.as("PUT", base+"/uploads/2?offset=0", "abc")
@@ -172,7 +175,7 @@ func TestMailTransferRoutes(t *testing.T) {
 		t.Fatalf("parts %q %v", mail.parts, mail.offsets)
 	}
 	wantStatus(t, e.as("PUT", base+"/uploads/2", "abc"), 400, "offset")
-	wantStatus(t, e.as("PUT", base+"/uploads/x?offset=0", "abc"), 404, "")
+	wantStatus(t, e.as("PUT", base+"/uploads/X?offset=0", "abc"), 404, "")
 	big := httptest.NewRequest("PUT", base+"/uploads/2?offset=0", strings.NewReader("x"))
 	big.ContentLength = config.MaxUploadPart + 1
 	big.AddCookie(&http.Cookie{Name: SessionCookie, Value: e.cookie})
@@ -200,8 +203,10 @@ func TestMailTransferRoutes(t *testing.T) {
 		t.Fatalf("job %s", rec.Body)
 	}
 	wantStatus(t, e.as("GET", base+"/imports/9", ""), 404, "")
+	wantStatus(t, e.as("GET", base+"/imports/..%2F2", ""), 404, "")
+	wantStatus(t, e.as("DELETE", base+"/imports/A2", ""), 404, "")
 	wantStatus(t, e.as("DELETE", base+"/imports/2", ""), 204, "")
-	if len(mail.canceled) != 1 || mail.canceled[0] != 2 {
+	if len(mail.canceled) != 1 || mail.canceled[0] != "2" {
 		t.Fatalf("canceled %v", mail.canceled)
 	}
 

@@ -47,7 +47,7 @@ The installer never asks questions, except to confirm `--uninstall --purge`.
 | `--from-dir DIR` | Install from an unpacked release directory instead of downloading, e.g. on a server without Internet access. |
 | `-y`, `--yes` | Do not ask for confirmation (only `--purge` asks). |
 | `--uninstall` | Remove services and binaries, keep data and settings. |
-| `--purge` | With `--uninstall`: also delete all data, settings and the users. |
+| `--purge` | With `--uninstall`: also delete all data, settings, the users and the group `ownpanel-mail-web`. |
 | `-h`, `--help` | Show the options. |
 
 ### Release channels
@@ -86,9 +86,10 @@ Values given as installer options (`--panel-domain`, `--server-ip`, `--acme-emai
 
 | Item | Details |
 |---|---|
-| User `caddy` | system user, home `/var/lib/ownpanel-caddy/home`, shell `/usr/sbin/nologin` |
+| User `caddy` | system user, home `/var/lib/ownpanel-caddy/home`, shell `/usr/sbin/nologin`; added to the group `ownpanel-mail-web` |
 | User `ownpanel` | system user, home `/var/lib/ownpanel`, shell `/usr/sbin/nologin`; added to the groups `caddy` and `ownpanel-mail` |
 | User `ownpanel-mail` | system user with its own group, home `/var/lib/ownpanel-mail`, shell `/usr/sbin/nologin` |
+| Group `ownpanel-mail-web` | system group of the mail service's web socket; `caddy` is a member (and `ownpanel-mail.service` through `SupplementaryGroups=`) |
 | `/usr/local/bin/ownpaneld`, `/usr/local/bin/caddy` | the binaries (mode 0755); an existing `/usr/local/bin/caddy` is replaced |
 | `/etc/systemd/system/ownpaneld.service` | the panel daemon, runs as `ownpanel` |
 | `/etc/systemd/system/ownpanel-caddy.service` | Caddy, runs as `caddy` |
@@ -120,6 +121,8 @@ Caddy's admin API is a Unix socket, never a TCP port, because on TCP every local
 
 The mail service's admin socket works the same way: `/run/ownpanel-mail/admin.sock` in a directory of the group `ownpanel-mail` (0750), socket mode 0660, and `ownpanel` is a member of that group.
 
+The mail service has a second socket for Caddy: `/run/ownpanel-mail-web/web.sock`, where Caddy passes the mail server name's account pages (and later calendars and contacts). `ownpanel-mail.service` creates the directory with `RuntimeDirectory=` (0750); the service, a member of the group `ownpanel-mail-web` (`SupplementaryGroups=`), hands the directory and the socket (mode 0660) to that group (`-web-group`). Only `caddy` is a member of that group otherwise. Caddy is not in the group `ownpanel-mail`, so it can never reach the admin socket.
+
 Both units set `PrivateTmp`, `ProtectSystem=full` and `ProtectHome=true`; `ownpaneld.service` also sets `NoNewPrivileges`. Caddy gets `CAP_NET_BIND_SERVICE` to bind ports 80 and 443. Caddy is started with `--resume`, so after a restart it serves the last config until ownpaneld pushes the current one. `ownpanel-mail.service` is hardened further (see the unit file).
 
 ## Flags
@@ -127,10 +130,10 @@ Both units set `PrivateTmp`, `ProtectSystem=full` and `ProtectHome=true`; `ownpa
 ownpaneld reads its flags from `/etc/ownpanel/ownpaneld.env`, the variable `OWNPANELD_ARGS`. A fresh install writes:
 
 ```
-OWNPANELD_ARGS=-tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock -mail-admin unix:///run/ownpanel-mail/admin.sock
+OWNPANELD_ARGS=-tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock -mail-admin unix:///run/ownpanel-mail/admin.sock -mail-web unix:///run/ownpanel-mail-web/web.sock
 ```
 
-(Upgrades of installs from before e-mail get `-mail-admin` added.)
+(Upgrades of installs from before e-mail get `-mail-admin` added, those from before the mailbox sign-in page `-mail-web`.)
 
 plus `-panel-domain`, `-server-ip` and `-acme-email` if you gave the matching options. The service starts `/usr/local/bin/ownpaneld -data /var/lib/ownpanel $OWNPANELD_ARGS`. See [[Configuration|Configuration]] for all flags.
 
@@ -138,7 +141,7 @@ You can edit the file; apply a change with `systemctl restart ownpaneld`. The in
 
 ## Firewall
 
-If `ufw` is active, the installer allows 80, 443, 25, 465, 587 and 993 over TCP and says so. Otherwise it only reminds you; open them in your provider's firewall if it has one.
+If `ufw` is active, the installer allows 80, 443, 25, 465, 587, 993 and 4190 over TCP and says so. Otherwise it only reminds you; open them in your provider's firewall if it has one.
 
 | Port | Used for |
 |---|---|
@@ -147,6 +150,7 @@ If `ufw` is active, the installer allows 80, 443, 25, 465, 587 and 993 over TCP 
 | 25/tcp | mail from other mail servers; also outgoing, which many providers block until asked ([[E-Mail|E-Mail]]) |
 | 465/tcp, 587/tcp | mail programs sending mail |
 | 993/tcp | mail programs reading mail |
+| 4190/tcp | mail programs editing the mailbox's filters ([[E-Mail|E-Mail]]) |
 
 Do not open port 8600; the panel listens on the loopback address only and Caddy reaches it from the same machine.
 
@@ -219,6 +223,8 @@ It refuses to run where ownpanel is not installed and never asks setup questions
 7. If not: put the `*.previous` files back, restart, and report "rolled back" (exit code 3; 4 if even that failed, then restore the backup).
 
 The database is not restored on a rollback: a new version may have migrated it. If the previous version does not work with it, restore the backup ([[Backup and Restore|Backup-and-Restore]]).
+
+**The update that converts the database.** The first version that keeps the panel's data with [ablage](https://github.com/danielgtmn/ablage) converts `ownpanel.db` once when it starts: ids become text (an existing record keeps its number, `42` becomes `"42"`, so links and bookmarks keep working), times are kept in microseconds, and a few tables get new keys. Sign-in data (the `auth_*` tables) is taken over as it is: people stay signed in, and passwords, e-mail addresses, failed-attempt counts and reset links carry over. Before it changes anything it writes a copy of the database as it was, `ownpanel.db.pre-ablage-<UTC time>` (mode 0600, e.g. `ownpanel.db.pre-ablage-20261126T120000Z`), next to it in the data directory. The conversion runs in one transaction: if it fails, the database stays as it was and the next start tries again. Older versions cannot read the converted database, so a rollback past this version needs that copy: stop `ownpaneld`, remove `ownpanel.db`, `ownpanel.db-wal` and `ownpanel.db-shm`, rename the copy to `ownpanel.db` (owner `ownpanel`) and start the older version. Changes made after the update are lost then. Once the new version runs well, the copy can be deleted.
 
 ### How updates from the panel work
 

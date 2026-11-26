@@ -26,6 +26,8 @@ import (
 	"github.com/emersion/go-smtp"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/auth"
+	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	"github.com/danielgtmn/ownpanel/internal/mail/deliver"
 	"github.com/danielgtmn/ownpanel/internal/mail/directory"
 	"github.com/danielgtmn/ownpanel/internal/mail/filter"
 	"github.com/danielgtmn/ownpanel/internal/mail/queue"
@@ -81,6 +83,9 @@ type Options struct {
 	// ClientIP returns the address a connection comes from (tests); nil
 	// means the connection's remote address.
 	ClientIP func(net.Addr) netip.Addr
+	// Deliver stores messages in mailboxes and runs their filters; nil
+	// means one with Store, Queue and SRS.
+	Deliver *deliver.Deliverer
 }
 
 // Server is the port 25 server. It runs go-smtp servers behind its own
@@ -135,6 +140,11 @@ func New(opts Options) *Server {
 	if opts.SRS == nil {
 		opts.SRS = auth.NewSRS(randomKey(), opts.Now)
 	}
+	if opts.Deliver == nil {
+		st := opts.Store
+		opts.Deliver = deliver.New(deliver.Options{Store: st, Queue: opts.Queue, SRS: opts.SRS, Signer: auth.NewSigner(),
+			Logger: opts.Logger, Now: opts.Now, Event: func(e config.Event) { st.AddEvent(context.Background(), e) }})
+	}
 	if opts.ClientIP == nil {
 		opts.ClientIP = func(a net.Addr) netip.Addr {
 			ap, err := netip.ParseAddrPort(a.String())
@@ -155,6 +165,14 @@ func (s *Server) Serve(l net.Listener) error {
 	if s.ln != nil {
 		s.mu.Unlock()
 		return errors.New("smtpd: already serving")
+	}
+	select {
+	case <-s.done:
+		// Shutdown or Close came first: never start accepting.
+		s.mu.Unlock()
+		l.Close()
+		return nil
+	default:
 	}
 	s.ln = newLimitListener(l, d.Limits().ConnectionsPerIP, s.opts.MaxConnections, s.opts.IdleTimeout)
 	refusal := func(line string) string { return line }
@@ -259,6 +277,11 @@ func (s *Server) retire(g *generation, ctx context.Context) {
 	if err := g.srv.Shutdown(ctx); err != nil {
 		g.srv.Close()
 	}
+	// go-smtp closes only listeners its Serve has registered. A generation
+	// retired right after it was started (a configuration change followed
+	// by a shutdown) may not have got that far, and its Accept would wait
+	// forever; closing our own listener ends it either way.
+	g.ln.Close()
 	g.run.Wait()
 }
 
@@ -293,6 +316,7 @@ func (s *Server) Close() error {
 	s.mu.Unlock()
 	if g != nil {
 		g.srv.Close()
+		g.ln.Close() // see retire
 		g.run.Wait()
 	}
 	return s.closeListener()

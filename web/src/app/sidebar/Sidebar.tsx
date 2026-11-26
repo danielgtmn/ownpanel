@@ -82,6 +82,10 @@ export type SidebarProps = {
 
 const EXPAND_SHORTCUT = '['
 
+// The shared tooltip keeps the payload it opened with, so the names toggle passes this marker and the
+// content shows the toggle's current text: it changes on a click or the shortcut while the tooltip is open.
+const NAMES_TOGGLE: Tip = { title: 'Show or hide names' }
+
 const placeholders = [{ key: 'apps', label: 'Apps', icon: AppsIcon }]
 
 function capitalize(text: string) {
@@ -240,6 +244,7 @@ function Rail({
   const toggle = useCallback(() => updatePrefs((current) => withExpanded(current, !current.expanded)), [])
   useShortcut(inDrawer ? null : EXPAND_SHORTCUT, toggle, { description: 'Show or hide names in the sidebar' })
   const hint = useShortcutHint(EXPAND_SHORTCUT)
+  const namesTip: Tip = { title: expanded ? 'Hide names' : 'Show names', shortcut: hint.text }
   const markMissing = useCallback(
     (src: string) => setMissing((current) => (current.has(src) ? current : new Set(current).add(src))),
     [],
@@ -422,7 +427,7 @@ function Rail({
         {inDrawer ? null : (
           <TipTrigger
             tips={tips}
-            tip={{ title: expanded ? 'Hide names' : 'Show names', shortcut: hint.text }}
+            tip={NAMES_TOGGLE}
             render={
               <Button
                 className="tile"
@@ -442,21 +447,22 @@ function Rail({
 
       <Tooltip controller={tips}>
         <TooltipContent<Tip> side="right" sideOffset={10} className="rail-tip">
-          {(state) =>
-            state.payload ? (
+          {(state) => {
+            const tip = state.payload === NAMES_TOGGLE ? namesTip : state.payload
+            return tip ? (
               <>
                 <span className="rail-tip-title">
-                  {state.payload.title}
-                  {state.payload.shortcut ? (
+                  {tip.title}
+                  {tip.shortcut ? (
                     <kbd className="rail-tip-key" aria-hidden="true">
-                      {state.payload.shortcut}
+                      {tip.shortcut}
                     </kbd>
                   ) : null}
                 </span>
-                {state.payload.detail ? <span className="rail-tip-detail">{state.payload.detail}</span> : null}
+                {tip.detail ? <span className="rail-tip-detail">{tip.detail}</span> : null}
               </>
             ) : null
-          }
+          }}
         </TooltipContent>
       </Tooltip>
     </div>

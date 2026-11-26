@@ -23,9 +23,11 @@ import (
 
 	"github.com/danielgtmn/ownpanel/internal/mail/auth"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
+	maildeliver "github.com/danielgtmn/ownpanel/internal/mail/deliver"
 	"github.com/danielgtmn/ownpanel/internal/mail/directory"
 	"github.com/danielgtmn/ownpanel/internal/mail/filter"
 	"github.com/danielgtmn/ownpanel/internal/mail/imapd"
+	"github.com/danielgtmn/ownpanel/internal/mail/managesieve"
 	"github.com/danielgtmn/ownpanel/internal/mail/queue"
 	"github.com/danielgtmn/ownpanel/internal/mail/signin"
 	"github.com/danielgtmn/ownpanel/internal/mail/smtpd"
@@ -38,6 +40,20 @@ import (
 type Options struct {
 	DataDir     string
 	AdminSocket string
+	// WebSocket is the Unix socket Caddy passes the mail host's
+	// self-service API and calendars and contacts to (package web); ""
+	// leaves it closed.
+	WebSocket string
+	// WebGroup, when set, is the group the web socket's directory and the
+	// socket are handed to (the web server's; the service must be a
+	// member).
+	WebGroup string
+	// AccountHandler serves /account/api/… on the web socket (see
+	// web.Options.Account).
+	AccountHandler http.Handler
+	// DAVHandler serves calendars and contacts on the web socket (see
+	// web.Options.DAV).
+	DAVHandler http.Handler
 	// Listener addresses: SMTP (port 25), submission with STARTTLS (587),
 	// submission with TLS (465) and IMAPS (993). An empty address leaves
 	// that listener closed.
@@ -45,6 +61,9 @@ type Options struct {
 	SubmissionAddr  string
 	SubmissionsAddr string
 	IMAPSAddr       string
+	// ManageSieveAddr is where mail programs manage filter scripts
+	// (ManageSieve, port 4190, STARTTLS); "" leaves it closed.
+	ManageSieveAddr string
 	Logger          *slog.Logger
 
 	// FreeBytes reports free disk space (tests); nil measures the data
@@ -97,7 +116,14 @@ type Server struct {
 	state atomic.Pointer[runtime]
 	tls   *tls.Config
 
-	loadMu sync.Mutex // serializes loads
+	ignoredMu sync.Mutex
+	ignored   string // grants last logged as ignored
+
+	loadMu sync.Mutex // serializes loads and account changes
+	// overlays are the account changes mailboxes made here that the
+	// pushed configuration does not include yet, by storage id (see
+	// directory.Overlay). Guarded by loadMu; also kept in mail.db.
+	overlays map[string]*directory.Overlay
 
 	signIn  *signin.Checker
 	limits  *submission.Limiter
@@ -106,22 +132,32 @@ type Server struct {
 	imports *transfer.Manager
 	filter  *filter.Filter
 	srs     *auth.SRS
+	// deliver stores incoming mail and runs the mailboxes' filters (port 25
+	// and submission share it).
+	deliver *maildeliver.Deliverer
 
 	lisMu       sync.Mutex
 	smtp        listenerState
 	submission  listenerState
 	submissions listenerState
 	imaps       listenerState
+	managesieve listenerState
 
 	admin   *http.Server
 	adminLn net.Listener
+	web     *http.Server // nil without Options.WebSocket or when it failed
+	webLn   net.Listener
+	webErr  string // why the web socket does not work; guarded by lisMu
 }
 
 // runtime is an immutable snapshot of the loaded configuration.
 type runtime struct {
-	dir   *directory.Directory
-	hash  string // "" when nothing was loaded
-	certs *certSet
+	// pushed is the configuration as the panel pushed it; dir is built
+	// from it with the account overlays applied.
+	pushed *config.Config
+	dir    *directory.Directory
+	hash   string // of pushed; "" when nothing was loaded
+	certs  *certSet
 }
 
 // service is a protocol server behind one listener.
@@ -154,9 +190,10 @@ func New(opts Options) (*Server, error) {
 	s.submission = listenerState{name: "submission", label: "sending for mail clients (STARTTLS)", cfg: opts.SubmissionAddr, start: func() service { return s.startSubmission(false) }}
 	s.submissions = listenerState{name: "submissions", label: "sending for mail clients (TLS)", cfg: opts.SubmissionsAddr, start: func() service { return s.startSubmission(true) }}
 	s.imaps = listenerState{name: "imaps", label: "IMAP for mail clients", cfg: opts.IMAPSAddr, start: s.startIMAPS}
+	s.managesieve = listenerState{name: "managesieve", label: "filters for mail programs (ManageSieve)", cfg: opts.ManageSieveAddr, start: s.startManageSieve}
 	s.signIn = signin.New(signin.Options{Event: s.event})
 	empty := &config.Config{}
-	s.state.Store(&runtime{dir: directory.New(empty), certs: &certSet{}})
+	s.state.Store(&runtime{pushed: empty, dir: directory.New(empty), certs: &certSet{}})
 	s.tls = &tls.Config{
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return s.state.Load().certs.pick(hello)
@@ -201,6 +238,7 @@ func New(opts Options) (*Server, error) {
 		Event:        s.event,
 		Logger:       s.log,
 	})
+	s.deliver = maildeliver.New(maildeliver.Options{Store: store, Queue: s.queue, Signer: s.signer, SRS: s.srs, Event: s.event, Logger: s.log})
 	imp := transfer.Options{
 		Store:        store,
 		Directory:    s.Directory,
@@ -216,6 +254,10 @@ func New(opts Options) (*Server, error) {
 		imp.Resolver = opts.ImportResolver
 	}
 	s.imports = transfer.New(imp)
+	if s.overlays, err = loadOverlays(store); err != nil {
+		store.Close()
+		return nil, fmt.Errorf("account changes: %w", err)
+	}
 	if err := s.resume(); err != nil {
 		// A broken file must not keep mail down: the panel pushes again.
 		s.log.Error("mail: last configuration not loaded", "err", err)
@@ -251,6 +293,9 @@ func (s *Server) quota(storageID string) int64 {
 // Directory is the current configuration view.
 func (s *Server) Directory() *directory.Directory { return s.state.Load().dir }
 
+// SignIn is the sign-in checker of mail programs (IMAP, SMTP, DAV).
+func (s *Server) SignIn() *signin.Checker { return s.signIn }
+
 // Store is the mail storage (for IMAP).
 func (s *Server) Store() *storage.Store { return s.store }
 
@@ -278,8 +323,26 @@ func (s *Server) apply(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	s.state.Store(&runtime{dir: directory.New(cfg), hash: cfg.Hash(), certs: certs})
+	dir := directory.New(directory.Merge(cfg, s.overlays))
+	s.state.Store(&runtime{pushed: cfg, dir: dir, hash: cfg.Hash(), certs: certs})
+	s.logIgnoredGrants(dir.Ignored())
 	return nil
+}
+
+// logIgnoredGrants logs the grants a configuration has that do not count
+// (another organisation, a deleted or shared mailbox), once for as long as
+// they stay the same.
+func (s *Server) logIgnoredGrants(notes []string) {
+	key := strings.Join(notes, "\n")
+	s.ignoredMu.Lock()
+	defer s.ignoredMu.Unlock()
+	if key == s.ignored {
+		return
+	}
+	s.ignored = key
+	for _, n := range notes {
+		s.log.Warn("mail: grant ignored", "what", n)
+	}
 }
 
 // Load validates, binds, persists and applies a configuration.
@@ -298,6 +361,9 @@ func (s *Server) Load(ctx context.Context, cfg *config.Config) error {
 		if errors.As(err, &c) {
 			return &loadError{err}
 		}
+		return err
+	}
+	if err := s.pruneOverlays(ctx, cfg); err != nil {
 		return err
 	}
 	hash := cfg.Hash()
@@ -435,11 +501,12 @@ func (s *Server) startSMTP() service {
 		Filter:    s.filter,
 		Queue:     s.queue,
 		SRS:       s.srs,
+		Deliver:   s.deliver,
 	})
 }
 
 func (s *Server) allListeners() []*listenerState {
-	return []*listenerState{&s.smtp, &s.submission, &s.submissions, &s.imaps}
+	return []*listenerState{&s.smtp, &s.submission, &s.submissions, &s.imaps, &s.managesieve}
 }
 
 func (s *Server) startSubmission(implicitTLS bool) service {
@@ -454,6 +521,7 @@ func (s *Server) startSubmission(implicitTLS bool) service {
 		ImplicitTLS: implicitTLS,
 		Logger:      s.log,
 		FreeBytes:   s.opts.FreeBytes,
+		Deliver:     s.deliver,
 	})
 }
 
@@ -465,6 +533,17 @@ func (s *Server) startIMAPS() service {
 		TLSConfig: s.tls,
 		Logger:    s.log,
 		FreeBytes: s.opts.FreeBytes,
+	})
+}
+
+func (s *Server) startManageSieve() service {
+	return managesieve.New(managesieve.Options{
+		Store:     s.store,
+		Directory: s.Directory,
+		SignIn:    s.signIn,
+		TLSConfig: s.tls,
+		Logger:    s.log,
+		SignedIn:  s.limits.SignedIn,
 	})
 }
 
@@ -504,6 +583,10 @@ func (s *Server) boundAddr(st *listenerState) string {
 	return st.addr
 }
 
+// RecordEvent records an event for the panel (the self-service area's
+// sign-in failures). Detail must not contain secrets.
+func (s *Server) RecordEvent(e config.Event) { s.event(e) }
+
 func (s *Server) event(e config.Event) {
 	if err := s.store.AddEvent(context.Background(), e); err != nil {
 		s.log.Error("mail: record event", "err", err)
@@ -513,7 +596,7 @@ func (s *Server) event(e config.Event) {
 // Status reports the service's state.
 func (s *Server) Status(ctx context.Context) (config.Status, error) {
 	rt := s.state.Load()
-	st := config.Status{ConfigHash: rt.hash, Listeners: s.listeners(), Mailboxes: []config.MailboxStatus{}, Orphans: []string{}}
+	st := config.Status{ConfigHash: rt.hash, Listeners: s.listeners(), Web: s.webStatus(), Mailboxes: []config.MailboxStatus{}, Orphans: []string{}}
 	if len(rt.certs.certs) > 0 {
 		st.CertificateExpires = rt.certs.certs[0].Leaf.NotAfter.UTC()
 	}
@@ -536,6 +619,7 @@ func (s *Server) Status(ctx context.Context) (config.Status, error) {
 		st.Mailboxes = append(st.Mailboxes, config.MailboxStatus{
 			StorageID: m.StorageID, UsedBytes: u.Bytes, Messages: u.Messages,
 			Blocked: b.Blocked, BlockedReason: b.Reason, BlockedAt: b.At,
+			OutOfOffice: s.outOfOfficeOn(ctx, m.StorageID),
 		})
 	}
 	ids, err := s.store.StorageIDs(ctx)
@@ -567,6 +651,25 @@ func (s *Server) listeners() []config.Listener {
 	return out
 }
 
+// webStatus is the state of the web socket, nil without one.
+func (s *Server) webStatus() *config.Listener {
+	if s.opts.WebSocket == "" {
+		return nil
+	}
+	s.lisMu.Lock()
+	defer s.lisMu.Unlock()
+	return &config.Listener{Name: "web", Address: s.opts.WebSocket, Listening: s.webErr == "" && s.web != nil, Error: s.webErr}
+}
+
+// webFailed records that the web socket does not work. Mail goes on.
+func (s *Server) webFailed(err error) {
+	s.lisMu.Lock()
+	s.webErr = err.Error()
+	s.lisMu.Unlock()
+	s.log.Error("mail: running without the web socket", "err", err)
+	s.event(config.Event{Kind: config.EventListenerFailed, Detail: "sign-in page for mailbox users: " + err.Error()})
+}
+
 // Run serves the admin socket and the listeners until ctx ends, then shuts
 // down gracefully.
 func (s *Server) Run(ctx context.Context) error {
@@ -574,8 +677,17 @@ func (s *Server) Run(ctx context.Context) error {
 		s.store.Close()
 		return err
 	}
+	// The web socket is optional for mail: if it cannot be set up the
+	// service runs without it, and its status says why.
+	if err := s.listenWeb(); err != nil {
+		s.webFailed(err)
+	}
 	adminDone := make(chan error, 1)
 	go func() { adminDone <- s.admin.Serve(s.adminLn) }()
+	webDone := make(chan error, 1)
+	if s.web != nil {
+		go func() { webDone <- s.web.Serve(s.webLn) }()
+	}
 	s.syncListeners()
 	s.store.PruneEvents(ctx)
 	s.limits.Prune(ctx)
@@ -598,6 +710,10 @@ func (s *Server) Run(ctx context.Context) error {
 				s.shutdown()
 				return fmt.Errorf("admin socket: %w", err)
 			}
+		case err := <-webDone:
+			if !errors.Is(err, http.ErrServerClosed) {
+				s.webFailed(fmt.Errorf("web socket: %w", err))
+			}
 		case <-retry.C:
 			// A port that was busy (another mail server) may be free now.
 			s.syncListeners()
@@ -607,6 +723,9 @@ func (s *Server) Run(ctx context.Context) error {
 			}
 			if err := s.limits.Prune(context.Background()); err != nil {
 				s.log.Error("mail: prune send log", "err", err)
+			}
+			if err := s.store.PruneSieve(context.Background(), time.Now()); err != nil {
+				s.log.Error("mail: prune filter state", "err", err)
 			}
 			if err := s.filter.Prune(context.Background()); err != nil {
 				s.log.Error("mail: prune greylist", "err", err)
@@ -619,25 +738,8 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) listenAdmin() error {
-	path := s.opts.AdminSocket
-	if fi, err := os.Lstat(path); err == nil {
-		if fi.Mode()&os.ModeSocket == 0 {
-			return fmt.Errorf("%s exists and is not a socket", path)
-		}
-		if c, err := net.DialTimeout("unix", path, time.Second); err == nil {
-			c.Close()
-			return fmt.Errorf("%s is in use: is the mail service already running?", path)
-		}
-		if err := os.Remove(path); err != nil {
-			return err
-		}
-	}
-	ln, err := net.Listen("unix", path)
+	ln, err := listenUnix(s.opts.AdminSocket)
 	if err != nil {
-		return err
-	}
-	if err := os.Chmod(path, 0o660); err != nil {
-		ln.Close()
 		return err
 	}
 	s.adminLn = ln
@@ -674,6 +776,14 @@ func (s *Server) shutdown() error {
 	// Imports stop at the next message; they continue (files) or are
 	// interrupted (IMAP) after the next start.
 	s.imports.Shutdown(ctx)
+	if s.web != nil {
+		wctx, wcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.web.Shutdown(wctx); err != nil {
+			s.web.Close()
+		}
+		wcancel()
+		os.Remove(s.opts.WebSocket)
+	}
 	if s.admin != nil {
 		actx, acancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := s.admin.Shutdown(actx); err != nil {
