@@ -6,6 +6,13 @@ import (
 	"testing"
 )
 
+// The tools of redirects.go and their annotations (see TestToolsAndAnnotations).
+var _ = expectTools(map[string]toolWant{
+	"list_redirects":  {readOnly: true, idempotent: true},
+	"set_redirect":    {destructive: true},
+	"delete_redirect": {destructive: true},
+})
+
 func TestRedirectTools(t *testing.T) {
 	e := newEnv(t, "panel.example.com")
 	ctx := context.Background()

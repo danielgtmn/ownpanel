@@ -5,6 +5,13 @@ import (
 	"testing"
 )
 
+// The tools of domains.go and their annotations (see TestToolsAndAnnotations).
+var _ = expectTools(map[string]toolWant{
+	"list_domains":  {readOnly: true, idempotent: true},
+	"add_domain":    {idempotent: true},
+	"remove_domain": {},
+})
+
 func TestDomainTools(t *testing.T) {
 	e := newEnv(t, "")
 	w := e.connect(t, e.write)
