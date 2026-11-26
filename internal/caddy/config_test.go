@@ -2,6 +2,7 @@ package caddy
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -253,5 +254,37 @@ func TestBuildMailSetupRoutes(t *testing.T) {
 	o.PanelUpstream = ""
 	if _, err := Build(o, sites); err == nil {
 		t.Fatal("setup names without the panel's address must fail")
+	}
+}
+
+// A domain redirect or site on a setup name the panel serves must not
+// answer it: the setup route comes first.
+func TestBuildMailSetupRouteBeforeRedirectsAndSites(t *testing.T) {
+	o := Options{AdminListen: "127.0.0.1:2019", StorageDir: "/data/caddy", TLSMode: TLSACME, HTTPPort: 80, HTTPSPort: 443,
+		PanelUpstream:         "127.0.0.1:8600",
+		MailSetupHosts:        []string{"autoconfig.a.example.com", "autodiscover.a.example.com"},
+		MailAutoconfigDomains: []string{"a.example.com"}}
+	sites := []Site{{Name: "x", Domains: []string{"autoconfig.a.example.com"}, Root: "/r/x", Live: true}}
+	cfg, err := Build(o, sites, Redirect{Domain: "autodiscover.a.example.com", Target: "https://elsewhere.example", Code: 302})
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes := cfg["apps"].(obj)["http"].(obj)["servers"].(obj)["sites"].(obj)["routes"].([]obj)
+	for _, name := range o.MailSetupHosts {
+		first := -1
+		for i, r := range routes {
+			m, _ := r["match"].([]obj)
+			if len(m) > 0 && slices.Contains(m[0]["host"].([]string), name) {
+				first = i
+				break
+			}
+		}
+		if first < 0 {
+			t.Fatalf("no route for %s", name)
+		}
+		b, _ := json.Marshal(routes[first])
+		if !strings.Contains(string(b), `"subroute"`) || !strings.Contains(string(b), "/mail/config-v1.1.xml") {
+			t.Fatalf("first route for %s is not the setup route: %s", name, b)
+		}
 	}
 }

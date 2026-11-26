@@ -6,7 +6,8 @@
 // export" in wiki/E-Mail-Architecture.md.
 //
 // Jobs are rows in mail.db (storage). At most MaxRunning jobs run at
-// once, one per mailbox; the others wait. The password of an IMAP job is
+// once, one per mailbox; the others wait. Scans of uploaded files are
+// bounded the same way, separately (at most MaxRunning at once). The password of an IMAP job is
 // kept only in memory: after a restart such a job is interrupted and
 // continues once the password is given again. File jobs read their
 // upload from a spool file in imports/ and continue by themselves.
@@ -37,6 +38,11 @@ import (
 
 // DefaultMaxRunning is how many jobs run at once.
 const DefaultMaxRunning = 2
+
+// maxScans is how often the scan of an upload starts before it is given
+// up: a scan the mail service did not survive (it was killed while
+// reading the file) is tried once more after the restart, not forever.
+const maxScans = 2
 
 // saveEvery is how often a running job writes its progress.
 const saveEvery = time.Second
@@ -416,7 +422,7 @@ func (m *Manager) WritePart(ctx context.Context, sid string, id, offset int64, b
 	}
 	if j.State == config.ImportChecking {
 		m.mu.Lock()
-		m.startScanLocked(j)
+		m.scheduleLocked()
 		m.mu.Unlock()
 	}
 	return j.Received, nil
@@ -632,8 +638,15 @@ func (m *Manager) Start(ctx context.Context) error {
 			if err := st.SaveImport(ctx, &j); err != nil {
 				return err
 			}
-		case j.State == config.ImportChecking:
-			m.startScanLocked(j)
+		case j.State == config.ImportChecking && j.Scans >= maxScans:
+			// Earlier scans ended with the service, not with a result.
+			j.State, j.Finished = config.ImportFailed, m.now()
+			j.Error = "the file could not be checked; the mail service stopped while reading it"
+			os.Remove(m.spoolPath(j.ID))
+			if err := st.SaveImport(ctx, &j); err != nil {
+				return err
+			}
+			m.emit(j, config.EventImportFailed)
 		}
 	}
 	m.removeOrphanSpools(ctx)
@@ -700,18 +713,37 @@ func (m *Manager) Shutdown(ctx context.Context) {
 	}
 }
 
-// scheduleLocked starts waiting jobs, oldest first, at most MaxRunning
-// and one per mailbox.
+// scheduleLocked starts scans of complete uploads and waiting jobs,
+// oldest first: at most MaxRunning scans, and at most MaxRunning jobs and
+// one per mailbox.
 func (m *Manager) scheduleLocked() {
 	if !m.started || m.stopped {
 		return
 	}
-	running := 0
+	running, scans := 0, 0
 	busy := map[string]bool{}
 	for _, a := range m.active {
-		if !a.scanning {
+		if a.scanning {
+			scans++
+		} else {
 			running++
 			busy[a.sid] = true
+		}
+	}
+	if scans < m.opts.MaxRunning {
+		cs, err := m.opts.Store.ImportsIn(context.Background(), config.ImportChecking)
+		if err != nil {
+			m.log.Error("mail: schedule import scans", "err", err)
+		}
+		for _, j := range cs {
+			if scans >= m.opts.MaxRunning {
+				break
+			}
+			if _, ok := m.active[j.ID]; ok {
+				continue
+			}
+			scans++
+			m.startLocked(j, true)
 		}
 	}
 	if running >= m.opts.MaxRunning {
@@ -762,16 +794,6 @@ func (m *Manager) startLocked(j config.ImportJob, scan bool) {
 		m.scheduleLocked()
 		m.mu.Unlock()
 	}()
-}
-
-func (m *Manager) startScanLocked(j config.ImportJob) {
-	if m.stopped || !m.started {
-		return
-	}
-	if _, ok := m.active[j.ID]; ok {
-		return
-	}
-	m.startLocked(j, true)
 }
 
 func (m *Manager) reason(a *active) stopReason {

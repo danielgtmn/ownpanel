@@ -330,6 +330,9 @@ func (s *Service) sendEmail(ctx context.Context, e sesam.Email) error {
 	if !ok {
 		return errors.New("no mail domain to send from")
 	}
+	if err := s.mayMailResetTo(ctx, e.To); err != nil {
+		return err
+	}
 	return s.mail.Send(ctx, config.OutgoingMail{
 		From: from, FromName: "ownpanel", To: e.To, Subject: e.Subject, Text: e.Text, HTML: e.HTML,
 	})

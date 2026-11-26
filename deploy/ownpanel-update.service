@@ -4,6 +4,7 @@ Documentation=https://github.com/danielgtmn/ownpanel/wiki/Installation#updating
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=/etc/ownpanel/release
+ConditionPathIsDirectory=/var/lib/ownpanel-update
 
 # Started by ownpanel-update.path (a request from the panel) and by
 # ownpanel-update.timer (automatic updates). It runs as root because an update
@@ -16,13 +17,12 @@ ExecStart=/usr/local/lib/ownpanel/ownpanel-update
 # Download, backup, install, health check and a possible rollback.
 TimeoutStartSec=30min
 UMask=0077
-# Private, root-only state: the day of the last automatic attempt, and where
-# requests are moved to be read.
-StateDirectory=ownpanel-update
-StateDirectoryMode=0700
+# Its directory /var/lib/ownpanel-update (root, 0755) is created by
+# install.sh, not with StateDirectory=: the panel needs to reach requests in
+# it, so it must not become 0700.
 
 # Hardening. The updater must write /usr/local, /etc/ownpanel,
-# /etc/systemd/system and /var/lib/ownpanel, may create users and may open the
+# /etc/systemd/system, /var/lib/ownpanel*, may create users and may open the
 # firewall (install.sh does all of that), so ProtectSystem, a capability bound
 # and ProtectKernelTunables are not used. NoNewPrivileges is safe: services are
 # restarted by systemd itself, not by a child of this one, and root needs no

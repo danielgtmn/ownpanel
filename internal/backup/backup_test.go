@@ -99,3 +99,63 @@ func TestCreate(t *testing.T) {
 		t.Fatalf("restored database: %+v %v", site, err)
 	}
 }
+
+// Caddy's storage may live outside the data directory, and the database copy
+// may come from somewhere else (a child process running as the data
+// directory's owner); it must be an SQLite database.
+func TestCreateFrom(t *testing.T) {
+	data := t.TempDir()
+	st, err := store.Open(filepath.Join(data, DBFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	storage := filepath.Join(t.TempDir(), "storage")
+	os.MkdirAll(filepath.Join(storage, "certificates"), 0o700)
+	os.WriteFile(filepath.Join(storage, "certificates", "x.crt"), []byte("cert"), 0o600)
+	os.MkdirAll(filepath.Join(data, "caddy"), 0o700)
+	os.WriteFile(filepath.Join(data, "caddy", "old.crt"), []byte("old"), 0o600)
+
+	called := false
+	db := func(w io.Writer) error { called = true; return WriteDB(w, data) }
+	out := filepath.Join(t.TempDir(), "b.tar.gz")
+	if err := CreateFrom(data, out, Sources{DB: db, CaddyStorage: storage}); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("the database source was not used")
+	}
+	names := map[string]bool{}
+	f, _ := os.Open(out)
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		names[hdr.Name] = true
+	}
+	if !names["caddy/certificates/x.crt"] || !names[DBFile] {
+		t.Fatalf("archive misses entries: %v", names)
+	}
+	if names["caddy/old.crt"] {
+		t.Fatal("the caddy folder of the data directory was used instead of the storage given")
+	}
+
+	bad := func(w io.Writer) error { _, err := w.Write([]byte("not a database")); return err }
+	out2 := filepath.Join(t.TempDir(), "b.tar.gz")
+	if err := CreateFrom(data, out2, Sources{DB: bad}); err == nil {
+		t.Fatal("a copy that is not a database was accepted")
+	}
+	if _, err := os.Stat(out2); err == nil {
+		t.Fatal("an archive was written for a failed backup")
+	}
+}

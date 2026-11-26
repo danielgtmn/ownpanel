@@ -169,9 +169,12 @@ func (s *Service) checkMailSetupHosts(ctx context.Context) bool {
 
 // mailSetupCaddy fills in the web server options for setting up mail
 // programs: the names that point here, and the active mail domains whose
-// sites answer the well-known path. A name that is a site's domain, a
-// redirect's, the panel's or the mail host stays theirs.
-func (s *Service) mailSetupCaddy(ctx context.Context, o *caddy.Options, sites []store.Site, redirects []caddy.Redirect) error {
+// sites answer the well-known path. A name that is the panel's or the mail
+// host stays theirs; a name that is a site's or a domain redirect's stays
+// theirs only when it belongs to the owner of the mail domain. Anybody
+// else's claim on it does not take the setup away from the mail domain's
+// owner (Build puts the setup route ahead of sites and redirects).
+func (s *Service) mailSetupCaddy(ctx context.Context, o *caddy.Options, sites []store.Site) error {
 	if o.PanelUpstream == "" {
 		return nil
 	}
@@ -183,14 +186,21 @@ func (s *Service) mailSetupCaddy(ctx context.Context, o *caddy.Options, sites []
 	if err != nil {
 		return err
 	}
-	taken := map[string]bool{host: true, o.PanelDomain: true}
+	redirects, err := s.store.Redirects(ctx)
+	if err != nil {
+		return err
+	}
+	reserved := map[string]bool{host: true, o.PanelDomain: true}
+	claimedBy := map[string]int64{} // name -> owner of the site or domain redirect
 	for _, site := range sites {
 		for _, d := range site.Domains {
-			taken[d] = true
+			claimedBy[d] = site.OwnerID
 		}
 	}
 	for _, r := range redirects {
-		taken[r.Domain] = true
+		if r.SourcePath == "" {
+			claimedBy[r.SourceDomain] = r.OwnerID
+		}
 	}
 	for _, d := range all {
 		if !d.Active || d.Domain == host {
@@ -198,7 +208,13 @@ func (s *Service) mailSetupCaddy(ctx context.Context, o *caddy.Options, sites []
 		}
 		o.MailAutoconfigDomains = append(o.MailAutoconfigDomains, d.Domain)
 		for _, name := range setupNames(d.Domain) {
-			if !taken[name] && s.setupHosts.pointsHere(name) {
+			if reserved[name] {
+				continue
+			}
+			if owner, ok := claimedBy[name]; ok && owner == d.OwnerID {
+				continue
+			}
+			if s.setupHosts.pointsHere(name) {
 				o.MailSetupHosts = append(o.MailSetupHosts, name)
 			}
 		}

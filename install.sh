@@ -38,8 +38,18 @@ DATA=/var/lib/ownpanel
 ENV_FILE=$ETC/ownpaneld.env
 RELEASE_FILE=$ETC/release
 SETUP_CODE=$DATA/setup-code
-# Requests from the panel to the root-side updater (see ownpanel-update).
-UPDATE_DIR=$DATA/update
+# $DATA belongs to the panel's user, so root never creates, changes or reads
+# anything by path in it during an install or update: a name there may be a
+# link the panel put in place. What root manages lives in directories whose
+# parents root owns.
+# The updater's directory (root, 0755): its private state, the backups made
+# before each update, and the requests from the panel (see ownpanel-update).
+UPDATE_ROOT=/var/lib/ownpanel-update
+UPDATE_DIR=$UPDATE_ROOT/requests
+BACKUP_DIR=$UPDATE_ROOT/backups
+# Caddy's own directory (caddy, 0700): certificates in storage, its home with
+# the last config in home.
+CADDY_DATA=/var/lib/ownpanel-caddy
 MAIL_DATA=/var/lib/ownpanel-mail
 MAIL_ADMIN_ARG="-mail-admin unix:///run/ownpanel-mail/admin.sock"
 DEFAULT_ARGS="-tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock $MAIL_ADMIN_ARG"
@@ -218,7 +228,7 @@ check_system() {
   esac
 
   local cmd
-  for cmd in tar sha256sum install useradd usermod systemctl; do
+  for cmd in tar sha256sum install useradd usermod systemctl setpriv; do
     command -v "$cmd" >/dev/null || die "the command '$cmd' is missing"
   done
   if [ -z "$opt_from_dir" ]; then
@@ -630,7 +640,7 @@ install_files() {
   step "Installing"
   # Users. ownpaneld reaches Caddy's admin socket through the group caddy
   # (see ownpanel-caddy.service); Caddy's own directories stay 0700.
-  id -u caddy >/dev/null 2>&1 || useradd --system --home "$DATA/caddy-home" --shell /usr/sbin/nologin caddy
+  id -u caddy >/dev/null 2>&1 || useradd --system --home "$CADDY_DATA/home" --shell /usr/sbin/nologin caddy
   id -u ownpanel >/dev/null 2>&1 || useradd --system --home "$DATA" --shell /usr/sbin/nologin ownpanel
   usermod -a -G caddy ownpanel
   # The mail service runs as its own user; ownpaneld reaches its admin socket
@@ -655,11 +665,15 @@ install_files() {
   done
 
   install -d -m 0755 -o ownpanel -g ownpanel "$DATA"
-  install -d -m 0700 -o caddy -g caddy "$DATA/caddy" "$DATA/caddy-home"
-  # The panel (group ownpanel) may create files here: requests for an update
-  # and the automatic update setting. The sticky bit keeps it from replacing
-  # or deleting the status file root writes into it.
+  # Caddy's directory: Caddy creates storage and home in it itself.
+  install -d -m 0700 -o caddy -g caddy "$CADDY_DATA"
+  # The panel (group ownpanel) may create files in requests: an update
+  # request and the automatic update setting. The sticky bit keeps it from
+  # replacing or deleting the status file root writes there.
+  install -d -m 0755 -o root -g root "$UPDATE_ROOT"
   install -d -m 1770 -o root -g ownpanel "$UPDATE_DIR"
+  install -d -m 0700 -o root -g root "$BACKUP_DIR"
+  migrate_layout
   install -d -m 0755 "$ETC"
   install -m 0644 "$src/deploy/caddy-bootstrap.json" "$ETC/caddy-bootstrap.json"
   # The files hold flags and the version, no secrets.
@@ -668,14 +682,69 @@ install_files() {
 
   # A config saved by an early version enabled the admin API on TCP and would
   # bring it back on --resume; drop it, ownpaneld pushes the full config again.
-  local autosave=$DATA/caddy-home/caddy/autosave.json
-  if [ -f "$autosave" ] && ! grep -q 'unix//' "$autosave"; then
-    rm -f "$autosave"
-  fi
+  # Done as caddy: the directory is Caddy's.
+  # shellcheck disable=SC2016 # expanded by that sh
+  setpriv --reuid caddy --regid caddy --clear-groups --reset-env sh -c \
+    'f=$1; if [ -f "$f" ] && ! grep -q "unix//" "$f"; then rm -f "$f"; fi' sh "$CADDY_DATA/home/caddy/autosave.json" || true
 
   systemctl daemon-reload
   systemctl enable --now "${SERVICES[@]}" 2>&1 | grep -v '^Created symlink' || true
   systemctl enable --now ownpanel-update.path ownpanel-update.timer 2>&1 | grep -v '^Created symlink' || true
+}
+
+# migrate_layout moves what older versions kept inside $DATA (Caddy's
+# directories, the update requests and the backups) to the directories above.
+# The services are stopped, so no process of the panel's user can change
+# $DATA meanwhile. Each directory is first renamed into a root-only staging
+# directory (a rename never follows a link) and checked there: only a real
+# directory with the owner ownpanel gave it is used. The old names become
+# links to the new places, so the previous version still finds everything if
+# an update is rolled back; nothing run as root uses those links.
+migrate_layout() {
+  local stage=$UPDATE_ROOT/.migrating
+  rm -rf -- "$stage"
+  install -d -m 0700 -o root -g root "$stage"
+  migrate_dir "$DATA/caddy" "$CADDY_DATA/storage" caddy
+  migrate_dir "$DATA/caddy-home" "$CADDY_DATA/home" caddy
+  migrate_dir "$DATA/update" "$UPDATE_DIR" root
+  migrate_dir "$DATA/backups" "$BACKUP_DIR" root
+  rm -rf -- "$stage"
+  # The caddy user created for ownpanel had its home in $DATA.
+  if [ "$(getent passwd caddy | cut -d: -f6)" = "$DATA/caddy-home" ]; then
+    usermod -d "$CADDY_DATA/home" caddy
+  fi
+}
+
+# migrate_dir <old> <new> <owner>: moves the directory old to new and leaves
+# a link to new at old. Caddy's directories are moved as a whole (new must
+# not exist yet); for the updater's, which exist already, the files in them
+# are moved.
+migrate_dir() {
+  local old=$1 new=$2 owner=$3 staged
+  # Missing, or a link: nothing to move (a link is never followed).
+  [ -d "$old" ] && [ ! -L "$old" ] || return 0
+  if [ "$owner" = caddy ] && { [ -e "$new" ] || [ -L "$new" ]; }; then
+    warn "$old was not moved: $new exists already"
+    return 0
+  fi
+  staged=$UPDATE_ROOT/.migrating/$(basename "$new")
+  if ! mv -T -- "$old" "$staged"; then
+    warn "$old could not be moved to $new"
+    return 0
+  fi
+  if [ -L "$staged" ] || [ ! -d "$staged" ] || [ "$(stat -c %U "$staged")" != "$owner" ]; then
+    warn "$old was not the directory ownpanel created (owned by $(stat -c %U "$staged")); it was removed"
+    rm -rf -- "$staged"
+    return 0
+  fi
+  if [ "$owner" = caddy ]; then
+    mv -T -- "$staged" "$new"
+  else
+    find "$staged" -mindepth 1 -maxdepth 1 -type f -exec mv -n -t "$new" -- {} +
+    rm -rf -- "$staged"
+  fi
+  ln -sT "$new" "$old" 2>/dev/null || true
+  say "Moved $old to $new"
 }
 
 open_firewall() {
@@ -860,14 +929,14 @@ do_uninstall() {
   fi
 
   if [ "$opt_purge" = 1 ]; then
-    rm -rf "$DATA" "$MAIL_DATA" "$ETC" /var/lib/ownpanel-update
-    say "Deleted $DATA, $MAIL_DATA and $ETC"
+    rm -rf "$DATA" "$MAIL_DATA" "$ETC" "$UPDATE_ROOT" "$CADDY_DATA"
+    say "Deleted $DATA, $MAIL_DATA, $CADDY_DATA, $UPDATE_ROOT and $ETC"
     if id -u ownpanel >/dev/null 2>&1; then userdel ownpanel && say "Removed user ownpanel"; fi
     if id -u ownpanel-mail >/dev/null 2>&1; then userdel ownpanel-mail && say "Removed user ownpanel-mail"; fi
     # The caddy user may belong to a Caddy package; only remove ours.
-    if [ "$(getent passwd caddy | cut -d: -f6)" = "$DATA/caddy-home" ]; then
-      userdel caddy && say "Removed user caddy"
-    fi
+    case $(getent passwd caddy | cut -d: -f6) in
+      "$DATA/caddy-home" | "$CADDY_DATA/home") userdel caddy && say "Removed user caddy" ;;
+    esac
   else
     say "Kept your data in $DATA and $MAIL_DATA and the settings in $ETC."
     say "Installing again picks them up; --uninstall --purge deletes them."

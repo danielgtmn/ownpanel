@@ -200,8 +200,16 @@ domains in the background and on request.
   one of their own DNS connections. Site-limited tokens are refused by the
   mail operations themselves (`controlledDomain` alone would let them
   through). A domain used by another person's site or
-  redirect is refused without naming them.
+  redirect is refused without naming them, and so is a domain in which
+  (or below which) another user's sign-in address lies, so their mail,
+  such as a password reset link, cannot reach this member's mailboxes.
 - An **admin** may enable mail for any domain.
+- The other way round, a member cannot use another person's mail domain,
+  nor its `autoconfig.`/`autodiscover.` names, as the domain of a site or
+  redirect (admins may). A setup name that someone other than the mail
+  domain's owner holds anyway (an admin's site, or a claim made before the
+  mail domain) is still answered by the panel: Caddy matches the setup
+  names before redirects and sites.
 
 | Operation | Owner (member) | Admin | Read-only token | Site-limited token | System |
 |---|---|---|---|---|---|
@@ -277,7 +285,9 @@ have no panel account and cannot change their own password yet (*later*).
   the background loop looks every 5 minutes, opening a domain's records
   looks at once, and a change re-syncs Caddy. A failed lookup changes
   nothing; a name that resolves elsewhere or not at all is dropped. So
-  Caddy never asks a CA for a name that does not point here.
+  Caddy never asks a CA for a name that does not point here. A setup name
+  that is a domain of the mail domain owner's own site or redirect is
+  left to it.
 - IMAP (implicit TLS on 993 only, RFC 8314): `INBOX`, `Sent`, `Drafts`,
   `Junk`, `Trash`, `Archive` with special-use flags; IDLE, MOVE, UIDPLUS.
   Envelope and body structure are read from the message file on FETCH
@@ -453,7 +463,10 @@ all DNS goes through one resolver interface, replaced in tests):
   any `reject` failure refuses. Lookup errors give `temperror` and never a
   refusal (a DNS error on the way to a possible pass also gives
   `temperror`, not `fail`).
-- **Answers:** DMARC `p=reject` failure `550 5.7.1` at `DATA`; SBL/CSS/XBL/
+- **Answers:** DMARC `p=reject` failure `550 5.7.1` at `DATA`; a `From`
+  field that cannot be read (so it would give no domain for DMARC and the
+  own-domain check) `550 5.6.0`, except from loopback clients, where it
+  only adds `bad-from`; SBL/CSS/XBL/
   DROP (`127.0.0.2`–`.7`, `.9` of a Spamhaus zone, including DQS zones under
   `spamhaus.net`) `554 5.7.1` for every recipient (the connection stays
   open; the text names the list); dangerous attachment `554 5.7.1`;
@@ -466,7 +479,8 @@ all DNS goes through one resolver interface, replaced in tests):
   servers' results are kept.
 - **Score points** (threshold `junk_score`, default 5; reaching it means
   Junk): `no-message-id` 1, `no-date`/`bad-date` 1, `no-from`/`bad-from`/
-  `multiple-from` 2.5 each, `no-ptr` 1.5 (only when the lookup answered),
+  `multiple-from` 2.5 each (`bad-from` only from loopback clients; others are
+  refused), `no-ptr` 1.5 (only when the lookup answered),
   `spoofed-name` 3 (display name contains `@<recipient's domain>` while the
   From domain is not ours), `spf-softfail` 1, `spf-fail` 2.5, `dkim-fail`
   1.5 (a failing signature and none passing), `listed:<zone>` 3 per listing
@@ -599,6 +613,13 @@ in the service. The same is said in [[Security|Security]].
   read state does not change. First `UID`, `FLAGS`, `INTERNALDATE`,
   `RFC822.SIZE` are fetched; messages over the message size limit are
   skipped without downloading. `\Deleted` messages are skipped.
+- **The other server is untrusted:** its answers are read as they come
+  (folder list at most 10 000 entries; per folder pass at most 2 000 000
+  new messages, the rest follows with the next repeat; flags and sizes in
+  batches of 500). Each step may receive a bounded number of bytes (16 MiB
+  for answers that are not a message, the message size limit plus 1 MiB
+  for a message), and the connection ends when nothing can be read or
+  written for 5 minutes.
 - Flags kept: `\Seen`, `\Answered`, `\Flagged`, `\Draft`, and keywords that
   are valid here (at most 50; `$Forwarded`, `$Junk`, `$NotJunk`, `$MDNSent`
   among them); invalid keywords are dropped, not the message.
@@ -703,6 +724,15 @@ in the service. The same is said in [[Security|Security]].
   UTF-8, as macOS writes them without the flag), else CP437; no `..`,
   absolute paths, NUL or backslash; duplicate or case-colliding names
   merged into one folder. Other entries are skipped and counted.
+- **Reading files** holds little of them in memory: a header line is given
+  up as soon as the header passes 1 MB, other lines are read in pieces of
+  64 KiB, and only `From ` lines up to 512 bytes are looked at for a date.
+  Cancelling stops a scan or job in the middle of a message.
+- **Scans** of complete uploads run at most two at once (apart from the
+  running jobs) and are scanned again after a restart, but only once more:
+  an upload whose scan was started twice without ending (the service
+  stopped while reading it, other than by a normal stop) fails with "the
+  file could not be checked".
 
 ### Export
 
@@ -785,7 +815,11 @@ separate web app on top of the mail service; decided later.
   `RuntimeDirectory=ownpanel-mail` (0750), `UMask=0077`,
   `AmbientCapabilities=CAP_NET_BIND_SERVICE`,
   `CapabilityBoundingSet=CAP_NET_BIND_SERVICE`, `NoNewPrivileges`,
-  `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`.
+  `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`. Resource limits as
+  a safety net (one process serves every mailbox): `GOMEMLIMIT=1280MiB`,
+  `MemoryHigh=1536M`, `MemoryMax=2G` (the service is killed and restarts
+  above it), `TasksMax=1024`. Normal use stays far below; change them with
+  `systemctl edit ownpanel-mail` on servers with very many mailboxes.
 - Every binary update restarts the service. On stop it refuses new
   connections with `421`, finishes running transactions (bounded), then exits.
 - Development: `scripts/dev.sh` starts the service with high ports (2525,

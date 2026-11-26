@@ -18,6 +18,8 @@ On a server installed with `install.sh`, flags live in `/etc/ownpanel/ownpaneld.
 |---|---|---|
 | `-listen` | `127.0.0.1:8600` | Address of the panel: web interface, API and MCP, plain HTTP. |
 | `-data` | `./data` | Directory for the database, site files and certificates. Made absolute at start. |
+| `-caddy-storage` | `caddy` in `-data` | Where the generated Caddy config tells Caddy to keep certificates and keys. The server install uses `/var/lib/ownpanel-caddy/storage` (set in `ownpaneld.service`). |
+| `-update-dir` | `update` in `-data` | Where the panel leaves update requests for the root-side updater and reads its status. The server install uses `/var/lib/ownpanel-update/requests` (set in `ownpaneld.service`). |
 | `-caddy-admin` | `http://127.0.0.1:2019` | Caddy's admin API: `http://host:port` or `unix:///absolute/path.sock`. The socket path must be absolute. The installer and `scripts/dev.sh` use a Unix socket. |
 | `-tls` | `acme` | Certificates: `acme` (public certificates), `internal` (Caddy's own CA, self-signed, for testing) or `off` (plain HTTP only, no automatic HTTPS). |
 | `-http-port` | `80` | Port for HTTP. With `-tls off` the sites are served on this port. |
@@ -62,6 +64,7 @@ There is no configuration file and there are no other environment variables for 
 | `-data` | `./data` | Data directory of the daemon. |
 | `-out` | none (required) | Archive to write, `.tar.gz`. The file must not exist; it is created with mode 0600. |
 | `-mail-data` | `/var/lib/ownpanel-mail` | Data directory of the mail service; skipped if it does not exist. |
+| `-caddy-storage` | `/var/lib/ownpanel-caddy/storage` | Caddy's certificates; if it does not exist, `caddy/` in the data directory. |
 | `-no-mail` | off | Leave the stored mail out of the archive. |
 
 See [[Backup and Restore|Backup-and-Restore]].
@@ -106,7 +109,7 @@ Everything the daemon owns is inside the `-data` directory:
 - **`secret.key`** is created on first start. Without it the stored DNS tokens cannot be used; connections must be added again. It is included in backups.
 - **`setup-code`** is created when no user exists and deleted once the first admin is created (or at start, if a user already exists).
 - **`sites/<site>/releases/<id>`**: an id looks like `20260131T120000.000Z-ab12cd`. The newest five versions of a site are kept; the live one is never removed.
-- **`caddy/`** is where the generated Caddy config tells Caddy to keep certificates and keys.
+- **`caddy/`** is where the generated Caddy config tells Caddy to keep certificates and keys, unless `-caddy-storage` names another directory (a server install uses `/var/lib/ownpanel-caddy/storage`).
 - **`state.json`**: an old JSON file with sites. If it exists and the database has no sites, they are imported once and the file is renamed to `state.json.imported`.
 
-Not inside `-data` on a server install: `/var/lib/ownpanel/caddy-home` (Caddy's home with its saved config) and `/etc/ownpanel` (units' environment file and the Caddy bootstrap file). With `scripts/dev.sh`, `./data` also holds `caddy-home/`, `caddy-admin.sock` and `caddy-bootstrap.json`.
+Not inside `-data` on a server install: `/var/lib/ownpanel-caddy` (Caddy's certificates in `storage`, its home with the saved config in `home`), `/var/lib/ownpanel-update` (update requests and status in `requests`, backups made before updates in `backups`) and `/etc/ownpanel` (units' environment file and the Caddy bootstrap file). With `scripts/dev.sh`, `./data` also holds `caddy-home/`, `caddy-admin.sock` and `caddy-bootstrap.json`.
