@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danielgtmn/sesam"
-	"github.com/danielgtmn/sesam/adapter"
-	"github.com/danielgtmn/sesam/adapters/sqladapter"
-	"github.com/danielgtmn/sesam/plugins/password"
+	"github.com/danielgtmn/ablage"
+	"github.com/danielgtmn/ablage/sqlstore"
+	"github.com/danielgtmn/sesam/v2"
+	"github.com/danielgtmn/sesam/v2/plugins/password"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/store"
@@ -33,7 +33,8 @@ const resetSenderLocalPart = "no-reply"
 // initAuth sets up sesam on the store's database, adds its tables and moves
 // users from before sesam over.
 func (s *Service) initAuth(ctx context.Context) error {
-	db, err := sqladapter.New(s.store.DB(), sqladapter.SQLite)
+	// No table prefix: sesam names its tables auth_* itself.
+	db, err := sqlstore.New(s.store.DB(), sqlstore.SQLite)
 	if err != nil {
 		return err
 	}
@@ -48,7 +49,7 @@ func (s *Service) initAuth(ctx context.Context) error {
 		ResetEmail:           s.resetEmail,
 	}
 	cfg := sesam.Config{
-		Adapter: db,
+		Store: db,
 		// BaseURL, cookie and request header settings only matter for
 		// sesam's own HTTP handler, which the panel does not use.
 		BaseURL: "http://localhost",
@@ -150,14 +151,10 @@ func (s *Service) moveUserToAuth(ctx context.Context, u store.UnmovedUser) error
 		if seen.Before(o.CreatedAt) {
 			seen = o.CreatedAt
 		}
-		err := s.auth.Adapter().Create(ctx, sesam.TableSessions, adapter.Row{
-			"id":           o.ID,
-			"user_id":      au.ID,
-			"created_at":   adapter.NormalizeTime(o.CreatedAt),
-			"expires_at":   adapter.NormalizeTime(o.ExpiresAt),
-			"last_seen_at": adapter.NormalizeTime(seen),
+		err := s.auth.ImportSession(ctx, sesam.Session{
+			ID: o.ID, UserID: au.ID, CreatedAt: o.CreatedAt, ExpiresAt: o.ExpiresAt, LastSeenAt: seen,
 		})
-		if err != nil && !errors.Is(err, adapter.ErrConflict) {
+		if err != nil && !errors.Is(err, ablage.ErrDuplicate) {
 			return err
 		}
 	}
