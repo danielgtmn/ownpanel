@@ -232,3 +232,55 @@ export function validateMailDomain(value: string): string | null {
   if (!HOST.test(domain)) return 'Enter a domain name like example.com.'
   return null
 }
+
+// ---- sender name, app passwords and organisations ----
+
+export const DISPLAY_NAME_MAX = 64
+export const APP_PASSWORD_NAME_MAX = 64
+export const ORGANISATION_NAME_MAX = 64
+
+// The sender's name as the server accepts it: one line, at most 64
+// characters, none of < > " ; (they would break the sender line). Empty removes it.
+export function validateDisplayName(value: string): string | null {
+  const name = value.trim()
+  if (/[\r\n]/.test(name)) return 'Use a single line.'
+  if ([...name].length > DISPLAY_NAME_MAX) return `Use at most ${DISPLAY_NAME_MAX} characters.`
+  if (/[<>";]/.test(name)) return 'Leave out < > " and ;.'
+  return null
+}
+
+export function validateAppPasswordName(value: string): string | null {
+  const name = value.trim()
+  if (!name) return 'Enter the device or program, for example "Phone".'
+  if ([...name].length > APP_PASSWORD_NAME_MAX) return `Use at most ${APP_PASSWORD_NAME_MAX} characters.`
+  return null
+}
+
+export function validateOrganisationName(value: string): string | null {
+  const name = value.trim()
+  if (!name) return 'Enter a name, for example the name of the company.'
+  if ([...name].length > ORGANISATION_NAME_MAX) return `Use at most ${ORGANISATION_NAME_MAX} characters.`
+  return null
+}
+
+// "Not used yet" or "Last used 25 Nov 2026, 10:00 from 203.0.113.0/24".
+export function appPasswordUse(
+  app: { last_used_at: string | null; last_used_network: string },
+  formatDateTime: (value: string) => string,
+): string {
+  if (!app.last_used_at) return 'Not used yet'
+  const where = app.last_used_network ? ` from ${app.last_used_network}` : ''
+  return `Last used ${formatDateTime(app.last_used_at)}${where}`
+}
+
+// The sentence about a domain's organisation on its page.
+export function organisationSentence(organisation: MailDomain['organisation']): string {
+  if (!organisation) return 'This domain stands alone.'
+  return `Part of ${organisation.name}.`
+}
+
+export function organisationDomainsText(organisation: MailDomain['organisation']): string {
+  if (!organisation) return ''
+  if (organisation.domains.length === 0) return 'No other domains you can see belong to it.'
+  return `Together with ${organisation.domains.join(', ')}.`
+}

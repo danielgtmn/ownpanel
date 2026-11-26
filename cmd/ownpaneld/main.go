@@ -127,6 +127,7 @@ func serve(args []string) error {
 		releasesAPI = fs.String("releases-api", "https://api.github.com", "GitHub API address used to look for new releases (change it only for testing)")
 		mailAdmin   = fs.String("mail-admin", "", "admin socket of the mail service as unix:///absolute/path.sock (optional; without it e-mail is only stored, not served)")
 		mailHost    = fs.String("mail-host", "", "name of the mail server, e.g. mail.example.com (optional; overrides the panel settings)")
+		mailWeb     = fs.String("mail-web", "", "web socket of the mail service as unix:///absolute/path.sock (optional; without it mailbox users have no sign-in page on the mail server's name)")
 	)
 	var serverIPFlags listFlag
 	fs.Var(&serverIPFlags, "server-ip", "public IPv4/IPv6 address of this server that domains should point at (repeatable or comma-separated; overrides the panel settings)")
@@ -166,6 +167,13 @@ func serve(args []string) error {
 			return fmt.Errorf("-mail-admin: %q must be unix:///absolute/path/to.sock", *mailAdmin)
 		}
 		mailService = mailconfig.NewClient(path)
+	}
+	if *mailWeb != "" {
+		path, ok := strings.CutPrefix(*mailWeb, "unix://")
+		if !ok || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+			return fmt.Errorf("-mail-web: %q must be unix:///absolute/path/to.sock", *mailWeb)
+		}
+		opts.MailWebSocket = path
 	}
 	if *mailHost != "" {
 		if _, err := store.NormalizeDomain(*mailHost); err != nil {
@@ -235,7 +243,8 @@ func serve(args []string) error {
 
 	app := webui.FS()
 	apiServer := &api.Server{Panel: svc, Build: webui.Build(app)}
-	srv := timeouts.Server(*listen, svc.MailChallengeHandler(apiServer.MailSetupHandler(compose(apiServer.Handler(), webui.Handler(app), mcp.Handler(svc, version, mcp.WithPanelDomainFunc(svc.PanelDomain))))))
+	panelHandler := apiServer.MailSetupHandler(compose(apiServer.Handler(), webui.Handler(app), mcp.Handler(svc, version, mcp.WithPanelDomainFunc(svc.PanelDomain))))
+	srv := timeouts.Server(*listen, svc.MailChallengeHandler(svc.MailHostHandler(webui.AccountHandler(app, svc.MailHost), panelHandler)))
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)

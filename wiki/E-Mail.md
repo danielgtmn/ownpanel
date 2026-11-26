@@ -13,7 +13,10 @@ its reverse name and your DNS records. Read [Before you start](#before-you-start
 
 - **Mailboxes** with a password, used with any mail program (Thunderbird,
   Apple Mail, Outlook, phones). Folders for Inbox, Sent, Drafts, Junk, Trash
-  and Archive. A storage limit per mailbox.
+  and Archive. A storage limit per mailbox, a display name, and
+  [app passwords](#app-passwords) for each device.
+- **Organisations:** domains of one company grouped together, the boundary
+  for sharing between mailboxes later on (see [Organisations](#organisations)).
 - **Forwarding:** extra addresses that deliver to mailboxes or to outside
   addresses, and an address that catches everything else on a domain.
 - **Signed outgoing mail** with a key per domain, so receivers can tell the
@@ -30,7 +33,9 @@ its reverse name and your DNS records. Read [Before you start](#before-you-start
   good delivery.
 
 Not there yet: a webmail in the browser, virus scanning, mailbox users
-changing their own password, reports from receivers about your mail, and
+changing their own password and app passwords (an area for them is
+planned, see [[Groupware architecture|Groupware-Architecture]]), sharing
+between mailboxes, reports from receivers about your mail, and
 outgoing encryption policies (MTA-STS, DANE). See [[Roadmap|Roadmap]].
 
 ## Before you start
@@ -116,6 +121,94 @@ during installation (it is not signed, so the device shows it as
 unverified).
 A mailbox can send as its own address and as forwarding addresses that
 deliver to it (not as addresses the catch-all covers).
+
+### Display name
+
+**Display name** on a mailbox sets the name of the person or team behind
+it, at most 64 characters (no line breaks and none of `<`, `>` and `"`).
+The mail server will use it where it writes mail itself and in the address
+book; mail programs still put their own name into the mail they send.
+
+### App passwords
+
+An app password is a separate password for one device or mail program
+(for example "Anna's phone"). Mail programs sign in with the address and
+the app password instead of the mailbox's password. Each one can be
+revoked on its own: the device using it is signed out at once, everything
+else keeps working.
+
+- **App passwords** on a mailbox lists them with when each was created and
+  last used, and from which network (the first three parts of an IPv4
+  address, the first three groups of an IPv6 address; never the full
+  address).
+- **Create app password** asks for the device or program and shows the
+  password **once**, with a button to copy it. It is not stored anywhere in
+  readable form, so it cannot be shown again; create a new one if it is
+  lost. Up to 50 per mailbox.
+- **Revoke** ends it for good.
+- **Only allow mail programs with app passwords:** when on, the mailbox's
+  own password no longer works in mail programs (it still works on the
+  mailbox's own page, see below). Create the app
+  passwords first, or mail programs stop working. This is the setting to
+  use if the mailbox password might be known to others, and it is the
+  ground for a later second sign-in step.
+
+App passwords are created and revoked in the web interface, on the
+mailbox's own page or through the [[API|API]], never by an AI assistant
+through MCP. Changing the mailbox's password does not revoke them, unless
+the person asks for it on their own page.
+
+### Your mailbox's own page
+
+The people who use a mailbox manage it themselves at
+**`https://<mail server name>/`** (for example `https://mail.example.com/`),
+signed in with the full address and the mailbox password. There they can
+
+- see how much room their mail takes and the storage limit;
+- set their **display name**;
+- **change their password** (the current one is needed; the same rules as
+  in the panel: 10 to 200 characters), optionally signing out every mail
+  program that uses an app password at the same time (all app passwords are
+  revoked);
+- **create and revoke app passwords** (shown once, with copy), see when each
+  was last used in the last 30 days, and switch **Only allow mail programs
+  with app passwords** on or off;
+- read the **settings for mail programs** and download the **setup for
+  Apple devices**.
+
+Only the mailbox password signs in there, also when mail programs may only
+use app passwords; app passwords never do. The page signs out after 30
+minutes without use and after 12 hours in any case, and at once when the
+password is changed elsewhere (by the person on another device, or by you
+in the panel) or the mailbox is deleted. Too many wrong passwords from one
+network hold back further tries for 15 minutes.
+
+Changes made there show up in the panel and the activity log with the
+mailbox as the one who made them (never with a password). The page says
+that the people who manage the server can reset the password: there is no
+"forgot password" by e-mail, and an administrator or the domain's owner can
+set a new password at any time, which ends the person's sessions.
+
+The page needs a mail server name of its own, other than the panel's
+address (**Mail health** warns otherwise), and the mail service's web socket
+(set up by `install.sh`).
+
+### Organisations
+
+By default every mail domain stands on its own. When several domains belong
+to one company (for example `example.com` and `example.de`), group them on a
+domain's page under **Organisation → Change**: choose an organisation of
+yours or create one. Mailboxes can only share mail, calendars and contacts
+with mailboxes of the same organisation, and only see those in the address
+book, once those features exist; nothing is shared just by grouping.
+
+- You can group only your own domains into your own organisations.
+  Grouping domains that belong to different people is for administrators,
+  and the activity log says so.
+- **Let this domain stand alone** takes a domain out again; deleting an
+  organisation lets all its domains stand alone.
+- If an administrator put your domain into an organisation of someone
+  else, the page says so; you can only take it out.
 
 ## Forwarding
 

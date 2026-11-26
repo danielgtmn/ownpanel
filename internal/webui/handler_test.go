@@ -148,3 +148,38 @@ func TestNoEmbeddedApp(t *testing.T) {
 		t.Fatalf("deep link without app: %d", rec.Code)
 	}
 }
+
+func TestAccountHandler(t *testing.T) {
+	host := "mail.example.com"
+	h := AccountHandler(app, func() string { return host })
+	for _, p := range []string{"/", "/index.html", "/account", "/some/deep/link"} {
+		rec := get(h, "GET", p)
+		body := rec.Body.String()
+		if rec.Code != 200 || !strings.Contains(body, `<meta name="ownpanel-mail-host" content="mail.example.com" />`) || !strings.Contains(body, "<title>app</title>") {
+			t.Fatalf("%s: %d %q", p, rec.Code, body)
+		}
+		if rec.Header().Get("Cache-Control") != "no-cache" || rec.Header().Get("Content-Security-Policy") != ContentSecurityPolicy {
+			t.Fatalf("%s: headers %v", p, rec.Header())
+		}
+	}
+	if rec := get(h, "GET", "/assets/app-abc.js"); rec.Code != 200 || rec.Body.String() != "console.log(1)" {
+		t.Fatalf("asset: %d %q", rec.Code, rec.Body)
+	}
+	for _, p := range []string{"/api", "/api/session", "/mcp", "/mcp/x"} {
+		if rec := get(h, "GET", p); rec.Code != 404 || strings.Contains(rec.Body.String(), "<title>") {
+			t.Fatalf("%s: %d", p, rec.Code)
+		}
+	}
+	if rec := get(h, "POST", "/"); rec.Code != 405 {
+		t.Fatalf("POST: %d", rec.Code)
+	}
+	// The mail host is escaped and follows the settings.
+	host = `x"><script>`
+	if body := get(h, "GET", "/").Body.String(); strings.Contains(body, "<script>") {
+		t.Fatalf("not escaped: %q", body)
+	}
+	// The panel's own handler has no such tag, and keeps /mcp to the MCP server.
+	if body := get(Handler(app), "GET", "/").Body.String(); strings.Contains(body, AccountMeta) {
+		t.Fatal("panel index carries the account tag")
+	}
+}

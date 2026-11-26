@@ -80,7 +80,7 @@ mode 0750, socket 0660; the user `ownpanel` is a member of the group
 | Endpoint | Purpose |
 |---|---|
 | `POST /load` | Replace the configuration. Refused if invalid, or if a `storage_id` is already bound to another address. |
-| `GET /status` | Config hash, listeners, certificate expiry, queue size, per-mailbox usage and block state. |
+| `GET /status` | Config hash, listeners, the web socket (`web`, when set up), certificate expiry, queue size, per-mailbox usage and block state. |
 | `GET /events?after=<id>` | Events since a cursor: mailbox blocked, sign-in failures from many addresses, delivery problems. |
 | `POST /mailboxes/{storage_id}/unblock` | Lift a sending block. |
 | `DELETE /mailboxes/{storage_id}` | Delete a mailbox's data. |
@@ -159,9 +159,23 @@ Caddy's certificates are private to Caddy, so the panel obtains one for
 - The challenge route (`host = mail_host`, path
   `/.well-known/acme-challenge/*` → panel) goes into Caddy's single `:80`
   server: merged into the existing HTTP server, or a new one when none
-  exists. `mail_host` never appears in a host matcher on `:443`, so Caddy does
-  not request its own certificate for it. A `-tags caddy` test proves the
-  challenge reaches the panel.
+  exists. A `-tags caddy` test proves the challenge reaches the panel.
+- `mail_host` is also a site on `:443` for the people who read mail
+  ([[Groupware architecture|Groupware-Architecture]], G0), once the panel
+  has its certificate, the mail service has its web socket (`-mail-web`) and
+  `mail_host` differs from the panel domain. Caddy does not request a
+  certificate for it: the panel pushes its own certificates for `mail_host`
+  in the config (`tls.certificates.load_pem`), and the server lists the name
+  in `automatic_https.skip_certificates` (Caddy also skips names with a
+  loaded certificate on its own). After a renewal the panel loads Caddy's
+  config again with the new certificate. The key travels only over Caddy's
+  admin socket and ends up in Caddy's saved config (`autosave.json` in its
+  0700 home), next to Caddy's own keys. Routes: `/dav*`,
+  `/.well-known/caldav`, `/.well-known/carddav`, `/account/api/*` → the
+  mail service's web socket (16 MB request limit); `/api*`, `/mcp*` → 404;
+  everything else → the panel, which serves only the web app there (64 KB
+  request limit). A `-tags caddy` test covers the routes, the certificate
+  and that Caddy never manages the name.
 - autocert obtains an ECDSA and an RSA certificate (old servers without
   ECDSA). Both are pushed; the service presents them whatever the SNI, so
   clients without SNI work.
@@ -170,10 +184,11 @@ Caddy's certificates are private to Caddy, so the panel obtains one for
   server's addresses, and backs off exponentially after failures (the CA
   allows only a few failed validations per hour).
 - If `mail_host` equals the panel domain, Caddy has a `:443` route for it
-  anyway; that is fine, because Caddy answers only the challenge tokens it
-  issued itself and passes others through. The `-tags caddy` test covers
-  both cases.
-- With `-tls internal` or `off` the panel makes a self-signed certificate.
+  anyway (the panel's, with Caddy's own certificate; no mailbox site); that
+  is fine, because Caddy answers only the challenge tokens it issued itself
+  and passes others through. The `-tags caddy` test covers both cases.
+- With `-tls internal` or `off` the panel makes a self-signed certificate;
+  with `internal` Caddy serves `mail_host` with it too.
 - The ACME library always tries the TLS-ALPN challenge first; it fails
   because Caddy holds port 443, so every issuance costs one failed
   validation before HTTP-01 succeeds. Within the CA's limits, but a reason to

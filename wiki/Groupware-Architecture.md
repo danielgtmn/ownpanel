@@ -85,7 +85,7 @@ It all works with standard programs: Thunderbird, Apple Mail/Calendar/Contacts, 
 | Phase | Content | Size | Depends on | Issue |
 |---|---|---|---|---|
 | G0 | Web entry point on the mail host: Caddy site, certificate, routing, DAV socket | S | — | [#85](https://github.com/danielgtmn/ownpanel/issues/85) |
-| G1 | Mailbox accounts: display name, self-service area, app passwords, organisations | M | G0 | [#86](https://github.com/danielgtmn/ownpanel/issues/86) |
+| G1 | Mailbox accounts: display name, self-service area, app passwords, organisations (built) | M | G0 | [#86](https://github.com/danielgtmn/ownpanel/issues/86) |
 | G2 | Filters and out-of-office (Sieve, ManageSieve) | L | G1 | [#87](https://github.com/danielgtmn/ownpanel/issues/87) |
 | G3 | Shared mailboxes, send as / on behalf, distribution groups | XL | G1 | [#88](https://github.com/danielgtmn/ownpanel/issues/88) |
 | G4a | Own calendars and contacts, discovery, sync, directory | XL | G1 | [#89](https://github.com/danielgtmn/ownpanel/issues/89) |
@@ -120,6 +120,42 @@ spike** decides library vs. own code (see [Libraries](#libraries)).
   the name; that page is updated to describe the new `:443` matcher.
 - **Request limits:** request-size limits in Caddy. Rate limits live in the
   mail service, because standard Caddy has no rate-limit module.
+
+**Built (G0)** — how it turned out:
+
+- The mail service opens the web socket with `ownpaneld mail -web
+  unix:///run/ownpanel-mail-web/web.sock` (package `internal/mail/web`):
+  `GET /account/api/health` answers `{"status":"ok"}`; `/dav/…` answers
+  501 and `/.well-known/caldav|carddav` 404 until G4. Limits: 10 s for
+  headers, 2 min per request, 64 KB of headers, 16 MB of body.
+- **Hooks for G1:** `server.Options.AccountHandler` (an `http.Handler`)
+  serves everything below `/account/api/` except `health`, with the full
+  path. `web.ClientIP(r)` returns the client's address: the right-most
+  `X-Forwarded-For` entry, the hop Caddy appended (Caddy replaces what the
+  client sent). It is set only on the web socket; `ok == false` means
+  unknown, never trusted.
+- `ownpanel-mail.service` lists both runtime directories
+  (`RuntimeDirectory=ownpanel-mail ownpanel-mail-web`, 0750). systemd
+  resets their owner and mode before every command it starts, so the
+  service itself hands `/run/ownpanel-mail-web` and `web.sock` to the group
+  `ownpanel-mail-web` (`-web-group`); it is a member through
+  `SupplementaryGroups=`, and `caddy` is the only other member.
+- If the web socket cannot be set up (the group is missing, handing it
+  over fails, another file is in the way) or stops, the mail service logs
+  it, records a `listener.failed` event and runs on without it: SMTP and
+  IMAP never depend on it. `/status` reports it as `web` (`listening`,
+  `error`), and the Mail health check `self_service` turns into an error.
+- The panel learns the socket from `-mail-web` and adds the Caddy site only
+  when `mail_host` differs from the panel domain and the certificate is
+  there. Request limits in Caddy: 16 MB to the mail service, 64 KB to the
+  web app.
+- The panel answers requests for `mail_host` with the web app only (`/api`
+  and `/mcp` are 404 there too). `index.html` then carries
+  `<meta name="ownpanel-mail-host">`, which makes the app show the account
+  area (`web/src/account/`) instead of the panel.
+- The settings do not refuse `mail_host` = panel domain yet (there is no
+  groupware switch to refuse); Mail health has the check `self_service`,
+  a warning in that case.
 
 ## G1 — Mailbox accounts
 
@@ -167,6 +203,114 @@ resets it, as today.
   could otherwise bypass.
 - The activity log records creation and revocation with the device name, never the token.
 - No MCP tool ever creates or shows app passwords.
+
+**Groundwork (built):** display names, organisations, app passwords and
+"mail programs only with app passwords" exist in the panel and the mail
+service. How it is built, where it is more precise than the plan above:
+
+- **Configuration:** `Domain.Organisation` (an opaque id: `org-<random>`
+  for a group, never the owner; empty for a domain that stands alone, which
+  the mail service then treats as its own organisation `dom-<domain>`, so
+  even a domain name of 253 characters fits), `Mailbox.DisplayName`, `Mailbox.AppPasswords []{ID, Name, MAC,
+  Created}`, `Mailbox.AppPasswordsOnly`, `Mailbox.Revision` and
+  `Config.AppPasswordKey`.
+- **App password key:** one server key (32 random bytes), made by the panel
+  once, kept sealed with `secret.key` and pushed in the configuration, which
+  already carries secrets. The MAC is HMAC-SHA-256 under it of the secret
+  together with the mailbox's storage id and the app password's id, so a MAC
+  is worth nothing for another mailbox or id. The panel needs the key to
+  create app passwords; the mail service will need it for the self-service
+  area. Tokens are `op_` + 16 base32 characters of id + `_` + 32 of secret
+  (160 bits); anything of that form is only ever checked as an app password,
+  so the panel refuses main passwords of that form.
+- **Revisions (Decision 6):** the counter belongs to the mail service. Each
+  change a mailbox makes there gets `max(pushed revision, own revision) + 1`
+  and is kept as an **overlay** per field (password, display name, the
+  switch, app passwords added, app passwords revoked), each part with its own
+  revision, in `mail.db`, written in the same transaction as the event. The
+  panel applies an event only if its revision is higher than the mailbox's,
+  stores that revision and pushes it; the mail service drops every part of
+  the overlay the pushed revision reaches. Changes the panel makes itself do
+  not touch the counter. If the panel changed the same field (password,
+  display name or switch) itself at or after the moment of the mailbox's
+  change, the panel's value wins (the activity log says so) and the overlay
+  part is dropped by the next push; the panel keeps one such time per
+  field, so an admin renaming a mailbox never undoes the mailbox's own
+  password change. App passwords added or revoked always count.
+- **Admin changes take effect at once:** before the panel saves a password
+  reset, a display name or the switch, it records the mail service's
+  pending events, so the push that follows carries a revision that
+  includes the mailbox's own changes. The push also carries when the panel
+  set each field (`Mailbox.PasswordSetAt`, `DisplayNameSetAt`,
+  `AppPasswordsOnlySetAt`, Unix seconds); overlay parts keep the time of
+  their event, and the mail service drops a part of the same field that is
+  not newer, even before the panel saw the event. Both sides compare the
+  same two times, so they agree on who won.
+- **Events that cannot be recorded** (the panel's database failed) do not
+  stop the others: such an event and every later account event of the same
+  mailbox wait in the setting `mail_events_pending` and are tried again,
+  in order, first on every round; events of other mailboxes and all other
+  events go on. Until then the mail service keeps the mailbox's change.
+- **Events:** `mailbox.password-changed`, `mailbox.display-name-changed`,
+  `mailbox.app-passwords-only`, `mailbox.app-password-created`,
+  `mailbox.app-password-revoked` (each with `Event.Account`: revision and the
+  new hash, name, switch, app password with MAC, or revoked id) and
+  `mailbox.app-password-used` (id and network, at most once an hour per app
+  password, revision 0).
+- **One mailbox never stops the push:** an app password the mail service
+  reports for a mailbox that already has 50 (one was made in the panel at
+  the same time) is not recorded, but its revision is, so the mail service
+  drops it too; the activity log notes it. Before every push the panel
+  leaves out, or cuts down, any domain, mailbox or alias the mail service
+  would refuse (`config.DropInvalid`: app passwords beyond 50, invalid DKIM
+  keys, invalid alias targets, a damaged password hash, …) and logs it, so
+  the configuration of everyone else still loads.
+- **Organisations** are owned by one panel user. An admin who groups
+  domains of different owners does it with an organisation of their own or
+  of one of the owners; the activity log notes "domains of different
+  owners". A member sees an organisation an admin put their domain into only
+  by name, and can take the domain out.
+
+**Built (self-service area):** how it turned out, and where it differs
+from the plan:
+
+- **Package `internal/mail/account`** serves `/account/api/` on the web
+  socket (wired in `cmd/ownpaneld/mail.go` through
+  `server.Options.AccountHandler`): `POST`/`DELETE session`, `GET me`,
+  `PUT password`, `PUT display-name`, `PUT app-passwords-only`,
+  `POST app-passwords`, `DELETE app-passwords/{id}`, `GET apple-setup`
+  (wiki/API.md). Changes go through `server.ApplyAccountChange`, so they
+  are overlays with revisions and events as described above.
+- **Sign-in:** `signin.Checker.CheckMain` on a Checker of its own (own
+  tables, one hashing slot of its own, no cache): only the main password,
+  `AppPasswordsOnly` ignored, anything of the form of an app password fails
+  after the same work as a wrong password. Throttle as for mail programs:
+  per (network, address) and per network, IPv4 per address, IPv6 per /48,
+  fail closed when the tables are full. Clients whose address is unknown
+  (no `X-Forwarded-For` from Caddy) share one bucket.
+- **Sessions** in `mail.db` (migration 7, `account_sessions`): SHA-256 of a
+  256-bit id, the storage id, the address and a fingerprint (SHA-256) of
+  the password hash at sign-in; at most 20 per mailbox. Every request checks
+  the session against the directory (storage id, address, password hash),
+  so a reset by the panel, a password change on another device or a
+  deleted mailbox end it at once; a conversion to shared will be added to
+  that check with G3 (mailbox kinds do not exist yet). The session that
+  changes the password gets the new fingerprint and stays; the mailbox's
+  other sessions are deleted. Idle 30 minutes, at most 12 hours; ended
+  sessions are pruned every 10 minutes.
+- **CSRF:** changing requests need `X-Ownpanel-Request: 1`; a
+  `Sec-Fetch-Site` other than `same-origin`, or an `Origin` that is not
+  `https://` + the request's host, is refused; requests for another host
+  than the mail host answer 404. 30 changes per session in 15 minutes.
+- **Last use of app passwords** comes from the mail service's own
+  `mailbox.app-password-used` events (kept 30 days), so the page shows
+  uses of the last 30 days; the panel keeps the full history.
+- **Shared code:** the Apple profile and the client settings moved to
+  `internal/mailsetup`, the password rules to `passwd.CheckNew` and
+  `config.CheckNewPassword`; the panel and the mail service use the same.
+- **Not built:** organisation name on the page (the mail service only has
+  the opaque id), a second sign-in step (TOTP), and a list of the
+  mailbox's sessions.
 
 **Known limits:** the new Outlook syncs IMAP through Microsoft's cloud, so
 many people share a few Microsoft addresses. The per-network throttle counts

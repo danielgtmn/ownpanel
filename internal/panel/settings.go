@@ -308,6 +308,7 @@ func (s *Service) caddyOptions() caddy.Options {
 		if o.TLSMode == caddy.TLSACME && s.certs != nil {
 			o.MailHost = s.MailHost()
 		}
+		o.MailWeb = s.mailWeb()
 	}
 	return o
 }
@@ -561,7 +562,12 @@ func (s *Service) UpdateSettings(ctx context.Context, a Actor, u SettingsUpdate)
 		if mailHost || email {
 			// Certificates for the new name are looked for before the push;
 			// new ones are requested by the background loop.
-			s.refreshMailCerts(context.WithoutCancel(ctx), false)
+			if s.refreshMailCerts(context.WithoutCancel(ctx), false) {
+				// The mail host's site in the web server uses them too.
+				if serr := s.syncSaved(ctx); err == nil {
+					err = serr
+				}
+			}
 		}
 		if merr := s.mailSaved(ctx); err == nil {
 			err = merr

@@ -47,7 +47,7 @@ The installer never asks questions, except to confirm `--uninstall --purge`.
 | `--from-dir DIR` | Install from an unpacked release directory instead of downloading, e.g. on a server without Internet access. |
 | `-y`, `--yes` | Do not ask for confirmation (only `--purge` asks). |
 | `--uninstall` | Remove services and binaries, keep data and settings. |
-| `--purge` | With `--uninstall`: also delete all data, settings and the users. |
+| `--purge` | With `--uninstall`: also delete all data, settings, the users and the group `ownpanel-mail-web`. |
 | `-h`, `--help` | Show the options. |
 
 ### Release channels
@@ -86,9 +86,10 @@ Values given as installer options (`--panel-domain`, `--server-ip`, `--acme-emai
 
 | Item | Details |
 |---|---|
-| User `caddy` | system user, home `/var/lib/ownpanel-caddy/home`, shell `/usr/sbin/nologin` |
+| User `caddy` | system user, home `/var/lib/ownpanel-caddy/home`, shell `/usr/sbin/nologin`; added to the group `ownpanel-mail-web` |
 | User `ownpanel` | system user, home `/var/lib/ownpanel`, shell `/usr/sbin/nologin`; added to the groups `caddy` and `ownpanel-mail` |
 | User `ownpanel-mail` | system user with its own group, home `/var/lib/ownpanel-mail`, shell `/usr/sbin/nologin` |
+| Group `ownpanel-mail-web` | system group of the mail service's web socket; `caddy` is a member (and `ownpanel-mail.service` through `SupplementaryGroups=`) |
 | `/usr/local/bin/ownpaneld`, `/usr/local/bin/caddy` | the binaries (mode 0755); an existing `/usr/local/bin/caddy` is replaced |
 | `/etc/systemd/system/ownpaneld.service` | the panel daemon, runs as `ownpanel` |
 | `/etc/systemd/system/ownpanel-caddy.service` | Caddy, runs as `caddy` |
@@ -120,6 +121,8 @@ Caddy's admin API is a Unix socket, never a TCP port, because on TCP every local
 
 The mail service's admin socket works the same way: `/run/ownpanel-mail/admin.sock` in a directory of the group `ownpanel-mail` (0750), socket mode 0660, and `ownpanel` is a member of that group.
 
+The mail service has a second socket for Caddy: `/run/ownpanel-mail-web/web.sock`, where Caddy passes the mail server name's account pages (and later calendars and contacts). `ownpanel-mail.service` creates the directory with `RuntimeDirectory=` (0750); the service, a member of the group `ownpanel-mail-web` (`SupplementaryGroups=`), hands the directory and the socket (mode 0660) to that group (`-web-group`). Only `caddy` is a member of that group otherwise. Caddy is not in the group `ownpanel-mail`, so it can never reach the admin socket.
+
 Both units set `PrivateTmp`, `ProtectSystem=full` and `ProtectHome=true`; `ownpaneld.service` also sets `NoNewPrivileges`. Caddy gets `CAP_NET_BIND_SERVICE` to bind ports 80 and 443. Caddy is started with `--resume`, so after a restart it serves the last config until ownpaneld pushes the current one. `ownpanel-mail.service` is hardened further (see the unit file).
 
 ## Flags
@@ -127,10 +130,10 @@ Both units set `PrivateTmp`, `ProtectSystem=full` and `ProtectHome=true`; `ownpa
 ownpaneld reads its flags from `/etc/ownpanel/ownpaneld.env`, the variable `OWNPANELD_ARGS`. A fresh install writes:
 
 ```
-OWNPANELD_ARGS=-tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock -mail-admin unix:///run/ownpanel-mail/admin.sock
+OWNPANELD_ARGS=-tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock -mail-admin unix:///run/ownpanel-mail/admin.sock -mail-web unix:///run/ownpanel-mail-web/web.sock
 ```
 
-(Upgrades of installs from before e-mail get `-mail-admin` added.)
+(Upgrades of installs from before e-mail get `-mail-admin` added, those from before the mailbox sign-in page `-mail-web`.)
 
 plus `-panel-domain`, `-server-ip` and `-acme-email` if you gave the matching options. The service starts `/usr/local/bin/ownpaneld -data /var/lib/ownpanel $OWNPANELD_ARGS`. See [[Configuration|Configuration]] for all flags.
 

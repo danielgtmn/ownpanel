@@ -88,7 +88,16 @@ func (c *Client) Load(ctx context.Context, cfg any) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("caddy rejected config (%s): %s", resp.Status, strings.TrimSpace(string(msg)))
+		return fmt.Errorf("caddy rejected config (%s): %s", resp.Status, redactKeys(strings.TrimSpace(string(msg))))
 	}
 	return nil
+}
+
+// redactKeys keeps private keys (the mail host's certificate is loaded as
+// PEM, see MailWeb) out of error messages, should Caddy ever quote them.
+func redactKeys(msg string) string {
+	if strings.Contains(msg, "PRIVATE KEY") {
+		return "the configuration was refused (details withheld: they contain a private key)"
+	}
+	return msg
 }

@@ -1,22 +1,24 @@
 package panel
 
 import (
-	"unicode/utf8"
-
+	"github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/passwd"
 )
 
 // Password length of panel users, in characters (sesam is configured with
-// the same bounds; checking here first keeps the panel's wording).
+// the same bounds; checking here first keeps the panel's wording). They are
+// the rules mailboxes get too (internal/passwd).
 const (
-	minPasswordLen = 10
-	maxPasswordLen = 200
+	minPasswordLen = passwd.MinLength
+	maxPasswordLen = passwd.MaxLength
 )
 
+// validatePassword applies the rules for new passwords, shared with the
+// mail service's self-service area, including the one against the form of
+// app passwords.
 func validatePassword(pw string) error {
-	n := utf8.RuneCountInString(pw)
-	if n < minPasswordLen || n > maxPasswordLen {
-		return errorf(Invalid, "the password must be between %d and %d characters long", minPasswordLen, maxPasswordLen)
+	if err := config.CheckNewPassword(pw); err != nil {
+		return errorf(Invalid, "%s", err.Error())
 	}
 	return nil
 }
