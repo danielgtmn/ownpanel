@@ -32,7 +32,8 @@ import (
 //  3. the proof, in whichever form the host sends it, compared in
 //     constant time: an HMAC-SHA256 of the raw body with the secret in
 //     X-Hub-Signature-256 (GitHub, Gitea, Forgejo), X-Hub-Signature with
-//     "sha256=" (Bitbucket), X-Gitea-Signature, X-Forgejo-Signature or
+//     "sha256=" (Bitbucket; a "sha1=" one, which Gitea and GitHub add, is
+//     ignored), X-Gitea-Signature, X-Forgejo-Signature or
 //     X-Gogs-Signature (hex), or the secret itself in X-Gitlab-Token
 //     (GitLab sends no signature). At least one must be present and every
 //     one present must be right;
@@ -152,7 +153,12 @@ func validProof(secret, body []byte, h http.Header) bool {
 		ok &= subtle.ConstantTimeCompare(got, sum)
 	}
 	check(h.Get("X-Hub-Signature-256"), "sha256=")
-	check(h.Get("X-Hub-Signature"), "sha256=")
+	// Bitbucket signs with SHA-256 here; Gitea, Forgejo and GitHub put a
+	// SHA-1 signature here next to their SHA-256 ones. SHA-1 is neither
+	// trusted nor held against the notification.
+	if v := h.Get("X-Hub-Signature"); !strings.HasPrefix(v, "sha1=") {
+		check(v, "sha256=")
+	}
 	check(h.Get("X-Gitea-Signature"), "")
 	check(h.Get("X-Forgejo-Signature"), "")
 	check(h.Get("X-Gogs-Signature"), "")

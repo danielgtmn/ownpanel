@@ -167,7 +167,7 @@ export function GitSourceDetails({ site, source, onChange, onSecret }: Props) {
         </Button>
         {source.checked_at ? (
           <span className="muted git-source-checked">
-            Last reached <time dateTime={isoTimestamp(source.checked_at)}>{formatDateTime(source.checked_at)}</time>
+            Last checked <time dateTime={isoTimestamp(source.checked_at)}>{formatDateTime(source.checked_at)}</time>
           </span>
         ) : null}
       </div>

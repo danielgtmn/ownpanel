@@ -419,6 +419,12 @@ func TestGitNotificationFormats(t *testing.T) {
 		{"Gitea", gh, map[string]string{"X-Gitea-Event": "push", "X-Gitea-Delivery": "gt-1", "X-Gitea-Signature": hmacHex(secret, gh)}, "Fix the header"},
 		{"Forgejo", gh, map[string]string{"X-Forgejo-Event": "push", "X-Forgejo-Delivery": "fj-1", "X-Forgejo-Signature": hmacHex(secret, gh),
 			"X-Hub-Signature-256": "sha256=" + hmacHex(secret, gh)}, "Fix the header"},
+		// Exactly the headers Gitea 1.24 sends (taken from a real delivery),
+		// with a SHA-1 signature next to the SHA-256 ones.
+		{"Gitea, all headers", gh, map[string]string{"X-GitHub-Delivery": "gt-all", "X-GitHub-Event": "push", "X-GitHub-Event-Type": "push",
+			"X-Gitea-Delivery": "gt-all", "X-Gitea-Event": "push", "X-Gitea-Signature": hmacHex(secret, gh), "X-Gogs-Delivery": "gt-all",
+			"X-Gogs-Event": "push", "X-Gogs-Signature": hmacHex(secret, gh), "X-Hub-Signature": "sha1=2e9f536656c0009e9be5e1d156198d063edca087",
+			"X-Hub-Signature-256": "sha256=" + hmacHex(secret, gh)}, "Fix the header"},
 		{"Gogs", gh, map[string]string{"X-Gogs-Event": "push", "X-Gogs-Delivery": "gg-1", "X-Gogs-Signature": hmacHex(secret, gh)}, "Fix the header"},
 		{"GitLab", gl, map[string]string{"X-Gitlab-Event": "Push Hook", "X-Gitlab-Event-UUID": "gl-1", "X-Gitlab-Token": secret}, "From GitLab"},
 		{"Bitbucket Cloud", bbc, map[string]string{"X-Event-Key": "repo:push", "X-Request-UUID": "{bb-1}", "X-Hub-Signature": "sha256=" + hmacHex(secret, bbc)}, "From Bitbucket"},
@@ -435,7 +441,8 @@ func TestGitNotificationFormats(t *testing.T) {
 		}
 		runs, _ := g.svc.ListSiteRuns(ctx, bob, "bobsite")
 		r := runs.Runs[0]
-		if r.Commit != commit || r.Branch != "main" || r.Message != c.message || r.Status != "queued" || r.Repository != st.Source.Repository {
+		if r.Commit != commit || r.Branch != "main" || r.Message != c.message || r.Status != "queued" || r.Repository != st.Source.Repository ||
+			r.CommitURL != "" {
 			t.Fatalf("%s: run %+v", c.name, r)
 		}
 		// The same delivery again.
@@ -461,7 +468,8 @@ func TestGitNotificationFormats(t *testing.T) {
 	reject("no proof", id, hdr("X-GitHub-Event", "push"), gh)
 	reject("wrong signature", id, hdr("X-Hub-Signature-256", "sha256="+hmacHex("wrong", gh)), gh)
 	reject("signature of another body", id, hdr("X-Hub-Signature-256", "sha256="+hmacHex(secret, bbc)), gh)
-	reject("sha1 signature", id, hdr("X-Hub-Signature", "sha1="+hmacHex(secret, gh)[:40]), gh)
+	reject("only a sha1 signature", id, hdr("X-Hub-Signature", "sha1="+hmacHex(secret, gh)[:40]), gh)
+	reject("sha1 next to a wrong sha256", id, hdr("X-Hub-Signature", "sha1=00", "X-Hub-Signature-256", "sha256="+hmacHex("x", gh)), gh)
 	reject("bad hex", id, hdr("X-Gitea-Signature", "zz"), gh)
 	reject("wrong token", id, hdr("X-Gitlab-Token", secret+"x"), gl)
 	reject("one right, one wrong", id, hdr("X-Gitlab-Token", secret, "X-Hub-Signature-256", "sha256="+hmacHex("x", gl)), gl)
@@ -675,4 +683,18 @@ func (t *teeSources) FetchSource(ctx context.Context, ref SourceRef) (io.ReadClo
 		io.Reader
 		io.Closer
 	}{io.TeeReader(r, &t.buf), r}, strip, nil
+}
+
+// Runs of a Git source never link to GitHub, whatever their address looks like.
+func TestGitRunsHaveNoGitHubLink(t *testing.T) {
+	g := newGitWorld(t)
+	sha := strings.Repeat("a", 40)
+	for _, repo := range []string{"git@codeberg.org:a/b.git", "ssh://git@codeberg.org:22/a/b.git", "https://codeberg.org/a/b.git"} {
+		if v := g.svc.runViewFor(store.Run{SourceKind: store.SourceGit, Repository: repo, CommitSHA: sha}); v.CommitURL != "" {
+			t.Errorf("%s: %s", repo, v.CommitURL)
+		}
+	}
+	if v := g.svc.runViewFor(store.Run{SourceKind: store.SourceGitHub, Repository: "acme/site", CommitSHA: sha}); v.CommitURL == "" {
+		t.Error("GitHub run without a link")
+	}
 }
