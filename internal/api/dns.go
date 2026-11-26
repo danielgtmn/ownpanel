@@ -15,6 +15,8 @@ func (s *Server) dnsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/dns/connections/{id}/zones/{zone}/records", s.listDNSRecords)
 	mux.HandleFunc("PUT /api/dns/connections/{id}/zones/{zone}/records/{name}/{type}", s.putDNSRecord)
 	mux.HandleFunc("DELETE /api/dns/connections/{id}/zones/{zone}/records/{name}/{type}", s.deleteDNSRecord)
+	mux.HandleFunc("GET /api/dns/templates", s.listDNSTemplates)
+	mux.HandleFunc("POST /api/dns/connections/{id}/zones/{zone}/templates/{template}", s.applyDNSTemplate)
 	mux.HandleFunc("GET /api/sites/{name}/domains/status", s.domainStatuses)
 	mux.HandleFunc("POST /api/sites/{name}/domains/{domain}/point", s.pointDomain)
 }
@@ -178,6 +180,38 @@ func (s *Server) domainStatuses(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) pointDomain(w http.ResponseWriter, r *http.Request) {
 	res, err := s.Panel.PointDomain(r.Context(), actorOf(r), r.PathValue("name"), r.PathValue("domain"))
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) listDNSTemplates(w http.ResponseWriter, r *http.Request) {
+	list, err := s.Panel.DNSTemplates(r.Context(), actorOf(r))
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// applyDNSTemplate returns what the template changes; with confirm the
+// changes are written.
+func (s *Server) applyDNSTemplate(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r, "DNS connection")
+	if !ok {
+		return
+	}
+	var body struct {
+		Params  map[string]string `json:"params"`
+		Confirm bool              `json:"confirm"`
+	}
+	// An empty body is {"params": {}, "confirm": false}.
+	if r.ContentLength != 0 && !decodeJSON(w, r, &body, `{"params": {"value": "…"}, "confirm": false}`) {
+		return
+	}
+	res, err := s.Panel.ApplyDNSTemplate(r.Context(), actorOf(r), id, r.PathValue("zone"), r.PathValue("template"), body.Params, body.Confirm)
 	if err != nil {
 		writeFailure(w, err)
 		return
