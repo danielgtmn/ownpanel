@@ -53,6 +53,30 @@ export function setKey(set: Pick<RecordSet, 'name' | 'type'>): string {
   return `${set.type}:${set.name}`
 }
 
+// Changes the provider confirmed, by setKey: the record set as written, or null when it was deleted. The provider's
+// list can still show the old state for a moment after a change, so the page shows these until the list agrees.
+export type ConfirmedChanges = ReadonlyMap<string, RecordSet | null>
+
+export function withChanges(sets: RecordSet[], changes: ConfirmedChanges): RecordSet[] {
+  if (changes.size === 0) return sets
+  const shown = sets.filter((set) => !changes.has(setKey(set)))
+  for (const change of changes.values()) if (change) shown.push(change)
+  return shown
+}
+
+const sameValues = (a: string[], b: string[]) => [...a].sort().join('\n') === [...b].sort().join('\n')
+
+// The changes the list does not show yet; the others are no longer needed.
+export function pendingChanges(sets: RecordSet[], changes: ConfirmedChanges): ConfirmedChanges {
+  const pending = new Map<string, RecordSet | null>()
+  for (const [key, change] of changes) {
+    const listed = sets.find((set) => setKey(set) === key)
+    const shown = change === null ? !listed : listed && listed.ttl === change.ttl && sameValues(listed.values, change.values)
+    if (!shown) pending.set(key, change)
+  }
+  return pending
+}
+
 export function typeHint(type: string): string {
   switch (type) {
     case 'A':

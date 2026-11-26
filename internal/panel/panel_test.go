@@ -1,7 +1,7 @@
 package panel
 
 import (
-	"github.com/danielgtmn/sesam"
+	"github.com/danielgtmn/sesam/v2"
 	"strconv"
 
 	"archive/tar"
