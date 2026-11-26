@@ -412,6 +412,9 @@ func (s *Service) handlePush(ctx context.Context, app store.GitHubApp, p hookPus
 	if inst.Suspended {
 		return ignored, nil
 	}
+	if gone, err := s.store.RepositoryGone(ctx, inst.ID, p.Repository.ID); err != nil || gone {
+		return ignored, storeErrorOrNil(err)
+	}
 	sources, err := s.store.SiteSourcesOfRepository(ctx, p.Repository.ID)
 	if err != nil {
 		return GitHubDeliveryResult{}, storeError(err)
@@ -431,7 +434,7 @@ func (s *Service) handlePush(ctx context.Context, app store.GitHubApp, p hookPus
 	for _, src := range sources {
 		// Only by GitHub's ids: the repository and the installation the
 		// site was linked through.
-		if src.InstallationID != inst.ID || src.Branch != branch || !src.PublishOnPush || src.RepositoryGone {
+		if src.InstallationID != inst.ID || src.Branch != branch || !src.PublishOnPush {
 			continue
 		}
 		r := run
@@ -492,7 +495,7 @@ func (s *Service) handleInstallationRepositories(ctx context.Context, app store.
 		if r.ID <= 0 {
 			return GitHubDeliveryResult{}, errMalformed
 		}
-		if _, err := s.store.MarkRepositoryGone(ctx, inst.ID, r.ID, gone); err != nil {
+		if err := s.store.SetRepositoryGone(ctx, inst.ID, r.ID, gone); err != nil {
 			return GitHubDeliveryResult{}, storeError(err)
 		}
 	}
@@ -516,7 +519,7 @@ func (s *Service) handleRepository(ctx context.Context, app store.GitHubApp, p h
 		}
 		err = s.store.RenameSourceRepository(ctx, p.Repository.ID, p.Repository.FullName)
 	case "deleted":
-		_, err = s.store.MarkRepositoryGone(ctx, inst.ID, p.Repository.ID, true)
+		err = s.store.SetRepositoryGone(ctx, inst.ID, p.Repository.ID, true)
 	default:
 		return ignored, nil
 	}
@@ -525,4 +528,11 @@ func (s *Service) handleRepository(ctx context.Context, app store.GitHubApp, p h
 	}
 	s.githubRepos.clear()
 	return GitHubDeliveryResult{Result: DeliveryHandled}, nil
+}
+
+func storeErrorOrNil(err error) error {
+	if err == nil {
+		return nil
+	}
+	return storeError(err)
 }

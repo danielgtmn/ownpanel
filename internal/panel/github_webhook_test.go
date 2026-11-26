@@ -310,12 +310,13 @@ func TestDeliveryInstallationAndRepositoryChanges(t *testing.T) {
 
 	// Deleted on GitHub.
 	h.mustReceive(h.delivery("repository", h.gh.RepositoryPayload("deleted", h.site, h.inst)), DeliveryHandled, 0)
-	if src, _ := h.svc.store.SiteSource(ctx, "bobsite"); !src.RepositoryGone {
-		t.Fatalf("deleted: %+v", src)
+	if gone, _ := h.svc.store.RepositoryGone(ctx, h.inst, h.site); !gone {
+		t.Fatal("deleted: not marked")
 	}
+	h.mustReceive(h.delivery("push", h.push(githubtest.Push{})), DeliveryIgnored, 0)
 	h.link("rootsite", h.site, "main", true) // linking again clears it
-	if src, _ := h.svc.store.SiteSource(ctx, "rootsite"); src.RepositoryGone {
-		t.Fatalf("linked again: %+v", src)
+	if gone, _ := h.svc.store.RepositoryGone(ctx, h.inst, h.site); gone {
+		t.Fatal("linked again: still marked")
 	}
 
 	// Suspended and back.

@@ -205,9 +205,13 @@ func (s *Service) checkSource(ctx context.Context, src store.SiteSource, detail 
 	}
 	// What GitHub reported in a delivery holds while GitHub cannot be
 	// asked.
+	gone, err := s.store.RepositoryGone(ctx, src.InstallationID, src.RepositoryID)
+	if err != nil {
+		slog.Error("could not look up a repository reported gone", "repository", src.RepositoryID, "err", err)
+	}
 	unchecked := func(err error) SiteSource {
 		v.Status, v.Problem = SourceUnchecked, problem(err)
-		if src.RepositoryGone {
+		if gone {
 			v.Status, v.Problem = SourceRepositoryMissing, ""
 		}
 		return v
@@ -224,9 +228,9 @@ func (s *Service) checkSource(ctx context.Context, src store.SiteSource, detail 
 	}
 	for _, r := range e.repos {
 		if r.ID == src.RepositoryID {
-			if src.RepositoryGone {
-				// GitHub shows it again (added back to the installation).
-				if _, err := s.store.MarkRepositoryGone(context.WithoutCancel(ctx), src.InstallationID, r.ID, false); err != nil {
+			if gone {
+				// GitHub shows it again (given back to the installation).
+				if err := s.store.SetRepositoryGone(context.WithoutCancel(ctx), src.InstallationID, r.ID, false); err != nil {
 					slog.Error("could not store that a repository is back", "repository", r.ID, "err", err)
 				}
 			}
@@ -273,6 +277,11 @@ func (s *Service) SetSiteSource(ctx context.Context, a Actor, site string, in Si
 	}
 	if _, err := s.githubBranch(ctx, repo, in.Branch); err != nil {
 		return SiteSourceState{}, err
+	}
+	// GitHub shows the repository: whatever a delivery reported before no
+	// longer holds.
+	if err := s.store.SetRepositoryGone(ctx, repo.InstallationID, repo.ID, false); err != nil {
+		return SiteSourceState{}, storeError(err)
 	}
 	src, err := s.store.PutSiteSource(ctx, store.SiteSource{
 		Site: st.Name, Kind: store.SourceGitHub, InstallationID: repo.InstallationID, RepositoryID: repo.ID,

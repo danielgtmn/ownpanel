@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -34,7 +35,7 @@ type siteSourceOutput struct {
 }
 
 type runInfo struct {
-	ID          int64  `json:"id"`
+	ID          string `json:"id"`
 	Trigger     string `json:"trigger" jsonschema:"push: a push to the linked branch"`
 	Status      string `json:"status" jsonschema:"queued, running, succeeded, failed, cancelled or skipped (replaced by a newer push before it started)"`
 	Repository  string `json:"repository"`
@@ -59,7 +60,7 @@ func runOutput(r panel.Run) runInfo {
 		return t.UTC().Format(time.RFC3339)
 	}
 	return runInfo{
-		ID: r.ID, Trigger: r.Trigger, Status: r.Status, Repository: r.Repository, Branch: r.Branch, Commit: r.Commit,
+		ID: strconv.FormatInt(r.ID, 10), Trigger: r.Trigger, Status: r.Status, Repository: r.Repository, Branch: r.Branch, Commit: r.Commit,
 		Message: r.Message, AuthorName: r.AuthorName, AuthorLogin: r.AuthorLogin, Pusher: r.Pusher, Detail: r.Detail,
 		Waiting: r.Waiting, CreatedAt: stamp(&r.CreatedAt), StartedAt: stamp(r.StartedAt), FinishedAt: stamp(r.FinishedAt),
 	}

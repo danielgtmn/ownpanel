@@ -146,3 +146,77 @@ func TestDeliveries(t *testing.T) {
 		t.Fatal("the newest delivery was forgotten")
 	}
 }
+
+func TestRunChecks(t *testing.T) {
+	s, _ := open(t)
+	if _, err := s.CreateSite(ctx, "a", []string{"a.example.com"}, 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []string{"", "abc", strings.Repeat("A", 40), strings.Repeat("g", 40), strings.Repeat("a", 64)} {
+		if _, err := s.AddRun(ctx, testRun("a", c), "replaced", 30); !errors.Is(err, ErrInvalid) {
+			t.Errorf("commit %q: %v", c, err)
+		}
+	}
+	if _, err := s.AddRun(ctx, testRun("nope", sha('1')), "replaced", 30); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown site: %v", err)
+	}
+}
+
+func TestRepositoriesGoneAndInstallations(t *testing.T) {
+	s, _ := open(t)
+	app, err := s.CreateGitHubApp(ctx, GitHubApp{AppID: 77, Slug: "x", Name: "x", ClientID: "c", OwnerLogin: "acme",
+		OwnerType: "Organization", HTMLURL: "u", PrivateKey: []byte{1}, WebhookSecret: []byte{2}, ClientSecret: []byte{3}}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GitHubAppByAppID(ctx, 77); err != nil || got.ID != app.ID {
+		t.Fatalf("by GitHub's id: %+v %v", got, err)
+	}
+	if _, err := s.GitHubAppByAppID(ctx, 78); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown App: %v", err)
+	}
+	inst := GitHubInstallation{ID: 500, AppID: app.ID, AccountLogin: "acme", AccountType: "Organization", RepositorySelection: "all"}
+	if err := s.PutGitHubInstallation(ctx, inst); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetGitHubInstallationSuspended(ctx, app.ID, 500, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GitHubInstallation(ctx, 500); !got.Suspended {
+		t.Fatalf("suspended: %+v", got)
+	}
+	if err := s.SetGitHubInstallationSuspended(ctx, app.ID+1, 500, false); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another App's installation: %v", err)
+	}
+
+	for i := 0; i < 2; i++ { // twice is fine
+		if err := s.SetRepositoryGone(ctx, 500, 7, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if gone, _ := s.RepositoryGone(ctx, 500, 7); !gone {
+		t.Fatal("not gone")
+	}
+	if gone, _ := s.RepositoryGone(ctx, 501, 7); gone {
+		t.Fatal("gone for another installation")
+	}
+	if err := s.SetRepositoryGone(ctx, 500, 7, false); err != nil {
+		t.Fatal(err)
+	}
+	if gone, _ := s.RepositoryGone(ctx, 500, 7); gone {
+		t.Fatal("still gone")
+	}
+	s.SetRepositoryGone(ctx, 500, 8, true)
+	if err := s.DeleteGitHubInstallation(ctx, app.ID+1, 500); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another App deletes: %v", err)
+	}
+	if err := s.DeleteGitHubInstallation(ctx, app.ID, 500); err != nil {
+		t.Fatal(err)
+	}
+	if gone, _ := s.RepositoryGone(ctx, 500, 8); gone {
+		t.Fatal("gone outlived its installation")
+	}
+	if _, err := s.GitHubInstallation(ctx, 500); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("installation: %v", err)
+	}
+}

@@ -54,13 +54,13 @@ const (
 // author and pusher come from GitHub and are plain text: show them as
 // text, never as markup.
 type Run struct {
-	ID      int64  `json:"id"`
+	ID      int64  `json:"id,string"`
 	Site    string `json:"site"`
 	Trigger string `json:"trigger"`
 	// Status: queued, running, succeeded, failed, cancelled or skipped.
 	Status       string `json:"status"`
 	Repository   string `json:"repository"`
-	RepositoryID int64  `json:"repository_id,omitempty"`
+	RepositoryID int64  `json:"-"`
 	Ref          string `json:"ref"`
 	Branch       string `json:"branch,omitempty"`
 	Commit       string `json:"commit"`

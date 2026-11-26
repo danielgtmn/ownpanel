@@ -25,7 +25,7 @@ export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancell
  * text only.
  */
 export type Run = {
-  id: number
+  id: string
   site: string
   trigger: string
   status: RunStatus

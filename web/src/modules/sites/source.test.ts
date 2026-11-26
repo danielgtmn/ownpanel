@@ -56,7 +56,7 @@ it('keys repositories by installation and id', () => {
 })
 
 const run = (patch: Partial<Run>): Run => ({
-  id: 1,
+  id: '1',
   site: 'blog',
   trigger: 'push',
   status: 'queued',
