@@ -4,7 +4,7 @@ import { encodeSegment } from './path.ts'
 export type DomainState = 'points_here' | 'points_elsewhere' | 'no_record' | 'lookup_failed'
 
 export type DomainZone = {
-  connection_id: number
+  connection_id: string
   connection_name: string
   zone: string
   record_name: string

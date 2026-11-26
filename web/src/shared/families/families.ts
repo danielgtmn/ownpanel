@@ -3,8 +3,8 @@ import { normalizeHost, registrableDomain } from './suffix.ts'
 
 // release is the live version's id, when known.
 export type SourceSite = { name: string; domains: string[]; live: boolean; release?: string }
-export type SourceZone = { connectionId: number; connectionName: string; name: string }
-export type SourceRedirect = { id: number; source: string; target: string }
+export type SourceZone = { connectionId: string; connectionName: string; name: string }
+export type SourceRedirect = { id: string; source: string; target: string }
 // A domain with e-mail turned on. active: its mail records point to this server, so it receives mail.
 export type SourceMailDomain = { domain: string; active: boolean }
 

@@ -24,7 +24,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -88,11 +87,11 @@ type Manager struct {
 	log  *slog.Logger
 
 	mu        sync.Mutex
-	active    map[int64]*active // running or being scanned
-	passwords map[int64]string  // IMAP jobs that wait or run
+	active    map[string]*active // running or being scanned
+	passwords map[string]string  // IMAP jobs that wait or run
 	rate      map[string][]time.Time
 	exporting map[string]bool
-	uploading map[int64]bool
+	uploading map[string]bool
 	started   bool
 	stopped   bool
 
@@ -143,18 +142,24 @@ func New(opts Options) *Manager {
 	}
 	return &Manager{
 		opts: opts, log: opts.Logger,
-		active:    map[int64]*active{},
-		passwords: map[int64]string{},
+		active:    map[string]*active{},
+		passwords: map[string]string{},
 		rate:      map[string][]time.Time{},
 		exporting: map[string]bool{},
-		uploading: map[int64]bool{},
+		uploading: map[string]bool{},
 	}
 }
 
 func (m *Manager) now() time.Time { return m.opts.Now().UTC().Truncate(time.Second) }
 
-func (m *Manager) spoolPath(id int64) string {
-	return filepath.Join(m.opts.Store.ImportsDir(), strconv.FormatInt(id, 10)+".spool")
+// spoolPath is where the bytes of upload id are kept. An id that is not
+// valid gets an empty path (opening or removing it fails) and never one
+// outside the imports directory.
+func (m *Manager) spoolPath(id string) string {
+	if !config.ValidImportID(id) {
+		return ""
+	}
+	return filepath.Join(m.opts.Store.ImportsDir(), id+".spool")
 }
 
 var errUnknownMailbox = errorf(http.StatusNotFound, "unknown mailbox")
@@ -356,7 +361,7 @@ func (m *Manager) enoughSpace(n int64) error {
 // WritePart stores a part of an upload that starts at offset and returns
 // how many bytes the upload has. Bytes that arrived before a broken
 // connection are kept, so the next part goes on from there.
-func (m *Manager) WritePart(ctx context.Context, sid string, id, offset int64, body io.Reader, length int64) (int64, error) {
+func (m *Manager) WritePart(ctx context.Context, sid, id string, offset int64, body io.Reader, length int64) (int64, error) {
 	if _, err := m.mailbox(sid); err != nil {
 		return 0, err
 	}
@@ -455,7 +460,7 @@ func copyN(f *os.File, r io.Reader, n int64) (int64, error) {
 
 // Resume starts a file job that is ready, or continues a paused or
 // interrupted IMAP job with its password.
-func (m *Manager) Resume(ctx context.Context, sid string, id int64, r config.ImportResume) (config.ImportJob, error) {
+func (m *Manager) Resume(ctx context.Context, sid, id string, r config.ImportResume) (config.ImportJob, error) {
 	if _, err := m.mailbox(sid); err != nil {
 		return config.ImportJob{}, err
 	}
@@ -502,7 +507,10 @@ func (m *Manager) Resume(ctx context.Context, sid string, id int64, r config.Imp
 
 var errNoJob = errorf(http.StatusNotFound, "unknown import")
 
-func (m *Manager) job(ctx context.Context, sid string, id int64) (config.ImportJob, error) {
+func (m *Manager) job(ctx context.Context, sid, id string) (config.ImportJob, error) {
+	if !config.ValidImportID(id) {
+		return config.ImportJob{}, errNoJob
+	}
 	j, err := m.opts.Store.Import(ctx, sid, id)
 	if errors.Is(err, storage.ErrNoImport) {
 		return j, errNoJob
@@ -519,7 +527,7 @@ func (m *Manager) Jobs(ctx context.Context, sid string) ([]config.ImportJob, err
 }
 
 // Job returns a job with its failures.
-func (m *Manager) Job(ctx context.Context, sid string, id int64) (config.ImportJob, error) {
+func (m *Manager) Job(ctx context.Context, sid, id string) (config.ImportJob, error) {
 	if _, err := m.mailbox(sid); err != nil {
 		return config.ImportJob{}, err
 	}
@@ -533,7 +541,7 @@ func (m *Manager) Job(ctx context.Context, sid string, id int64) (config.ImportJ
 
 // Cancel cancels a job that has not finished and waits for it to stop,
 // or removes a finished one.
-func (m *Manager) Cancel(ctx context.Context, sid string, id int64) error {
+func (m *Manager) Cancel(ctx context.Context, sid, id string) error {
 	if _, err := m.mailbox(sid); err != nil {
 		return err
 	}
@@ -669,9 +677,9 @@ func (m *Manager) removeOrphanSpools(ctx context.Context) {
 		return
 	}
 	for _, e := range entries {
-		id, err := strconv.ParseInt(strings.TrimSuffix(e.Name(), ".spool"), 10, 64)
+		id, isSpool := strings.CutSuffix(e.Name(), ".spool")
 		state, ok := ids[id]
-		if err != nil || !strings.HasSuffix(e.Name(), ".spool") || !ok || config.ImportFinished(state) {
+		if !isSpool || !config.ValidImportID(id) || !ok || config.ImportFinished(state) {
 			os.RemoveAll(filepath.Join(dir, e.Name()))
 		}
 	}
@@ -808,7 +816,7 @@ func (m *Manager) emit(j config.ImportJob, kind string) {
 	if j.Kind == config.ImportIMAP {
 		src = fmt.Sprintf("%s at %s", j.Username, j.Host)
 	}
-	detail := fmt.Sprintf("import %d from %s: %d copied, %d already there, %d failed", j.ID, src, j.Copied, j.Skipped, j.Failed)
+	detail := fmt.Sprintf("import %s from %s: %d copied, %d already there, %d failed", j.ID, src, j.Copied, j.Skipped, j.Failed)
 	if j.Error != "" {
 		detail += ": " + j.Error
 	}

@@ -22,7 +22,7 @@ DNS records at Hetzner, and e-mail with its own mail server.
 ```
 cmd/ownpaneld        daemon entry point (serve and backup commands, flags, wiring)
 internal/panel     the panel's operations and all permission checks; every front door calls these
-internal/store     SQLite database and its migrations (internal/store/migrations)
+internal/store     the panel's data (ablage repositories on SQLite)
 internal/caddy     Caddy config builder and admin API client
 internal/deploy    releases, activation, rollback
 internal/dns       DNS provider interface, zone lookup, "does the domain point here?"; dns/hetzner is the Hetzner Cloud client
@@ -302,6 +302,12 @@ keeps the data (`--purge` deletes it too). `--channel nightly` follows the
 build of `main` made after every merged pull request instead of the stable
 releases, which come from the `release` branch. Releases are built by the
 Publish workflow (`.github/workflows/release.yml`) with `scripts/package.sh`.
+
+The update that moves the panel's data to ablage converts `ownpanel.db` once
+at start and keeps the database as it was in
+`ownpanel.db.pre-ablage-<UTC time>`; older versions cannot read the converted
+database, so going back past it needs that copy (see the wiki page
+Installation, "Updating").
 
 Manual install: download `ownpanel_<version>_linux_<arch>.tar.gz` and
 `checksums.txt` from the releases, check and unpack the archive and run

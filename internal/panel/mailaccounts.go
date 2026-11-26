@@ -302,7 +302,7 @@ type MailboxAccount struct {
 
 // SetMailboxAccount changes the display name and "mail programs only with
 // app passwords" of a mailbox.
-func (s *Service) SetMailboxAccount(ctx context.Context, a Actor, id int64, in MailboxAccount) (Mailbox, error) {
+func (s *Service) SetMailboxAccount(ctx context.Context, a Actor, id string, in MailboxAccount) (Mailbox, error) {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return Mailbox{}, err
@@ -338,7 +338,7 @@ func (s *Service) SetMailboxAccount(ctx context.Context, a Actor, id int64, in M
 	if next.AppPasswordsOnly != m.AppPasswordsOnly {
 		only = &next.AppPasswordsOnly
 	}
-	if err := s.store.SetMailboxAccount(ctx, id, dn, only); err != nil {
+	if err := s.store.SetMailboxAccount(ctx, m.ID, dn, only); err != nil {
 		return Mailbox{}, storeError(err)
 	}
 	addr := m.LocalPart + "@" + m.Domain
@@ -383,11 +383,12 @@ func appPasswordView(a store.AppPassword) AppPassword {
 }
 
 // AppPasswords lists a mailbox's app passwords, oldest first.
-func (s *Service) AppPasswords(ctx context.Context, a Actor, mailboxID int64) ([]AppPassword, error) {
-	if _, err := s.visibleMailbox(ctx, a, mailboxID); err != nil {
+func (s *Service) AppPasswords(ctx context.Context, a Actor, mailboxID string) ([]AppPassword, error) {
+	m, err := s.visibleMailbox(ctx, a, mailboxID)
+	if err != nil {
 		return nil, err
 	}
-	list, err := s.store.AppPasswords(ctx, mailboxID)
+	list, err := s.store.AppPasswords(ctx, m.ID)
 	if err != nil {
 		return nil, storeError(err)
 	}
@@ -400,7 +401,7 @@ func (s *Service) AppPasswords(ctx context.Context, a Actor, mailboxID int64) ([
 
 // CreateAppPassword makes an app password for a mail program or device and
 // returns it with the token, which is never shown again.
-func (s *Service) CreateAppPassword(ctx context.Context, a Actor, mailboxID int64, name string) (NewAppPassword, error) {
+func (s *Service) CreateAppPassword(ctx context.Context, a Actor, mailboxID string, name string) (NewAppPassword, error) {
 	m, err := s.visibleMailbox(ctx, a, mailboxID)
 	if err != nil {
 		return NewAppPassword{}, err
@@ -432,7 +433,7 @@ func (s *Service) CreateAppPassword(ctx context.Context, a Actor, mailboxID int6
 
 // RevokeAppPassword deletes an app password; mail programs using it are
 // signed out.
-func (s *Service) RevokeAppPassword(ctx context.Context, a Actor, mailboxID int64, id string) error {
+func (s *Service) RevokeAppPassword(ctx context.Context, a Actor, mailboxID string, id string) error {
 	m, err := s.visibleMailbox(ctx, a, mailboxID)
 	if err != nil {
 		return err

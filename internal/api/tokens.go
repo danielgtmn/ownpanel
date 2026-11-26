@@ -41,10 +41,7 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteToken(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "access token")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	if err := s.Panel.DeleteToken(r.Context(), actorOf(r), id); err != nil {
 		writeFailure(w, err)
 		return

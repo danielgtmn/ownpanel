@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"io"
 	"os"
@@ -398,8 +397,9 @@ func TestRollbackKeepsFiles(t *testing.T) {
 	appendMsg(t, s, idA, "Junk", "spam")
 	s.SetFlags(ctx, idA, "Junk", []uint32{1}, FlagsAdd, []string{`\Deleted`})
 	boom := errors.New("boom")
-	err := s.write(ctx, func(tx *sql.Tx, ch *changes) error {
-		if _, err := s.removeMessages(tx, ch, idA, mustFolder(t, s, idA, "Junk"), []uint32{1}); err != nil {
+	fid := mustFolder(t, s, idA, "Junk")
+	err := s.write(ctx, func(tx *repos, ch *changes) error {
+		if _, err := s.removeMessages(ctx, tx, ch, idA, fid, []uint32{1}); err != nil {
 			return err
 		}
 		return boom
@@ -413,8 +413,8 @@ func TestRollbackKeepsFiles(t *testing.T) {
 	}
 }
 
-func mustFolder(t *testing.T, s *Store, id, name string) int64 {
-	var fid int64
+func mustFolder(t *testing.T, s *Store, id, name string) string {
+	var fid string
 	if err := s.rdb.QueryRow(`SELECT id FROM folders WHERE storage_id = ? AND name = ?`, id, name).Scan(&fid); err != nil {
 		t.Fatal(err)
 	}

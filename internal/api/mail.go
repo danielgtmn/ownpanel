@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/danielgtmn/ownpanel/internal/panel"
 )
@@ -161,10 +160,7 @@ func (s *Server) createMailbox(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setMailboxKind(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "mailbox")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	var body struct {
 		Kind     string `json:"kind"`
 		Password string `json:"password"`
@@ -177,10 +173,7 @@ func (s *Server) setMailboxKind(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setMailboxKeepSentCopy(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "mailbox")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	var body struct {
 		KeepSentCopy *bool `json:"keep_sent_copy"`
 	}
@@ -196,10 +189,7 @@ func (s *Server) setMailboxKeepSentCopy(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) setMailboxGrant(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "mailbox")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	var body struct {
 		Address string   `json:"address"`
 		Rights  []string `json:"rights"`
@@ -212,33 +202,19 @@ func (s *Server) setMailboxGrant(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) removeMailboxGrant(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "mailbox")
-	if !ok {
-		return
-	}
-	grantee, err := strconv.ParseInt(r.PathValue("grantee"), 10, 64)
-	if err != nil || grantee <= 0 {
-		writeError(w, http.StatusNotFound, "access not found")
-		return
-	}
-	v, err := s.Panel.RemoveMailboxGrant(r.Context(), actorOf(r), id, grantee)
+	id := r.PathValue("id")
+	v, err := s.Panel.RemoveMailboxGrant(r.Context(), actorOf(r), id, r.PathValue("grantee"))
 	answer(w, http.StatusOK, v, err)
 }
 
 func (s *Server) getMailbox(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "mailbox")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	v, err := s.Panel.MailboxOf(r.Context(), actorOf(r), id)
 	answer(w, http.StatusOK, v, err)
 }
 
 func (s *Server) setMailboxLimits(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "mailbox")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	// A missing field stays as it is.
 	var body struct {
 		QuotaBytes       *int64  `json:"quota_bytes"`
@@ -271,10 +247,7 @@ func (s *Server) setMailboxLimits(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setMailboxPassword(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "mailbox")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	var body struct {
 		Password string `json:"password"`
 	}
@@ -289,10 +262,7 @@ func (s *Server) setMailboxPassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) unblockMailbox(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "mailbox")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	if err := s.Panel.UnblockMailbox(r.Context(), actorOf(r), id); err != nil {
 		writeFailure(w, err)
 		return
@@ -301,10 +271,7 @@ func (s *Server) unblockMailbox(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteMailbox(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "mailbox")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	if err := s.Panel.DeleteMailbox(r.Context(), actorOf(r), id); err != nil {
 		writeFailure(w, err)
 		return
@@ -354,19 +321,13 @@ func (s *Server) createMailAlias(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getMailAlias(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "alias")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	v, err := s.Panel.MailAliasOf(r.Context(), actorOf(r), id)
 	answer(w, http.StatusOK, v, err)
 }
 
 func (s *Server) updateMailAlias(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "alias")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	var body aliasBody
 	if !decodeJSON(w, r, &body, aliasExample) {
 		return
@@ -385,10 +346,7 @@ func (s *Server) updateMailAlias(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteMailAlias(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "alias")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	if err := s.Panel.DeleteMailAlias(r.Context(), actorOf(r), id); err != nil {
 		writeFailure(w, err)
 		return

@@ -361,7 +361,7 @@ func TestGitHubWholeFlow(t *testing.T) {
 	if apps, _ := g.svc.store.GitHubApps(ctx); len(apps) != 0 {
 		t.Fatalf("left: %+v", apps)
 	}
-	if insts, _ := g.svc.store.GitHubInstallations(ctx, 0); len(insts) != 0 {
+	if insts, _ := g.svc.store.GitHubInstallations(ctx, ""); len(insts) != 0 {
 		t.Fatalf("installations left: %+v", insts)
 	}
 	if _, err := g.svc.GitHubRepositories(ctx, rootSess, id); KindOf(err) != NotFound {
@@ -620,7 +620,7 @@ func TestGitHubPermissionMatrix(t *testing.T) {
 	app := g.connect(rootSess, "acme")
 	snapshot := func() (int, int) {
 		apps, _ := g.svc.store.GitHubApps(ctx)
-		insts, _ := g.svc.store.GitHubInstallations(ctx, 0)
+		insts, _ := g.svc.store.GitHubInstallations(ctx, "")
 		return len(apps), len(insts)
 	}
 	for _, op := range ops {

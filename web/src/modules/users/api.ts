@@ -1,4 +1,4 @@
-import { request } from '../../shared/api/index.ts'
+import { encodeSegment, request } from '../../shared/api/index.ts'
 import type { Role, User } from '../../shared/session/index.ts'
 
 export function listUsers(): Promise<User[]> {
@@ -9,10 +9,10 @@ export function createUser(user: { name: string; email: string; password: string
   return request<User>('/users', { method: 'POST', body: user })
 }
 
-export function updateUser(id: number, changes: { role?: Role; password?: string; email?: string }): Promise<User> {
-  return request<User>(`/users/${id}`, { method: 'PUT', body: changes })
+export function updateUser(id: string, changes: { role?: Role; password?: string; email?: string }): Promise<User> {
+  return request<User>(`/users/${encodeSegment(id)}`, { method: 'PUT', body: changes })
 }
 
-export function deleteUser(id: number): Promise<void> {
-  return request<void>(`/users/${id}`, { method: 'DELETE' })
+export function deleteUser(id: string): Promise<void> {
+  return request<void>(`/users/${encodeSegment(id)}`, { method: 'DELETE' })
 }

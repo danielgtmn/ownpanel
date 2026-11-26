@@ -54,7 +54,7 @@ func mailDomainInfoOf(d panel.MailDomain) mailDomainInfo {
 }
 
 type mailboxInfo struct {
-	ID               int64               `json:"id" jsonschema:"mailbox id; pass it to set_mailbox_limits, unblock_mailbox, delete_mailbox or list_mail_imports"`
+	ID               string              `json:"id" jsonschema:"mailbox id; pass it to set_mailbox_limits, unblock_mailbox, delete_mailbox or list_mail_imports"`
 	Address          string              `json:"address" jsonschema:"the mailbox's e-mail address, also its user name in mail programs"`
 	DisplayName      string              `json:"display_name" jsonschema:"name shown as sender and in address books; may be empty"`
 	AppPasswordsOnly bool                `json:"app_passwords_only" jsonschema:"whether mail programs can sign in only with app passwords (set in the web interface)"`
@@ -74,7 +74,7 @@ type mailboxInfo struct {
 }
 
 type mailboxAccessInfo struct {
-	MailboxID int64    `json:"mailbox_id" jsonschema:"id of the other mailbox"`
+	MailboxID string   `json:"mailbox_id" jsonschema:"id of the other mailbox"`
 	Address   string   `json:"address" jsonschema:"address of the other mailbox"`
 	Rights    []string `json:"rights" jsonschema:"read, write, manage, send-as, send-on-behalf"`
 	Active    bool     `json:"active" jsonschema:"false when the access does not count because the two mailboxes are no longer in the same organisation"`
@@ -100,7 +100,7 @@ func mailboxInfoOf(m panel.Mailbox) mailboxInfo {
 }
 
 type mailAliasInfo struct {
-	ID        int64    `json:"id" jsonschema:"alias id; pass it to set_mail_alias to change the alias or to delete_mail_alias"`
+	ID        string   `json:"id" jsonschema:"alias id; pass it to set_mail_alias to change the alias or to delete_mail_alias"`
 	Address   string   `json:"address" jsonschema:"the alias address; *@domain is the catch-all for every address of the domain without a mailbox or alias"`
 	CatchAll  bool     `json:"catch_all" jsonschema:"whether this is the domain's catch-all"`
 	Targets   []string `json:"targets" jsonschema:"addresses mail is delivered to"`
@@ -162,18 +162,18 @@ type mailboxOutput struct {
 }
 
 type mailboxLimitsInput struct {
-	ID          int64  `json:"id" jsonschema:"mailbox id from list_mailboxes"`
+	ID          string `json:"id" jsonschema:"mailbox id from list_mailboxes"`
 	QuotaBytes  *int64 `json:"quota_bytes,omitempty" jsonschema:"new quota in bytes (at least 1 MiB); leave out to keep it. Only admins can raise it"`
 	SendPerHour *int   `json:"send_per_hour,omitempty" jsonschema:"new messages per hour (at least 1); leave out to keep it. Only admins can raise it"`
 	SendPerDay  *int   `json:"send_per_day,omitempty" jsonschema:"new messages per day (at least 1); leave out to keep it. Only admins can raise it"`
 }
 
 type mailboxIDInput struct {
-	ID int64 `json:"id" jsonschema:"mailbox id from list_mailboxes"`
+	ID string `json:"id" jsonschema:"mailbox id from list_mailboxes"`
 }
 
 type deleteMailboxInput struct {
-	ID             int64  `json:"id" jsonschema:"mailbox id from list_mailboxes"`
+	ID             string `json:"id" jsonschema:"mailbox id from list_mailboxes"`
 	ConfirmAddress string `json:"confirm_address" jsonschema:"the mailbox's address exactly as shown by list_mailboxes; confirms that the mailbox and all its stored mail is deleted"`
 }
 
@@ -186,7 +186,7 @@ type aliasOutput struct {
 }
 
 type setAliasInput struct {
-	ID        int64    `json:"id,omitempty" jsonschema:"id of an existing alias to replace; leave empty (or 0) to create a new alias"`
+	ID        string   `json:"id,omitempty" jsonschema:"id of an existing alias to replace; leave empty to create a new alias"`
 	Domain    string   `json:"domain,omitempty" jsonschema:"mail domain of a new alias; ignored when id is given (an alias stays in its domain)"`
 	LocalPart string   `json:"local_part" jsonschema:"the part before the @, e.g. sales; * makes the catch-all for every address of the domain without a mailbox or alias"`
 	Targets   []string `json:"targets" jsonschema:"addresses to deliver to: mailboxes here or outside addresses, at most 50"`
@@ -196,7 +196,7 @@ type setAliasInput struct {
 }
 
 type deleteAliasInput struct {
-	ID             int64  `json:"id" jsonschema:"alias id from list_mail_aliases"`
+	ID             string `json:"id" jsonschema:"alias id from list_mail_aliases"`
 	ConfirmAddress string `json:"confirm_address" jsonschema:"the alias's address exactly as shown by list_mail_aliases"`
 }
 
@@ -219,7 +219,7 @@ type mailRecordsOutput struct {
 	MailHost     string           `json:"mail_host" jsonschema:"the mail server's name"`
 	Records      []mailRecordInfo `json:"records"`
 	CanApply     bool             `json:"can_apply" jsonschema:"whether set_up_mail_records can write the records for you (the zone is in one of your own DNS connections with write access)"`
-	ConnectionID int64            `json:"connection_id" jsonschema:"the DNS connection that would be changed; 0 if none"`
+	ConnectionID string           `json:"connection_id" jsonschema:"the DNS connection that would be changed; empty if none"`
 	Zone         string           `json:"zone" jsonschema:"the zone that would be changed; empty if none"`
 	ApplyNote    string           `json:"apply_note" jsonschema:"why the records cannot be written here; the user then creates them at their DNS provider"`
 }
@@ -509,7 +509,7 @@ func addMailTools(s *sdk.Server, p *panel.Service) {
 		var a panel.MailAlias
 		var err error
 		g := panel.AliasGroup{}
-		if in.ID > 0 {
+		if in.ID != "" {
 			cur, err := p.MailAliasOf(ctx, c.actor, in.ID)
 			if err != nil {
 				return aliasOutput{}, err
@@ -522,7 +522,7 @@ func addMailTools(s *sdk.Server, p *panel.Service) {
 		if in.HideFromDirectory != nil {
 			g.HideFromDirectory = *in.HideFromDirectory
 		}
-		if in.ID > 0 {
+		if in.ID != "" {
 			a, err = p.UpdateMailAlias(ctx, c.actor, in.ID, in.LocalPart, in.Targets, g)
 		} else {
 			a, err = p.CreateMailAlias(ctx, c.actor, in.Domain, in.LocalPart, in.Targets, g)
@@ -584,7 +584,7 @@ func addMailTools(s *sdk.Server, p *panel.Service) {
 }
 
 type mailImportInfo struct {
-	ID       int64  `json:"id" jsonschema:"import id; pass it to cancel_mail_import as import_id"`
+	ID       string `json:"id" jsonschema:"import id; pass it to cancel_mail_import as import_id"`
 	Address  string `json:"address" jsonschema:"the mailbox mail is imported into"`
 	Source   string `json:"source" jsonschema:"where the mail comes from: user and server of another account, or the file name"`
 	State    string `json:"state" jsonschema:"uploading, checking, ready (waits to be started), waiting, running, paused (the other server limits downloads; continue in the web interface), interrupted (the mail server restarted; continue in the web interface), done, failed or cancelled"`
@@ -618,10 +618,10 @@ type mailImportsOutput struct {
 }
 
 type mailImportIDInput struct {
-	ID       int64 `json:"id" jsonschema:"mailbox id from list_mailboxes"`
-	ImportID int64 `json:"import_id" jsonschema:"import id from list_mail_imports"`
+	ID       string `json:"id" jsonschema:"mailbox id from list_mailboxes"`
+	ImportID string `json:"import_id" jsonschema:"import id from list_mail_imports"`
 }
 
 type cancelledOutput struct {
-	Cancelled int64 `json:"cancelled" jsonschema:"the import that was cancelled or removed"`
+	Cancelled string `json:"cancelled" jsonschema:"the import that was cancelled or removed"`
 }

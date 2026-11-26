@@ -1,16 +1,20 @@
 package store
 
 import (
+	"cmp"
 	"context"
-	"database/sql"
+	"errors"
+	"slices"
 	"time"
+
+	"github.com/danielgtmn/ablage"
 )
 
 // DNSConnection is one user's access to a DNS provider account. Secret is
 // stored as given; the panel encrypts it before.
 type DNSConnection struct {
-	ID            int64
-	UserID        int64
+	ID            string
+	UserID        string
 	Owner         string // the owner's user name
 	Provider      string
 	Name          string
@@ -22,150 +26,130 @@ type DNSConnection struct {
 	ZoneCount     *int  // nil: never listed
 }
 
-const dnsConnCols = `c.id, c.user_id, u.name, c.provider, c.name, c.secret, c.created_at,
-	c.last_checked_at, c.last_error, c.can_write, c.zone_count`
+var errDNSConnNotFound = notFoundf("DNS connection not found")
 
-const dnsConnFrom = ` FROM dns_connections c JOIN users u ON u.id = c.user_id`
-
-func scanDNSConnection(row interface{ Scan(...any) error }) (DNSConnection, error) {
-	var c DNSConnection
-	var created int64
-	var checked, canWrite, zones sql.NullInt64
-	err := row.Scan(&c.ID, &c.UserID, &c.Owner, &c.Provider, &c.Name, &c.Secret, &created,
-		&checked, &c.LastError, &canWrite, &zones)
+func dnsConnectionsOf(ctx context.Context, r repos, rows []dnsConnectionRow) ([]DNSConnection, error) {
+	ids := make([]string, len(rows))
+	for i, c := range rows {
+		ids[i] = c.UserID
+	}
+	names, err := userNames(ctx, r, ids)
 	if err != nil {
-		if noRows(err) {
-			return DNSConnection{}, notFoundf("DNS connection not found")
-		}
-		return DNSConnection{}, err
+		return nil, err
 	}
-	c.CreatedAt = unix(created)
-	if checked.Valid {
-		at := unix(checked.Int64)
-		c.LastCheckedAt = &at
+	out := make([]DNSConnection, len(rows))
+	for i, c := range rows {
+		out[i] = DNSConnection{ID: c.ID, UserID: c.UserID, Owner: names[c.UserID], Provider: c.Provider, Name: c.Name,
+			Secret: c.Secret, CreatedAt: c.CreatedAt, LastCheckedAt: c.LastCheckedAt, LastError: c.LastError,
+			CanWrite: c.CanWrite, ZoneCount: c.ZoneCount}
 	}
-	if canWrite.Valid {
-		b := canWrite.Int64 == 1
-		c.CanWrite = &b
-	}
-	if zones.Valid {
-		n := int(zones.Int64)
-		c.ZoneCount = &n
-	}
-	return c, nil
+	return out, nil
 }
 
 // CreateDNSConnection stores a connection. Names are unique per user.
 // UserID, Provider, Name, Secret, LastCheckedAt and ZoneCount are taken from
 // c; the rest starts empty.
 func (s *Store) CreateDNSConnection(ctx context.Context, c DNSConnection) (DNSConnection, error) {
-	var checked, zones sql.NullInt64
-	if c.LastCheckedAt != nil {
-		checked = sql.NullInt64{Int64: c.LastCheckedAt.Unix(), Valid: true}
+	row := dnsConnectionRow{UserID: c.UserID, Provider: c.Provider, Name: c.Name, Secret: c.Secret, CreatedAt: s.now(),
+		LastCheckedAt: secondsPtr(c.LastCheckedAt), ZoneCount: c.ZoneCount}
+	if row.Secret == nil {
+		row.Secret = []byte{}
 	}
-	if c.ZoneCount != nil {
-		zones = sql.NullInt64{Int64: int64(*c.ZoneCount), Valid: true}
+	if err := s.r.dnsConns.Create(ctx, &row); err != nil {
+		if errors.Is(err, ablage.ErrReference) {
+			return DNSConnection{}, errUserNotFound
+		}
+		return DNSConnection{}, dup(err, conflictf("you already have a DNS connection named %q", c.Name))
 	}
-	res, err := s.db.ExecContext(ctx, `INSERT INTO dns_connections
-		(user_id, provider, name, secret, created_at, last_checked_at, zone_count) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		c.UserID, c.Provider, c.Name, c.Secret, s.now(), checked, zones)
-	if isUnique(err) {
-		return DNSConnection{}, conflictf("you already have a DNS connection named %q", c.Name)
-	}
-	if err != nil {
-		return DNSConnection{}, err
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return DNSConnection{}, err
-	}
-	return s.DNSConnection(ctx, id)
+	return s.DNSConnection(ctx, row.ID)
 }
 
 // DNSConnection returns one connection.
-func (s *Store) DNSConnection(ctx context.Context, id int64) (DNSConnection, error) {
-	return scanDNSConnection(s.db.QueryRowContext(ctx, `SELECT `+dnsConnCols+dnsConnFrom+` WHERE c.id = ?`, id))
+func (s *Store) DNSConnection(ctx context.Context, id string) (DNSConnection, error) {
+	row, err := s.r.dnsConns.Get(ctx, id)
+	if err != nil {
+		return DNSConnection{}, missing(err, errDNSConnNotFound)
+	}
+	list, err := dnsConnectionsOf(ctx, s.r, []dnsConnectionRow{row})
+	if err != nil {
+		return DNSConnection{}, err
+	}
+	return list[0], nil
 }
 
 // DNSConnections lists the connections of one user, or of everyone if
-// userID is 0, ordered by owner name, then name.
-func (s *Store) DNSConnections(ctx context.Context, userID int64) ([]DNSConnection, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+dnsConnCols+dnsConnFrom+`
-		WHERE ? = 0 OR c.user_id = ? ORDER BY u.name, c.name, c.id`, userID, userID)
+// userID is "", ordered by owner name, then name.
+func (s *Store) DNSConnections(ctx context.Context, userID string) ([]DNSConnection, error) {
+	where := ablage.All
+	if userID != "" {
+		where = ablage.Eq("user_id", userID)
+	}
+	rows, err := s.r.dnsConns.Find(ctx, ablage.Query{Where: where, OrderBy: []ablage.Order{ablage.Asc("name")}})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []DNSConnection{}
-	for rows.Next() {
-		c, err := scanDNSConnection(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, c)
+	out, err := dnsConnectionsOf(ctx, s.r, rows)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	// The owner's name lives in users: sort by it in Go (stable, so name
+	// and id stay the order within one owner).
+	slices.SortStableFunc(out, func(a, b DNSConnection) int { return cmp.Compare(a.Owner, b.Owner) })
+	return out, nil
 }
 
 // DeleteDNSConnection removes a connection.
-func (s *Store) DeleteDNSConnection(ctx context.Context, id int64) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM dns_connections WHERE id = ?`, id)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return notFoundf("DNS connection not found")
-	}
-	return nil
+func (s *Store) DeleteDNSConnection(ctx context.Context, id string) error {
+	return missing(s.r.dnsConns.Delete(ctx, id), errDNSConnNotFound)
 }
 
 // RecordDNSCheck stores the outcome of listing a connection's zones:
 // when, the error ("" if none) and, if known, the number of zones.
-func (s *Store) RecordDNSCheck(ctx context.Context, id int64, at time.Time, zoneCount *int, lastError string) error {
-	var zones sql.NullInt64
+func (s *Store) RecordDNSCheck(ctx context.Context, id string, at time.Time, zoneCount *int, lastError string) error {
+	set := ablage.Row{"last_checked_at": seconds(at), "last_error": lastError}
 	if zoneCount != nil {
-		zones = sql.NullInt64{Int64: int64(*zoneCount), Valid: true}
+		set["zone_count"] = *zoneCount
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE dns_connections
-		SET last_checked_at = ?, zone_count = coalesce(?, zone_count), last_error = ? WHERE id = ?`,
-		at.Unix(), zones, lastError, id)
+	_, err := s.r.dnsConns.UpdateWhere(ctx, ablage.Eq("id", id), set)
 	return err
 }
 
 // RecordDNSWrite stores whether a write through the connection was allowed,
 // and the error to show ("" if none).
-func (s *Store) RecordDNSWrite(ctx context.Context, id int64, canWrite bool, lastError string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE dns_connections SET can_write = ?, last_error = ? WHERE id = ?`,
-		canWrite, lastError, id)
+func (s *Store) RecordDNSWrite(ctx context.Context, id string, canWrite bool, lastError string) error {
+	_, err := s.r.dnsConns.UpdateWhere(ctx, ablage.Eq("id", id), ablage.Row{"can_write": canWrite, "last_error": lastError})
 	return err
 }
 
 // AdoptedDNSZone is a zone someone chose to manage in the panel.
 type AdoptedDNSZone struct {
-	ConnectionID int64
+	ConnectionID string
 	Zone         string
 	CreatedAt    time.Time
 }
 
 // AdoptDNSZone records that a zone of a connection is managed in the panel.
 // It reports whether the zone was new; adopting it again changes nothing.
-func (s *Store) AdoptDNSZone(ctx context.Context, connID int64, zone string) (bool, error) {
-	res, err := s.db.ExecContext(ctx, `INSERT INTO dns_zones (connection_id, zone, created_at) VALUES (?, ?, ?)
-		ON CONFLICT (connection_id, zone) DO NOTHING`, connID, zone, s.now())
-	if err != nil {
-		return false, err
+func (s *Store) AdoptDNSZone(ctx context.Context, connID, zone string) (bool, error) {
+	err := s.r.dnsZones.Create(ctx, &dnsZoneRow{ConnectionID: connID, Zone: zone, CreatedAt: s.now()})
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, ablage.ErrDuplicate):
+		return false, nil
+	case errors.Is(err, ablage.ErrReference):
+		return false, errDNSConnNotFound
 	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
+	return false, err
 }
 
 // ReleaseDNSZone forgets that a zone is managed in the panel.
-func (s *Store) ReleaseDNSZone(ctx context.Context, connID int64, zone string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM dns_zones WHERE connection_id = ? AND zone = ?`, connID, zone)
+func (s *Store) ReleaseDNSZone(ctx context.Context, connID, zone string) error {
+	n, err := s.r.dnsZones.DeleteWhere(ctx, ablage.And(ablage.Eq("connection_id", connID), ablage.Eq("zone", zone)))
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if n == 0 {
 		return notFoundf("the domain %s is not managed in the panel", zone)
 	}
 	return nil
@@ -173,23 +157,25 @@ func (s *Store) ReleaseDNSZone(ctx context.Context, connID int64, zone string) e
 
 // AdoptedDNSZones lists the adopted zones of one user's connections,
 // ordered by zone and connection.
-func (s *Store) AdoptedDNSZones(ctx context.Context, userID int64) ([]AdoptedDNSZone, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT z.connection_id, z.zone, z.created_at
-		FROM dns_zones z JOIN dns_connections c ON c.id = z.connection_id
-		WHERE c.user_id = ? ORDER BY z.zone, z.connection_id`, userID)
+func (s *Store) AdoptedDNSZones(ctx context.Context, userID string) ([]AdoptedDNSZone, error) {
+	conns, err := s.r.dnsConns.Find(ctx, ablage.Query{Where: ablage.Eq("user_id", userID)})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []AdoptedDNSZone{}
-	for rows.Next() {
-		var z AdoptedDNSZone
-		var created int64
-		if err := rows.Scan(&z.ConnectionID, &z.Zone, &created); err != nil {
-			return nil, err
-		}
-		z.CreatedAt = unix(created)
-		out = append(out, z)
+	ids := make([]string, len(conns))
+	for i, c := range conns {
+		ids[i] = c.ID
 	}
-	return out, rows.Err()
+	rows, err := s.r.dnsZones.Find(ctx, ablage.Query{
+		Where:   ablage.In("connection_id", ids...),
+		OrderBy: []ablage.Order{ablage.Asc("zone"), ablage.Asc("connection_id")},
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AdoptedDNSZone, len(rows))
+	for i, z := range rows {
+		out[i] = AdoptedDNSZone{ConnectionID: z.ConnectionID, Zone: z.Zone, CreatedAt: z.CreatedAt}
+	}
+	return out, nil
 }

@@ -2,8 +2,8 @@ import { listRecordNames, request, type DomainStatus } from '../../shared/api/in
 import type { DomainSources, PointStates, SourceZone, ZoneRecords } from '../../shared/families/index.ts'
 
 type SiteData = { name: string; domains: string[] | null; current_release: string }
-type ZoneData = { zones?: { connection_id: number; connection_name: string; name: string }[] | null }
-type RedirectData = { id: number; source_domain: string; source_path: string; target: string }
+type ZoneData = { zones?: { connection_id: string; connection_name: string; name: string }[] | null }
+type RedirectData = { id: string; source_domain: string; source_path: string; target: string }
 type MailDomainData = { domain: string; active: boolean }
 type AddedDomainData = { name: string }
 

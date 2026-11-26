@@ -42,7 +42,7 @@ func (s *Service) othersMailDomainName(ctx context.Context, a Actor, domains, ke
 // othersAccountAddressIn reports whether a user other than userID signs in
 // with an e-mail address in domain or one below it. Mail for that address
 // must not reach somebody else's mailbox.
-func (s *Service) othersAccountAddressIn(ctx context.Context, userID int64, domain string) (bool, error) {
+func (s *Service) othersAccountAddressIn(ctx context.Context, userID, domain string) (bool, error) {
 	users, err := s.store.Users(ctx)
 	if err != nil {
 		return false, storeError(err)

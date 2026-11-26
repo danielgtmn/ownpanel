@@ -2,10 +2,12 @@ package storage
 
 import (
 	"context"
-	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/danielgtmn/ablage"
 
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
 )
@@ -27,19 +29,34 @@ type AccountSession struct {
 // more ends the oldest.
 const MaxAccountSessions = 20
 
+// sessionID is the row id of a session: its id hash in hex.
+func sessionID(idHash []byte) string { return hex.EncodeToString(idHash) }
+
 // CreateAccountSession stores a new session.
 func (s *Store) CreateAccountSession(ctx context.Context, idHash []byte, a AccountSession) error {
 	if err := checkID(a.StorageID); err != nil {
 		return err
 	}
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		if _, err := tx.Exec(`INSERT INTO account_sessions (id_hash, storage_id, address, credential, created, last_seen)
-			VALUES (?, ?, ?, ?, ?, ?)`, idHash, a.StorageID, a.Address, a.Credential, a.Created.Unix(), a.LastSeen.Unix()); err != nil {
+	id := sessionID(idHash)
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		if err := tx.sessions.Create(ctx, &sessionRec{ID: id, StorageID: a.StorageID, Address: a.Address, Credential: a.Credential,
+			Created: sec(a.Created), LastSeen: sec(a.LastSeen)}); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`DELETE FROM account_sessions WHERE storage_id = ? AND id_hash NOT IN
-			(SELECT id_hash FROM account_sessions WHERE storage_id = ? ORDER BY created DESC, rowid DESC LIMIT ?)`,
-			a.StorageID, a.StorageID, MaxAccountSessions)
+		// Keep the new one and the newest others up to the bound.
+		others, err := tx.sessions.Find(ctx, ablage.Query{
+			Where:   ablage.And(ablage.Eq("storage_id", a.StorageID), ablage.Ne("id", id)),
+			OrderBy: []ablage.Order{ablage.Desc("created")},
+			Offset:  MaxAccountSessions - 1,
+		})
+		if err != nil || len(others) == 0 {
+			return err
+		}
+		drop := make([]string, len(others))
+		for i, o := range others {
+			drop[i] = o.ID
+		}
+		_, err = tx.sessions.DeleteWhere(ctx, ablage.In("id", drop...))
 		return err
 	})
 }
@@ -47,23 +64,20 @@ func (s *Store) CreateAccountSession(ctx context.Context, idHash []byte, a Accou
 // AccountSessionByHash returns the session with the id hash; ok is false
 // if there is none.
 func (s *Store) AccountSessionByHash(ctx context.Context, idHash []byte) (a AccountSession, ok bool, err error) {
-	var created, seen int64
-	err = s.rdb.QueryRowContext(ctx, `SELECT storage_id, address, credential, created, last_seen FROM account_sessions WHERE id_hash = ?`,
-		idHash).Scan(&a.StorageID, &a.Address, &a.Credential, &created, &seen)
-	if errors.Is(err, sql.ErrNoRows) {
+	r, err := s.r.sessions.Get(ctx, sessionID(idHash))
+	if errors.Is(err, ablage.ErrNotFound) {
 		return a, false, nil
 	}
 	if err != nil {
 		return a, false, err
 	}
-	a.Created, a.LastSeen = time.Unix(created, 0), time.Unix(seen, 0)
-	return a, true, nil
+	return AccountSession{StorageID: r.StorageID, Address: r.Address, Credential: r.Credential, Created: local(r.Created), LastSeen: local(r.LastSeen)}, true, nil
 }
 
 // TouchAccountSession records the session's last request.
 func (s *Store) TouchAccountSession(ctx context.Context, idHash []byte, at time.Time) error {
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		_, err := tx.Exec(`UPDATE account_sessions SET last_seen = ? WHERE id_hash = ?`, at.Unix(), idHash)
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		_, err := tx.sessions.UpdateWhere(ctx, ablage.Eq("id", sessionID(idHash)), ablage.Row{"last_seen": sec(at)})
 		return err
 	})
 }
@@ -71,16 +85,16 @@ func (s *Store) TouchAccountSession(ctx context.Context, idHash []byte, at time.
 // SetAccountSessionCredential gives a session a new credential
 // fingerprint (after the mailbox changed its own password in it).
 func (s *Store) SetAccountSessionCredential(ctx context.Context, idHash []byte, credential string) error {
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		_, err := tx.Exec(`UPDATE account_sessions SET credential = ? WHERE id_hash = ?`, credential, idHash)
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		_, err := tx.sessions.UpdateWhere(ctx, ablage.Eq("id", sessionID(idHash)), ablage.Row{"credential": credential})
 		return err
 	})
 }
 
 // DeleteAccountSession ends a session.
 func (s *Store) DeleteAccountSession(ctx context.Context, idHash []byte) error {
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		_, err := tx.Exec(`DELETE FROM account_sessions WHERE id_hash = ?`, idHash)
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		_, err := tx.sessions.DeleteWhere(ctx, ablage.Eq("id", sessionID(idHash)))
 		return err
 	})
 }
@@ -88,8 +102,8 @@ func (s *Store) DeleteAccountSession(ctx context.Context, idHash []byte) error {
 // DeleteAccountSessions ends every session of a mailbox except the one
 // with the id hash except (nil: all).
 func (s *Store) DeleteAccountSessions(ctx context.Context, storageID string, except []byte) error {
-	return s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		_, err := tx.Exec(`DELETE FROM account_sessions WHERE storage_id = ? AND id_hash != ?`, storageID, append([]byte{}, except...))
+	return s.write(ctx, func(tx *repos, _ *changes) error {
+		_, err := tx.sessions.DeleteWhere(ctx, ablage.And(ablage.Eq("storage_id", storageID), ablage.Ne("id", sessionID(except))))
 		return err
 	})
 }
@@ -99,35 +113,25 @@ func (s *Store) DeleteAccountSessions(ctx context.Context, storageID string, exc
 // is gone or has another password). It returns how many it deleted.
 func (s *Store) PruneAccountSessions(ctx context.Context, idleBefore, createdBefore time.Time, keep func(AccountSession) bool) (int, error) {
 	n := 0
-	err := s.write(ctx, func(tx *sql.Tx, _ *changes) error {
-		res, err := tx.Exec(`DELETE FROM account_sessions WHERE last_seen < ? OR created < ?`, idleBefore.Unix(), createdBefore.Unix())
+	err := s.write(ctx, func(tx *repos, _ *changes) error {
+		n = 0
+		d, err := tx.sessions.DeleteWhere(ctx, ablage.Or(ablage.Lt("last_seen", sec(idleBefore)), ablage.Lt("created", sec(createdBefore))))
 		if err != nil {
 			return err
 		}
-		d, _ := res.RowsAffected()
 		n += int(d)
-		rows, err := tx.Query(`SELECT id_hash, storage_id, address, credential FROM account_sessions`)
+		list, err := tx.sessions.Find(ctx, ablage.Query{})
 		if err != nil {
 			return err
 		}
-		var drop [][]byte
-		for rows.Next() {
-			var h []byte
-			var a AccountSession
-			if err := rows.Scan(&h, &a.StorageID, &a.Address, &a.Credential); err != nil {
-				rows.Close()
-				return err
-			}
-			if !keep(a) {
-				drop = append(drop, h)
+		var drop []string
+		for _, r := range list {
+			if !keep(AccountSession{StorageID: r.StorageID, Address: r.Address, Credential: r.Credential}) {
+				drop = append(drop, r.ID)
 			}
 		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		for _, h := range drop {
-			if _, err := tx.Exec(`DELETE FROM account_sessions WHERE id_hash = ?`, h); err != nil {
+		if len(drop) > 0 {
+			if _, err := tx.sessions.DeleteWhere(ctx, ablage.In("id", drop...)); err != nil {
 				return err
 			}
 		}
@@ -149,26 +153,23 @@ const maxUseEvents = 5000
 // AppPasswordUses returns the last use of each app password of a mailbox
 // that is still in the events (EventRetention), by app password id.
 func (s *Store) AppPasswordUses(ctx context.Context, storageID string) (map[string]AppPasswordUse, error) {
-	rows, err := s.rdb.QueryContext(ctx, `SELECT at, account FROM events WHERE storage_id = ? AND kind = ? ORDER BY id DESC LIMIT ?`,
-		storageID, config.EventAppPasswordUsed, maxUseEvents)
+	list, err := s.r.events.Find(ctx, ablage.Query{
+		Where:   ablage.And(ablage.Eq("storage_id", storageID), ablage.Eq("kind", config.EventAppPasswordUsed)),
+		OrderBy: []ablage.Order{ablage.Desc("seq")},
+		Limit:   maxUseEvents,
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := map[string]AppPasswordUse{}
-	for rows.Next() {
-		var at int64
-		var account string
-		if err := rows.Scan(&at, &account); err != nil {
-			return nil, err
-		}
+	for _, r := range list {
 		var ch config.AccountChange
-		if json.Unmarshal([]byte(account), &ch) != nil || ch.AppPasswordID == "" {
+		if json.Unmarshal([]byte(r.Account), &ch) != nil || ch.AppPasswordID == "" {
 			continue
 		}
 		if _, seen := out[ch.AppPasswordID]; !seen {
-			out[ch.AppPasswordID] = AppPasswordUse{At: time.Unix(at, 0).UTC(), Network: ch.Network}
+			out[ch.AppPasswordID] = AppPasswordUse{At: r.At.UTC(), Network: ch.Network}
 		}
 	}
-	return out, rows.Err()
+	return out, nil
 }

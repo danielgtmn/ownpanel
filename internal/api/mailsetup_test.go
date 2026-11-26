@@ -4,7 +4,6 @@ import (
 	"encoding/xml"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -13,7 +12,7 @@ import (
 
 // newSetupEnv: mail host mail.example.net, example.com active with the
 // mailbox info@example.com; the public handler in front of a 404.
-func newSetupEnv(t *testing.T) (*env, http.Handler, int64) {
+func newSetupEnv(t *testing.T) (*env, http.Handler, string) {
 	t.Helper()
 	e, _ := newMailEnv(t)
 	wantStatus(t, e.as("PUT", "/api/settings", `{"mail_host":"mail.example.net"}`), 200, "")
@@ -145,7 +144,7 @@ func TestAutodiscover(t *testing.T) {
 
 func TestAppleMailProfile(t *testing.T) {
 	e, _, id := newSetupEnv(t)
-	path := "/api/mail/mailboxes/" + strconv.FormatInt(id, 10) + "/apple-profile"
+	path := "/api/mail/mailboxes/" + id + "/apple-profile"
 	rec := e.as("GET", path, "")
 	if rec.Code != 200 || rec.Header().Get("Content-Type") != "application/x-apple-aspen-config" ||
 		rec.Header().Get("Content-Disposition") != `attachment; filename="info@example.com.mobileconfig"` {

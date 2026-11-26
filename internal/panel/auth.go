@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danielgtmn/sesam"
-	"github.com/danielgtmn/sesam/plugins/password"
+	"github.com/danielgtmn/sesam/v2"
+	"github.com/danielgtmn/sesam/v2/plugins/password"
 
 	"github.com/danielgtmn/ownpanel/internal/store"
 )
@@ -50,7 +50,7 @@ var userNameRe = regexp.MustCompile(`^[a-z0-9._-]{3,32}$`)
 
 // User is what callers see of a user. Email is "" when none is set.
 type User struct {
-	ID        int64     `json:"id"`
+	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Email     string    `json:"email"`
 	Role      string    `json:"role"`
