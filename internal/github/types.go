@@ -105,15 +105,28 @@ func validSecret(s string) bool {
 	return true
 }
 
-// validBranch: a name Git accepts as a branch (roughly; check-ref-format).
-func validBranch(s string) bool {
-	if s == "" || len(s) > 255 || !utf8.ValidString(s) || strings.HasPrefix(s, "-") || strings.HasPrefix(s, "/") ||
-		strings.HasSuffix(s, "/") || strings.HasSuffix(s, ".") || strings.HasSuffix(s, ".lock") ||
+// BranchMax is the longest branch name accepted (Git allows more, but a
+// name this long is not something a person types).
+const BranchMax = 255
+
+// ValidBranch reports whether s is a name Git accepts for a branch
+// (git check-ref-format --branch), with a length limit: no "..", "//",
+// "@{", no part that starts with "." or ends with ".lock", no leading
+// "-" or "/", no trailing "/" or ".", not "@" or "HEAD", no spaces, control
+// characters or any of ~^:?*[\.
+func ValidBranch(s string) bool {
+	if s == "" || len(s) > BranchMax || !utf8.ValidString(s) || s == "@" || s == "HEAD" || strings.HasPrefix(s, "-") ||
+		strings.HasPrefix(s, "/") || strings.HasSuffix(s, "/") || strings.HasSuffix(s, ".") ||
 		strings.Contains(s, "..") || strings.Contains(s, "//") || strings.Contains(s, "@{") {
 		return false
 	}
+	for _, part := range strings.Split(s, "/") {
+		if strings.HasPrefix(part, ".") || strings.HasSuffix(part, ".lock") {
+			return false
+		}
+	}
 	return !strings.ContainsFunc(s, func(r rune) bool {
-		return unicode.IsControl(r) || unicode.IsSpace(r) || strings.ContainsRune(`~^:?*[\`, r)
+		return unicode.IsControl(r) || unicode.IsSpace(r) || !unicode.IsPrint(r) || strings.ContainsRune(`~^:?*[\`, r)
 	})
 }
 

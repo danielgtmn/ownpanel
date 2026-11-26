@@ -113,7 +113,7 @@ func (c *Client) repository(w wireRepository) (Repository, error) {
 		w.FullName != w.Owner.Login+"/"+w.Name {
 		return Repository{}, badAnswer("a repository has an invalid name")
 	}
-	if !validBranch(w.DefaultBranch) {
+	if !ValidBranch(w.DefaultBranch) {
 		return Repository{}, badAnswer("the repository %s has an invalid default branch", w.FullName)
 	}
 	if !c.webURLOn(w.HTMLURL) {
