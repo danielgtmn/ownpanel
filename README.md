@@ -291,6 +291,12 @@ build of `main` made after every merged pull request instead of the stable
 releases, which come from the `release` branch. Releases are built by the
 Publish workflow (`.github/workflows/release.yml`) with `scripts/package.sh`.
 
+On Debian 12+ and Ubuntu 24.04+ the installer also sets up the isolated
+environment for building sites on the server (rootless Podman under a user of
+its own, a reserved build disk with quotas, a packet filter that keeps builds
+away from the server); `--no-builds` leaves it out. See
+[Security](https://github.com/danielgtmn/ownpanel/wiki/Security#builds).
+
 The update that moves the panel's data to ablage converts `ownpanel.db` once
 at start and keeps the database as it was in
 `ownpanel.db.pre-ablage-<UTC time>`; older versions cannot read the converted

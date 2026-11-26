@@ -329,3 +329,14 @@
   margin: 0;
   font-size: 0.875rem;
 }
+
+.build-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.build-status p {
+  margin: 0;
+}
