@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"strconv"
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -60,7 +59,7 @@ func runOutput(r panel.Run) runInfo {
 		return t.UTC().Format(time.RFC3339)
 	}
 	return runInfo{
-		ID: strconv.FormatInt(r.ID, 10), Trigger: r.Trigger, Status: r.Status, Repository: r.Repository, Branch: r.Branch, Commit: r.Commit,
+		ID: r.ID, Trigger: r.Trigger, Status: r.Status, Repository: r.Repository, Branch: r.Branch, Commit: r.Commit,
 		Message: r.Message, AuthorName: r.AuthorName, AuthorLogin: r.AuthorLogin, Pusher: r.Pusher, Detail: r.Detail,
 		Waiting: r.Waiting, CreatedAt: stamp(&r.CreatedAt), StartedAt: stamp(r.StartedAt), FinishedAt: stamp(r.FinishedAt),
 	}

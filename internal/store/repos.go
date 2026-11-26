@@ -292,6 +292,63 @@ type siteSourceRow struct {
 	UpdatedAt      time.Time
 }
 
+// siteRunRow is one run of a site: one entry per push (later also "Build
+// now") that should build and publish it. A run is only recorded here;
+// building it is #113, which takes queued runs and reports their end
+// (internal/panel/runs.go). The panel keeps the last runs of each site and
+// removes older ones. The id is ablage's (ascending in the order the runs
+// were recorded, so "newest first" is by id).
+//
+// Status is queued, running, succeeded, failed, cancelled or skipped;
+// CommitSHA is 40 hex digits; both are checked in Go (runs.go). SourceKind,
+// RepositoryID (GitHub's id, external data) and Repository are the source
+// as it was when the run was recorded. Everything about the commit comes
+// from GitHub's signed delivery and is text for display only: Message
+// (first line), AuthorName, AuthorLogin and Pusher are shortened and never
+// interpreted. Detail says why a run was skipped, failed or cancelled.
+type siteRunRow struct {
+	ID           string
+	SiteName     string `db:",ref=sites,cascade"`
+	Trigger      string
+	Status       string
+	SourceKind   string
+	RepositoryID int64
+	Repository   string
+	Ref          string
+	CommitSHA    string
+	Message      string
+	AuthorName   string
+	AuthorLogin  string
+	Pusher       string
+	Detail       string
+	CreatedAt    time.Time
+	StartedAt    *time.Time
+	FinishedAt   *time.Time
+}
+
+// githubDeliveryRow is a GitHub delivery already handled, so one that
+// arrives again is ignored. The id is GitHub's X-GitHub-Delivery (the
+// natural key: it is what a repeat is recognised by). Kept for a bounded
+// time; AppID is the panel's id of the App that signed it.
+type githubDeliveryRow struct {
+	ID         string
+	AppID      string    `db:",ref=github_apps,cascade,index"`
+	ReceivedAt time.Time `db:",index"`
+}
+
+// githubRepositoryGoneRow is a repository GitHub reported as no longer
+// seen by an installation (taken away from it, or deleted). The id is
+// "<installation>/<repository>" with GitHub's ids. Removed when GitHub
+// shows the repository again or a site is linked to it anew, and with the
+// installation (InstallationID references its row, whose id is GitHub's
+// installation id).
+type githubRepositoryGoneRow struct {
+	ID             string
+	InstallationID string `db:",ref=github_installations,cascade,index"`
+	RepositoryID   int64
+	Since          time.Time
+}
+
 // formatRow marks the storage format: a row with id formatAblage means the
 // database is kept by ablage (legacy.go).
 type formatRow struct {
@@ -324,6 +381,9 @@ type repos struct {
 	githubApps   *ablage.Repository[githubAppRow]
 	githubInsts  *ablage.Repository[githubInstallationRow]
 	sources      *ablage.Repository[siteSourceRow]
+	runs         *ablage.Repository[siteRunRow]
+	deliveries   *ablage.Repository[githubDeliveryRow]
+	reposGone    *ablage.Repository[githubRepositoryGoneRow]
 	format       *ablage.Repository[formatRow]
 }
 
@@ -381,6 +441,13 @@ func newRepos(st ablage.Store) (repos, error) {
 	add(err)
 	r.sources, err = ablage.NewRepository[siteSourceRow](st, "site_sources")
 	add(err)
+	r.runs, err = ablage.NewRepository[siteRunRow](st, "site_runs", ablage.WithIndex("site_name", "status"),
+		ablage.WithIndex("status", "site_name"))
+	add(err)
+	r.deliveries, err = ablage.NewRepository[githubDeliveryRow](st, "github_deliveries")
+	add(err)
+	r.reposGone, err = ablage.NewRepository[githubRepositoryGoneRow](st, "github_repositories_gone")
+	add(err)
 	r.format, err = ablage.NewRepository[formatRow](st, "store_format")
 	add(err)
 	return r, errors.Join(errs...)
@@ -412,6 +479,9 @@ func (r repos) with(tx ablage.Store) repos {
 		githubApps:   r.githubApps.With(tx),
 		githubInsts:  r.githubInsts.With(tx),
 		sources:      r.sources.With(tx),
+		runs:         r.runs.With(tx),
+		deliveries:   r.deliveries.With(tx),
+		reposGone:    r.reposGone.With(tx),
 		format:       r.format.With(tx),
 	}
 }

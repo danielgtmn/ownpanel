@@ -123,7 +123,7 @@ func (b *rateBucket) take(now time.Time, rate, burst float64) bool {
 type githubHooks struct {
 	mu        sync.Mutex
 	all       rateBucket
-	apps      map[int64]*rateBucket
+	apps      map[string]*rateBucket
 	lastPrune time.Time
 }
 
@@ -142,12 +142,12 @@ func (s *Service) AllowGitHubDelivery() bool {
 	return h.all.take(s.now(), githubHookAllRate, githubHookAllBurst)
 }
 
-func (s *Service) allowGitHubApp(id int64) bool {
+func (s *Service) allowGitHubApp(id string) bool {
 	h := &s.githubHooks
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.apps == nil || len(h.apps) > githubHookMaxBucket {
-		h.apps = map[int64]*rateBucket{}
+		h.apps = map[string]*rateBucket{}
 	}
 	b := h.apps[id]
 	if b == nil {
