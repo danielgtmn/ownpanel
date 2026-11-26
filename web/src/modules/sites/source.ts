@@ -46,6 +46,8 @@ export type Run = {
   created_at: string
   started_at?: string
   finished_at?: string
+  /** The version a succeeded run published. */
+  release?: string
 }
 
 export type SiteSourceState = {
@@ -140,7 +142,7 @@ export function runStatus(run: Run): { label: string; tone: 'positive' | 'neutra
     case 'cancelled':
       return { label: 'Cancelled', tone: 'neutral' }
     case 'skipped':
-      return { label: 'Replaced by a newer push', tone: 'neutral' }
+      return { label: 'Replaced by a newer build', tone: 'neutral' }
   }
 }
 
