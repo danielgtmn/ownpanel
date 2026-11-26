@@ -143,6 +143,7 @@ Domains whose DNS is managed elsewhere: kept in your panel as domains of their o
 | Method | Path | Who | Request | Response |
 |---|---|---|---|---|
 | `GET` | `/api/server` | anyone | | `{"ips": [..]}`: the addresses given with `-server-ip` |
+| `GET` | `/api/builds/status` | admins (signed in, or an unrestricted token) | | `{"available", "reason", "detail", "slots", "running", "waiting", "max_memory_bytes", "max_cpu_millis", "max_seconds", "workspace_bytes", "cache_bytes", "disk_bytes", "free_bytes", "images": [..]}`: whether this server can build sites. Without `available`, `reason` is one of `off`, `system`, `runtime`, `install`, `limits`, `disk`, `network`, `images`, `preparing`, `worker`, `not_configured`, and `detail` the technical cause ([[Installation\|Installation#building-sites]]) |
 | `GET` | `/api/dns/connections` | anyone, not site-limited | | list of DNS connection (yours; admins see all) |
 | `POST` | `/api/dns/connections` | password sign-in or unrestricted write | `{"provider": "hetzner", "name", "token"}` | `201` DNS connection |
 | `POST` | `/api/dns/connections/{id}/check` | password sign-in or unrestricted write, your own | | DNS connection; the outcome is in `last_error` |

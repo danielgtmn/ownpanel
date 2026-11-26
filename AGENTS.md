@@ -26,10 +26,11 @@ internal/caddy/       builds the full Caddy config and loads it
 internal/deploy/      releases of a site (unpack, versions, make live)
 internal/dns/         provider-neutral DNS + hetzner/ (Cloud API only)
 internal/backup/      the backup command
+internal/build/       builds of sites: shared types, the panel's client; worker/ is the build service
 internal/webui/       serves the embedded web app
 internal/timeouts/    time limits of the HTTP server (Caddy has its own in caddy/)
 web/                  React app (see web/AGENTS.md)
-deploy/               systemd units, Caddy bootstrap, the root update worker
+deploy/               systemd units, Caddy bootstrap, the root update worker, the root setup of builds
 install.sh update.sh  install, upgrade, update and uninstall on a server
 scripts/              dev.sh, smoke.sh, package.sh, commit-type.sh
 actions/publish/      GitHub Action that publishes a folder to a site (bash, tar, curl, jq)
@@ -78,7 +79,9 @@ Node comes from nvm on the maintainer's machine: load it first
 
 Live tests run only with a build tag and credentials, e.g.
 `HETZNER_TOKEN=… HETZNER_TEST_ZONE=… go test -tags live ./internal/dns/hetzner`
-and `go test -tags caddy ./internal/caddy` (needs `bin/caddy`).
+and `go test -tags caddy ./internal/caddy` (needs `bin/caddy`). The build
+isolation tests need a server with builds set up: `go test -c -tags podman
+./internal/build`, run as root there (see `wiki/Development.md`).
 
 ## Done means tested
 

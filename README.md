@@ -291,6 +291,12 @@ build of `main` made after every merged pull request instead of the stable
 releases, which come from the `release` branch. Releases are built by the
 Publish workflow (`.github/workflows/release.yml`) with `scripts/package.sh`.
 
+On Debian 12+ and Ubuntu 24.04+ the installer also sets up the isolated
+environment for building sites on the server (rootless Podman under a user of
+its own, a reserved build disk with quotas, a packet filter that keeps builds
+away from the server); `--no-builds` leaves it out. See
+[Security](https://github.com/danielgtmn/ownpanel/wiki/Security#builds).
+
 Manual install: download `ownpanel_<version>_linux_<arch>.tar.gz` and
 `checksums.txt` from the releases, check and unpack the archive and run
 `sudo ./install.sh --from-dir .` inside it. `make package` builds the same

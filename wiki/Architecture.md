@@ -8,6 +8,7 @@
 | **ownpaneld** | The panel daemon (Go). Keeps the panel's data in SQLite, builds a complete Caddy config from it and loads it through Caddy's admin API. Serves the API, MCP and the web interface. |
 | **SQLite** | `ownpanel.db` in the data directory: users, sessions, access tokens, sites and domains, DNS connections, activity log. Sign-in accounts, password hashes, sessions, attempt counts and reset links live in the `auth_*` tables of the same file, managed by the [sesam](https://github.com/danielgtmn/sesam) library; `users.auth_user_id` links a panel user (id and role) to its sign-in account. Stored secrets (DNS tokens, DKIM keys) are encrypted with the [panzerschrank](https://github.com/danielgtmn/panzerschrank) library and the key in `secret.key` next to the database. |
 | **ownpanel-mail** | The mail server (`ownpaneld mail`), its own service and user. Receives, stores and sends mail; ownpaneld pushes its full configuration over a local socket, like Caddy's. See [[E-Mail architecture|E-Mail-Architecture]]. |
+| **ownpanel-build** | The build service (`ownpaneld build-worker`), its own service and user. Runs each build of a site in a rootless Podman container with limits; the panel talks to it over a local socket and only through a narrow interface. Root's part (the build disk and the packet filter for builds) is `ownpanel-build-setup.service`. See [[Security|Security#builds]]. |
 | **Web app** | React app built with Vite into `internal/webui/dist`. Embedded into the binary with the `webui` build tag (`make build`, `make build-linux`). A plain `go build` leaves it out and serves only the API. |
 
 Site files are not served by ownpaneld: Caddy reads them from the data directory.
@@ -51,7 +52,7 @@ If a change is saved but the sync fails, the API answers `502` with "saved, but 
 
 | Package | Responsibility |
 |---|---|
-| `cmd/ownpaneld` | Entry point: the `serve` and `backup` commands, flags, wiring, routing of `/api/`, `/mcp` and the web app |
+| `cmd/ownpaneld` | Entry point: the `serve`, `backup`, `mail` and `build-worker` commands, flags, wiring, routing of `/api/`, `/mcp` and the web app |
 | `internal/panel` | All operations and **all permission checks**; actors, tokens, sign-in (through sesam's Go API), password reset by e-mail, upload links, DNS rules. Every front door calls this |
 | `internal/store` | SQLite database, migrations (`internal/store/migrations`), validation of names and domains |
 | `internal/caddy` | Caddy config builder and admin API client |
@@ -60,6 +61,8 @@ If a change is saved but the sync fails, the API answers `502` with "saved, but 
 | `internal/api` | HTTP API: authentication, then a thin adapter over `internal/panel` |
 | `internal/mcp` | MCP server at `/mcp`: the same operations as tools |
 | `internal/backup` | Backup archives |
+| `internal/build` | What the panel and the build service share (requests, limits, the list of build images) and the panel's client of the build service's socket |
+| `internal/build/worker` | The build service: queue and slots, the socket, running a build with Podman, the build disk and its quotas, unpacking sources and packing outputs |
 | `internal/webui` | Serves the web app (embedded with `-tags webui`) |
 
 New API routes: add a file with a method that registers them and list it in `routeGroups` in `internal/api/api.go`.
