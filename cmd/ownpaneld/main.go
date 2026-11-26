@@ -29,6 +29,7 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/caddy"
 	"github.com/danielgtmn/ownpanel/internal/deploy"
 	"github.com/danielgtmn/ownpanel/internal/github"
+	"github.com/danielgtmn/ownpanel/internal/gitsource"
 	mailconfig "github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/mcp"
 	"github.com/danielgtmn/ownpanel/internal/panel"
@@ -135,6 +136,7 @@ func serve(args []string) error {
 		mailHost    = fs.String("mail-host", "", "name of the mail server, e.g. mail.example.com (optional; overrides the panel settings)")
 		mailWeb     = fs.String("mail-web", "", "web socket of the mail service as unix:///absolute/path.sock (optional; without it mailbox users have no sign-in page on the mail server's name)")
 		githubURL   = fs.String("github-url", github.DefaultURL, "address of GitHub for connecting repositories (change it only for testing; http only on a loopback address)")
+		gitPrivate  = fs.Bool("git-private-hosts", false, "let repository addresses point at loopback and private networks (only for testing, with -tls internal or off: it lets anyone who may link a site reach the server's own network)")
 	)
 	var serverIPFlags listFlag
 	fs.Var(&serverIPFlags, "server-ip", "public IPv4/IPv6 address of this server that domains should point at (repeatable or comma-separated; overrides the panel settings)")
@@ -194,6 +196,14 @@ func serve(args []string) error {
 		if _, err := store.NormalizeDomain(*mailHost); err != nil {
 			return fmt.Errorf("-mail-host: %w", err)
 		}
+	}
+
+	if *gitPrivate {
+		if *tlsMode != caddy.TLSInternal && *tlsMode != caddy.TLSOff {
+			return errors.New("-git-private-hosts is only for testing, with -tls internal or off")
+		}
+		slog.Warn("repository addresses may point at loopback and private networks (-git-private-hosts): never on a real server")
+		gitsource.AllowPrivateHosts()
 	}
 
 	githubClient, err := github.New(*githubURL)

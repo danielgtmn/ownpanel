@@ -1,6 +1,14 @@
 import { request } from '../../shared/api/index.ts'
 
-export type SourceStatus = 'linked' | 'connection_missing' | 'suspended' | 'repository_missing' | 'unchecked'
+export type SourceStatus =
+  | 'linked'
+  | 'connection_missing'
+  | 'suspended'
+  | 'repository_missing'
+  | 'unchecked'
+  | 'not_checked'
+  | 'host_key_changed'
+  | 'access_failed'
 
 export type SiteSource = {
   kind: 'github' | 'git'
@@ -15,6 +23,19 @@ export type SiteSource = {
   problem?: string
   linked_by: string
   linked_at: string
+  /** Kind git: the server (with its port if not the default) and how it is reached. */
+  server?: string
+  transport?: 'ssh' | 'https'
+  /** The public half of the site's deploy key, to add at the Git host (SSH only). */
+  deploy_key?: string
+  /** Fingerprint of the confirmed server key, its type, and a different one the server shows now. */
+  host_key?: string
+  host_key_type?: string
+  new_host_key?: string
+  /** Where the Git host reports pushes; empty while the panel has no domain with HTTPS. */
+  notify_url?: string
+  notify_problem?: string
+  checked_at?: string
 }
 
 export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'skipped'
@@ -53,6 +74,36 @@ export type SiteSourceState = {
   publishing_available: boolean
   /** The newest run, null if there is none. */
   last_run: Run | null
+  /** The secret of the notification address, only in the answer that made it. */
+  notify_secret?: string
+}
+
+export type GitRepositoryCheck = {
+  repository: string
+  server: string
+  transport: 'ssh' | 'https'
+  host_key?: string
+  host_key_type?: string
+  /** The site already trusts this key of this server. */
+  pinned?: boolean
+  branches?: string[]
+  default_branch?: string
+  truncated?: boolean
+}
+
+export type GitSourceInput = {
+  repository: string
+  branch: string
+  publish_on_push: boolean
+  host_key?: string
+}
+
+export type GitSourceCheck = SiteSourceState & {
+  ok: boolean
+  branches: string[]
+  default_branch?: string
+  truncated?: boolean
+  branch_found: boolean
 }
 
 export type LinkableRepository = {
@@ -93,6 +144,25 @@ export const setSiteSource = (site: string, input: SourceInput) =>
 
 export const removeSiteSource = (site: string) => request<void>(sourcePath(site), { method: 'DELETE' })
 
+const gitPath = (site: string) => `${sourcePath(site)}/git`
+
+export const inspectGitRepository = (site: string, repository: string) =>
+  request<GitRepositoryCheck>(`${gitPath(site)}/inspect`, { method: 'POST', body: { repository } })
+
+export const setGitSource = (site: string, input: GitSourceInput) =>
+  request<SiteSourceState>(gitPath(site), { method: 'PUT', body: input })
+
+export const checkGitSource = (site: string) => request<GitSourceCheck>(`${gitPath(site)}/check`, { method: 'POST' })
+
+export const acceptGitHostKey = (site: string, hostKey: string) =>
+  request<SiteSourceState>(`${gitPath(site)}/host-key`, { method: 'POST', body: { host_key: hostKey } })
+
+export const replaceDeployKey = (site: string) =>
+  request<SiteSourceState>(`${gitPath(site)}/deploy-key`, { method: 'POST' })
+
+export const replaceNotifySecret = (site: string) =>
+  request<SiteSourceState>(`${gitPath(site)}/notify-secret`, { method: 'POST' })
+
 export const listLinkableRepositories = (site: string) =>
   request<LinkableRepositories>(`${sourcePath(site)}/repositories`)
 
@@ -121,6 +191,41 @@ export function sourceProblem(source: SiteSource): string | null {
       return 'The panel can no longer see this repository. Allow it again on GitHub, or link another one.'
     case 'unchecked':
       return source.problem ? `Couldn't check the repository: ${source.problem}` : "Couldn't check the repository right now."
+    case 'not_checked':
+      return source.transport === 'ssh'
+        ? 'Add the deploy key below to the repository at your Git host, then check access.'
+        : 'The panel hasn’t reached the repository yet. Check access to make sure it can.'
+    case 'host_key_changed':
+      return `${source.server ?? 'The server'} now shows a different server key. Nothing is fetched until you check the new key with your Git host and accept it.`
+    case 'access_failed':
+      return source.problem ? `Couldn't reach the repository: ${source.problem}` : "Couldn't reach the repository."
+  }
+}
+
+/** Where to add the deploy key and the notification address, for the Git hosts people use most. */
+export function gitHostSteps(server?: string): { key: string; notify: string } {
+  const host = (server ?? '').toLowerCase()
+  if (host === 'github.com' || host.endsWith('.github.com')) {
+    return {
+      key: 'On GitHub: the repository’s Settings → Deploy keys → Add deploy key. Leave “Allow write access” off.',
+      notify: 'Settings → Webhooks → Add webhook: paste the address, choose “application/json” and enter the secret.',
+    }
+  }
+  if (host === 'gitlab.com' || host.includes('gitlab')) {
+    return {
+      key: 'On GitLab: the project’s Settings → Repository → Deploy keys. Leave “Grant write permissions” off.',
+      notify: 'Settings → Webhooks: paste the address, enter the secret as “Secret token” and choose “Push events”.',
+    }
+  }
+  if (host === 'bitbucket.org' || host.includes('bitbucket')) {
+    return {
+      key: 'On Bitbucket: Repository settings → Access keys → Add key.',
+      notify: 'Repository settings → Webhooks → Add webhook: paste the address, enter the secret and choose “Repository push”.',
+    }
+  }
+  return {
+    key: 'At your Git host (Codeberg, Forgejo, Gitea and most others): the repository’s Settings → Deploy keys. Read access is enough.',
+    notify: 'Settings → Webhooks → add one: paste the address, choose the content type “application/json”, enter the secret and choose push events.',
   }
 }
 
