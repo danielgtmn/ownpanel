@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Installs ownpanel (ownpaneld, its mail service and Caddy as systemd services) on Debian 12+ or
-# Ubuntu 22.04+ (amd64, arm64). Run it again to upgrade in place.
+# Ubuntu 22.04+ (amd64, arm64), and the isolated build environment for sites (rootless
+# Podman, Debian 12+ and Ubuntu 24.04+; see setup_builds). Run it again to upgrade in place.
 #
 #   curl -fsSL https://raw.githubusercontent.com/danielgtmn/ownpanel/main/install.sh | sudo bash
 #   curl -fsSL https://raw.githubusercontent.com/danielgtmn/ownpanel/main/install.sh \
@@ -56,13 +57,28 @@ MAIL_ADMIN_ARG="-mail-admin unix:///run/ownpanel-mail/admin.sock"
 # pages to (see ownpanel-mail.service).
 MAIL_WEB_ARG="-mail-web unix:///run/ownpanel-mail-web/web.sock"
 MAIL_WEB_GROUP=ownpanel-mail-web
-DEFAULT_ARGS="-tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock $MAIL_ADMIN_ARG $MAIL_WEB_ARG"
+BUILD_WORKER_ARG="-build-worker unix:///run/ownpanel-build/worker.sock"
+DEFAULT_ARGS="-tls acme -caddy-admin unix:///run/ownpanel/caddy-admin.sock $MAIL_ADMIN_ARG $MAIL_WEB_ARG $BUILD_WORKER_ARG"
+# Builds (see setup_builds). The build user's directory (root, 0755) holds
+# its home and the build disk; the settings and install.sh's record of what
+# it set up are in $ETC.
+BUILD_USER=ownpanel-build
+BUILD_BASE=/var/lib/ownpanel-build
+BUILD_HOME=$BUILD_BASE/home
+BUILD_ENV=$ETC/build.env
+BUILD_STATE=$ETC/builds
+BUILD_UNITS=(ownpanel-build-setup.service ownpanel-build.service)
+NFT_DROPIN_DIR=$UNITS/nftables.service.d
+NFT_DROPIN=$NFT_DROPIN_DIR/ownpanel-build.conf
+BUILD_PACKAGES=(podman uidmap slirp4netns nftables quota e2fsprogs util-linux)
 SERVICES=(ownpanel-caddy ownpanel-mail ownpaneld)
 UPDATE_UNITS=(ownpanel-update.service ownpanel-update.path ownpanel-update.timer)
 # Files of a release, relative to its directory.
 RELEASE_FILES=(ownpaneld caddy VERSION install.sh update.sh
   deploy/ownpaneld.service deploy/ownpanel-caddy.service deploy/ownpanel-mail.service deploy/caddy-bootstrap.json
-  deploy/ownpanel-update deploy/ownpanel-update.service deploy/ownpanel-update.path deploy/ownpanel-update.timer)
+  deploy/ownpanel-update deploy/ownpanel-update.service deploy/ownpanel-update.path deploy/ownpanel-update.timer
+  deploy/ownpanel-build-setup deploy/ownpanel-build-setup.service deploy/ownpanel-build.service
+  deploy/nftables-ownpanel-build.conf)
 
 usage() {
   cat <<'EOF'
@@ -80,11 +96,16 @@ Options:
                             These three are optional: without them, set them in the
                             panel's first-run setup in the browser.
   --from-dir DIR            install from an unpacked release directory instead of downloading
+  --no-builds               do not set up building sites on this server (kept on upgrades)
+  --builds                  set it up again after --no-builds
+  --build-disk SIZE         space reserved for builds, e.g. 20G (default: 15% of the disk,
+                            8G to 32G)
   -y, --yes                 do not ask for confirmation (only --purge asks)
   --uninstall               stop and remove services and binaries; keeps data and settings
   --purge                   with --uninstall: also delete /var/lib/ownpanel, /var/lib/ownpanel-mail
                             (all stored mail), /etc/ownpanel, the users ownpanel,
-                            ownpanel-mail and caddy and the group ownpanel-mail-web
+                            ownpanel-mail, ownpanel-build and caddy and the group
+                            ownpanel-mail-web
   -h, --help                show this help
 
 Options given on an upgrade replace the stored ones; everything else in
@@ -107,6 +128,8 @@ opt_from_dir=""
 opt_yes=0
 opt_uninstall=0
 opt_purge=0
+opt_builds=""
+opt_build_disk=""
 
 parse_args() {
   while [ $# -gt 0 ]; do
@@ -117,7 +140,10 @@ parse_args() {
       --server-ip) need_value "$@"; opt_server_ips+=("$2"); shift ;;
       --acme-email) need_value "$@"; opt_acme_email=$2; shift ;;
       --from-dir) need_value "$@"; opt_from_dir=$2; shift ;;
-      --channel=* | --version=* | --panel-domain=* | --server-ip=* | --acme-email=* | --from-dir=*)
+      --build-disk) need_value "$@"; opt_build_disk=$2; shift ;;
+      --no-builds) opt_builds=off ;;
+      --builds) opt_builds=on ;;
+      --channel=* | --version=* | --panel-domain=* | --server-ip=* | --acme-email=* | --from-dir=* | --build-disk=*)
         set -- "${1%%=*}" "${1#*=}" "${@:2}"
         continue ;;
       -y | --yes) opt_yes=1 ;;
@@ -146,6 +172,9 @@ parse_args() {
     die "--acme-email '$opt_acme_email' is not an e-mail address"
   fi
   [ "$opt_purge" = 0 ] || [ "$opt_uninstall" = 1 ] || die "--purge only works together with --uninstall"
+  if [ -n "$opt_build_disk" ]; then
+    [[ $opt_build_disk =~ ^[0-9]{1,5}[GT]$ ]] || die "--build-disk '$opt_build_disk' is not a size like 20G"
+  fi
   return 0
 }
 
@@ -563,6 +592,11 @@ choose_settings() {
   if [ -z "$(flag_values "$new_args" mail-web)" ]; then
     new_args="$new_args $MAIL_WEB_ARG"
   fi
+  # Nor those from before builds the build service's; the panel asks it
+  # whether this server can build (and says why not when it does not answer).
+  if [ -z "$(flag_values "$new_args" build-worker)" ]; then
+    new_args="$new_args $BUILD_WORKER_ARG"
+  fi
   if [ ${#ips[@]} -gt 0 ]; then
     new_args="$(without_flag "$new_args" server-ip) -server-ip $(IFS=,; echo "${ips[*]}")"
   fi
@@ -638,6 +672,22 @@ plan_changes() {
     done
     cmp -s "$src/deploy/caddy-bootstrap.json" "$ETC/caddy-bootstrap.json" || changes+=("Caddy bootstrap file updated")
     [ "$old_args" != "$new_args" ] && changes+=("settings: OWNPANELD_ARGS=$old_args" "       -> OWNPANELD_ARGS=$new_args")
+    for f in "${BUILD_UNITS[@]}"; do
+      [ -f "$UNITS/$f" ] && ! cmp -s "$src/deploy/$f" "$UNITS/$f" && changes+=("unit file $f updated")
+    done
+  fi
+  if [ "$builds_ok" = 1 ]; then
+    if [ ! -f "$UNITS/ownpanel-build.service" ]; then
+      changes+=("set up building sites on this server (installs podman and reserves disk space)")
+    elif ! grep -q '^state=ready$' "$BUILD_STATE" 2>/dev/null; then
+      changes+=("building sites on this server: set up again")
+    elif [ -n "$opt_build_disk" ]; then
+      changes+=("disk space for builds: $opt_build_disk")
+    fi
+  elif [ "$builds_reason" = off ]; then
+    [ -f "$UNITS/ownpanel-build.service" ] && changes+=("building sites on this server: turned off")
+  else
+    changes+=("building sites on this server: not possible here ($builds_detail)")
   fi
   return 0
 }
@@ -660,6 +710,14 @@ install_files() {
   # through the group ownpanel-mail-web.
   getent group "$MAIL_WEB_GROUP" >/dev/null || groupadd --system "$MAIL_WEB_GROUP"
   usermod -a -G "$MAIL_WEB_GROUP" caddy
+  # Builds run as their own user; ownpaneld reaches the build service's
+  # socket through the group ownpanel-build (see ownpanel-build.service).
+  # Made here, before ownpaneld starts, so the membership applies to it.
+  if [ "$builds_ok" = 1 ]; then
+    id -u "$BUILD_USER" >/dev/null 2>&1 ||
+      useradd --system --user-group --home-dir "$BUILD_HOME" --no-create-home --shell /usr/sbin/nologin "$BUILD_USER"
+    usermod -a -G "$BUILD_USER" ownpanel
+  fi
 
   [ "$installed" = 1 ] && systemctl stop ownpaneld ownpanel-mail ownpanel-caddy 2>/dev/null || true
 
@@ -866,6 +924,297 @@ print_result() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# Builds. Sites are built on the server by code nobody reviewed, so builds
+# run in a container per build (rootless Podman) as the user ownpanel-build,
+# never as the panel's user or root. Root's part is done here and by
+# ownpanel-build-setup.service (the build disk with its quotas and the
+# packet filter; see deploy/ownpanel-build-setup). A server that cannot run
+# builds still gets the panel: builds are then reported as unavailable, with
+# the reason in $BUILD_STATE, which the panel reads.
+
+# plan_builds decides whether builds are set up. Sets builds_ok (1 or 0) and,
+# when not, builds_reason (a code the panel knows) and builds_detail.
+plan_builds() {
+  builds_ok=0
+  builds_reason=""
+  builds_detail=""
+  local want=on id version major n
+  if [ -n "$opt_builds" ]; then
+    want=$opt_builds
+  elif [ -f "$BUILD_ENV" ] && grep -q '^OWNPANEL_BUILDS=off$' "$BUILD_ENV"; then
+    want=off
+  fi
+  if [ "$want" = off ]; then
+    builds_reason=off
+    builds_detail="turned off with install.sh --no-builds (install.sh --builds turns it on)"
+    return 0
+  fi
+  # shellcheck disable=SC1091
+  id=$(. /etc/os-release && echo "${ID:-}")
+  # shellcheck disable=SC1091
+  version=$(. /etc/os-release && echo "${VERSION_ID:-}")
+  major=${version%%.*}
+  # The Podman each release ships: Debian 12 4.3, Debian 13 5.4, Ubuntu
+  # 22.04 3.4 (too old), Ubuntu 24.04 4.9.
+  if [ "$id" = ubuntu ] && [ "$major" -lt 24 ]; then
+    builds_reason=system
+    builds_detail="Ubuntu $version ships Podman 3.4; builds need Podman 4.3 or newer (Ubuntu 24.04 or newer, or Debian 12 or newer)"
+    return 0
+  fi
+  if [ "$(stat -fc %T /sys/fs/cgroup 2>/dev/null)" != cgroup2fs ]; then
+    builds_reason=system
+    builds_detail="the system does not use control groups version 2, which build limits need"
+    return 0
+  fi
+  n=$(cat /proc/sys/user/max_user_namespaces 2>/dev/null || echo 0)
+  if ! [[ $n =~ ^[0-9]+$ ]] || [ "$n" -lt 1000 ] ||
+    [ "$(cat /proc/sys/kernel/unprivileged_userns_clone 2>/dev/null || echo 1)" != 1 ]; then
+    builds_reason=system
+    builds_detail="user namespaces are turned off in this kernel (user.max_user_namespaces / kernel.unprivileged_userns_clone)"
+    return 0
+  fi
+  if [ ! -e /dev/loop-control ] && ! modprobe loop 2>/dev/null; then
+    builds_reason=disk
+    builds_detail="loop devices are not available (is this server itself a container?)"
+    return 0
+  fi
+  builds_ok=1
+}
+
+# write_build_state <ready|unavailable> [reason] [detail]
+write_build_state() {
+  install -d -m 0755 "$ETC"
+  {
+    echo "# Written by install.sh: whether building sites was set up on this server."
+    echo "state=$1"
+    echo "reason=${2:-}"
+    echo "detail=$(printf '%s' "${3:-}" | tr -d '\n\r' | cut -c1-300)"
+  } >"$BUILD_STATE.new"
+  chmod 0644 "$BUILD_STATE.new"
+  mv -f "$BUILD_STATE.new" "$BUILD_STATE"
+}
+
+# builds_unavailable <reason> <detail>: the build service is stopped and the
+# reason recorded. Never stops the install.
+builds_unavailable() {
+  warn "building sites is not available on this server: $2"
+  if [ -f "$UNITS/ownpanel-build.service" ]; then
+    systemctl disable --now ownpanel-build.service 2>&1 | grep -v '^Removed' || true
+  fi
+  write_build_state unavailable "$1" "$2"
+}
+
+# run_apt <args>: apt-get outside of this process's sandbox. An update from
+# the panel runs this script inside ownpanel-update.service, whose hardening
+# (RestrictSUIDSGID, PrivateDevices, ...) would break installing packages
+# with set-user-ID programs (newuidmap); systemd-run starts apt-get as a unit
+# of its own. Questions are never asked.
+run_apt() {
+  local opts=(-o DPkg::Lock::Timeout=300 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
+  if command -v systemd-run >/dev/null && [ -d /run/systemd/system ]; then
+    systemd-run --quiet --wait --pipe --collect --service-type=exec -p TimeoutStartSec=1200 \
+      --setenv=DEBIAN_FRONTEND=noninteractive -- apt-get "${opts[@]}" "$@" </dev/null
+  else
+    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" "$@" </dev/null
+  fi
+}
+
+# install_build_packages: the distribution's packages builds need.
+install_build_packages() {
+  local missing=() p
+  for p in "${BUILD_PACKAGES[@]}"; do
+    dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q 'install ok installed' || missing+=("$p")
+  done
+  [ ${#missing[@]} -gt 0 ] || return 0
+  say "Installing ${missing[*]} from the distribution's packages"
+  if ! run_apt install -y -q --no-install-recommends "${missing[@]}" >/dev/null; then
+    run_apt update -q >/dev/null || return 1
+    run_apt install -y -q --no-install-recommends "${missing[@]}" >/dev/null || return 1
+  fi
+}
+
+# podman_version_ok: the installed Podman is 4.3 or newer.
+podman_version_ok() {
+  local v major minor
+  v=$(podman --version 2>/dev/null | awk '{print $NF}')
+  IFS=. read -r major minor _ <<<"$v"
+  podman_version=$v
+  [[ $major =~ ^[0-9]+$ && $minor =~ ^[0-9]+$ ]] || return 1
+  [ "$major" -gt 4 ] || { [ "$major" = 4 ] && [ "$minor" -ge 3 ]; }
+}
+
+# ensure_subids: a range of 65536 subordinate user and group ids for the
+# build user (the users inside its containers), after every range in use.
+ensure_subids() {
+  local start
+  if grep -q "^$BUILD_USER:" /etc/subuid 2>/dev/null && grep -q "^$BUILD_USER:" /etc/subgid 2>/dev/null; then
+    return 0
+  fi
+  touch /etc/subuid /etc/subgid
+  start=$(awk -F: '$2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { e = $2 + $3; if (e > m) m = e } END { print m + 0 }' /etc/subuid /etc/subgid)
+  [ "$start" -ge 524288 ] || start=524288
+  start=$(((start + 65535) / 65536 * 65536))
+  grep -q "^$BUILD_USER:" /etc/subuid || usermod --add-subuids "$start-$((start + 65535))" "$BUILD_USER"
+  grep -q "^$BUILD_USER:" /etc/subgid || usermod --add-subgids "$start-$((start + 65535))" "$BUILD_USER"
+}
+
+# build_defaults: the settings of a new build environment, from the disk and
+# memory of this server. Sets bd_* or returns 1 with builds_detail set.
+build_defaults() {
+  local total_kb avail_kb mem_kb disk_g max_g ws_g
+  total_kb=$(df -Pk "$BUILD_BASE" | awk 'NR == 2 { print $2 }')
+  avail_kb=$(df -Pk "$BUILD_BASE" | awk 'NR == 2 { print $4 }')
+  mem_kb=$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)
+  if [ -n "$opt_build_disk" ]; then
+    case $opt_build_disk in
+      *T) disk_g=$((${opt_build_disk%T} * 1024)) ;;
+      *) disk_g=${opt_build_disk%G} ;;
+    esac
+  else
+    disk_g=$((total_kb * 15 / 100 / 1024 / 1024))
+    [ "$disk_g" -ge 8 ] || disk_g=8
+    [ "$disk_g" -le 32 ] || disk_g=32
+  fi
+  # The rest of the disk stays for everything else, with 4 GB to spare.
+  max_g=$((avail_kb / 1024 / 1024 - 4))
+  if [ -z "$opt_build_disk" ] && [ "$disk_g" -gt "$max_g" ]; then disk_g=$max_g; fi
+  if [ "$disk_g" -lt 8 ] || [ "$disk_g" -gt "$max_g" ]; then
+    builds_detail="not enough free disk space: builds need ${disk_g} GB (at least 8 GB) and 4 GB more must stay free; $((avail_kb / 1024 / 1024)) GB are free"
+    return 1
+  fi
+  bd_slots=1
+  if [ "$mem_kb" -ge $((6 * 1024 * 1024)) ]; then bd_slots=2; fi
+  ws_g=4
+  # Images 3 GB, waiting sources 1 GB, results 1 GB, a cache 1 GB.
+  while [ $((bd_slots * ws_g + 6)) -gt "$disk_g" ]; do
+    if [ "$bd_slots" -gt 1 ]; then bd_slots=$((bd_slots - 1)); elif [ "$ws_g" -gt 2 ]; then ws_g=2; else break; fi
+  done
+  bd_disk=${disk_g}G
+  bd_workspace=${ws_g}G
+}
+
+build_env_content() {
+  cat <<EOF
+# Settings of the build environment; see the Configuration page of the
+# ownpanel wiki. install.sh keeps this file on upgrades. Apply a change with:
+#   systemctl restart ownpanel-build-setup ownpanel-build
+# Changing OWNPANEL_BUILD_DISK_SIZE makes a new build disk (the caches go).
+OWNPANEL_BUILDS=on
+OWNPANEL_BUILD_DISK_SIZE=$bd_disk
+OWNPANEL_BUILD_SLOTS=$bd_slots
+OWNPANEL_BUILD_WORKSPACE_SIZE=$bd_workspace
+OWNPANEL_BUILD_CACHE_SIZE=1G
+OWNPANEL_BUILD_CACHES=100
+OWNPANEL_BUILD_IMAGES_SIZE=3G
+OWNPANEL_BUILD_SOURCES_SIZE=1G
+OWNPANEL_BUILD_RESULTS_SIZE=1G
+EOF
+}
+
+# set_build_env_value <key> <value>: in $BUILD_ENV, replaced or added.
+set_build_env_value() {
+  if grep -q "^$1=" "$BUILD_ENV"; then
+    sed -i "s|^$1=.*|$1=$2|" "$BUILD_ENV"
+  else
+    printf '%s=%s\n' "$1" "$2" >>"$BUILD_ENV"
+  fi
+}
+
+# setup_builds: packages, user, settings, units; then the build disk and
+# the service start. Every failure ends in builds_unavailable, never in die.
+setup_builds() {
+  if [ "$builds_ok" != 1 ]; then
+    if [ "$builds_reason" = off ] && [ -f "$BUILD_ENV" ]; then
+      set_build_env_value OWNPANEL_BUILDS off
+    elif [ "$builds_reason" = off ]; then
+      install -d -m 0755 "$ETC"
+      printf '%s\n' "# Building sites is turned off (install.sh --builds turns it on)." "OWNPANEL_BUILDS=off" >"$BUILD_ENV"
+    fi
+    builds_unavailable "$builds_reason" "$builds_detail"
+    if [ -f "$UNITS/ownpanel-build-setup.service" ]; then
+      systemctl disable --now ownpanel-build-setup.service 2>&1 | grep -v '^Removed' || true
+    fi
+    return 0
+  fi
+  step "Setting up builds"
+  if ! install_build_packages; then
+    builds_unavailable install "the packages for builds (${BUILD_PACKAGES[*]}) could not be installed; see the output above"
+    return 0
+  fi
+  if ! podman_version_ok; then
+    builds_unavailable runtime "Podman ${podman_version:-is missing}; builds need 4.3 or newer"
+    return 0
+  fi
+  ensure_subids
+  install -d -m 0755 -o root -g root "$BUILD_BASE"
+  install -d -m 0700 -o "$BUILD_USER" -g "$BUILD_USER" "$BUILD_HOME"
+  if [ "$(getent passwd "$BUILD_USER" | cut -d: -f6)" != "$BUILD_HOME" ]; then
+    usermod -d "$BUILD_HOME" "$BUILD_USER"
+  fi
+  if [ ! -f "$BUILD_ENV" ] || ! grep -q '^OWNPANEL_BUILD_DISK_SIZE=' "$BUILD_ENV"; then
+    if ! build_defaults; then
+      builds_unavailable disk "$builds_detail"
+      return 0
+    fi
+    build_env_content >"$BUILD_ENV.new" && chmod 0644 "$BUILD_ENV.new" && mv -f "$BUILD_ENV.new" "$BUILD_ENV"
+  else
+    set_build_env_value OWNPANEL_BUILDS on
+    if [ -n "$opt_build_disk" ]; then set_build_env_value OWNPANEL_BUILD_DISK_SIZE "$opt_build_disk"; fi
+  fi
+
+  install -m 0755 "$src/deploy/ownpanel-build-setup" "$LIB/"
+  local u why
+  for u in "${BUILD_UNITS[@]}"; do
+    install -m 0644 "$src/deploy/$u" "$UNITS/"
+  done
+  install -d -m 0755 "$NFT_DROPIN_DIR"
+  install -m 0644 "$src/deploy/nftables-ownpanel-build.conf" "$NFT_DROPIN"
+  systemctl daemon-reload
+  systemctl enable "${BUILD_UNITS[@]}" 2>&1 | grep -v '^Created symlink' || true
+  # Restarting the setup stops the build service (it is bound to it); both
+  # start again with the new binary and settings.
+  if ! systemctl restart ownpanel-build-setup.service; then
+    why=$(journalctl --no-pager -o cat -u ownpanel-build-setup.service -n 20 2>/dev/null | grep 'ownpanel-build-setup:' | tail -n 1 | sed 's/^ownpanel-build-setup: //')
+    case $why in
+      *"free space"* | *"loop"* | *"build disk"* | *"fallocate"* | *DISK_SIZE*) builds_unavailable disk "${why:-the build disk could not be set up}" ;;
+      *"packet filter"* | *nft*) builds_unavailable network "${why:-the packet filter for builds could not be set up}" ;;
+      *) builds_unavailable install "${why:-ownpanel-build-setup failed (journalctl -u ownpanel-build-setup)}" ;;
+    esac
+    return 0
+  fi
+  if ! systemctl restart ownpanel-build.service; then
+    builds_unavailable install "the build service did not start (journalctl -u ownpanel-build)"
+    return 0
+  fi
+  write_build_state ready
+  say "Builds: up to $(sed -n 's/^OWNPANEL_BUILD_SLOTS=//p' "$BUILD_ENV") at a time, $(sed -n 's/^OWNPANEL_BUILD_DISK_SIZE=//p' "$BUILD_ENV") of disk reserved (Podman $podman_version)."
+  say "The build images are fetched in the background; the panel shows when builds are ready."
+}
+
+# remove_builds: the build services, their units and the build disk (it only
+# holds caches and images). The user and the settings go with --purge.
+remove_builds() {
+  local s
+  for s in ownpanel-build.service ownpanel-build-setup.service; do
+    if [ -f "$UNITS/$s" ]; then
+      systemctl disable --now "$s" 2>&1 | grep -v '^Removed' || true
+      rm -f -- "${UNITS:?}/${s:?}"
+      say "Removed $s"
+    fi
+  done
+  if [ -f "$NFT_DROPIN" ]; then
+    rm -f -- "${NFT_DROPIN:?}"
+    rmdir "$NFT_DROPIN_DIR" 2>/dev/null || true
+  fi
+  if command -v nft >/dev/null; then nft delete table inet ownpanel_build 2>/dev/null || true; fi
+  if mountpoint -q "$BUILD_BASE/work" 2>/dev/null; then umount "$BUILD_BASE/work" || umount -l "$BUILD_BASE/work" || true; fi
+  if [ -e "$BUILD_BASE/disk.img" ]; then
+    rm -f -- "${BUILD_BASE:?}/disk.img"
+    say "Removed the build disk $BUILD_BASE/disk.img (it only held build caches and images)"
+  fi
+}
+
 do_install() {
   check_system
   read_installed
@@ -878,11 +1227,15 @@ do_install() {
   trap 'rm -rf "$tmp"' EXIT
   get_release
   choose_settings
+  plan_builds
   plan_changes
 
   if [ "$installed" = 1 ] && [ "${#changes[@]}" -eq 0 ]; then
     step "ownpanel $new_version is already installed with these settings; nothing to change"
     systemctl enable --now "${SERVICES[@]}" 2>&1 | grep -v '^Created symlink' || true
+    if [ "$builds_ok" = 1 ] && [ -f "$UNITS/ownpanel-build.service" ]; then
+      systemctl start ownpanel-build-setup.service ownpanel-build.service 2>/dev/null || true
+    fi
     wait_ready
     print_result
     return 0
@@ -896,6 +1249,7 @@ do_install() {
   check_ports
 
   install_files
+  setup_builds
   open_firewall
   wait_ready
   print_result
@@ -921,6 +1275,7 @@ do_uninstall() {
       say "Removed $s"
     fi
   done
+  remove_builds
   for s in ownpaneld ownpanel-mail ownpanel-caddy; do
     if [ -f "$UNITS/$s.service" ]; then
       systemctl disable --now "$s" 2>&1 | grep -v '^Removed' || true
@@ -943,9 +1298,20 @@ do_uninstall() {
   if [ "$opt_purge" = 1 ]; then
     rm -rf "$DATA" "$MAIL_DATA" "$ETC" "$UPDATE_ROOT" "$CADDY_DATA"
     say "Deleted $DATA, $MAIL_DATA, $CADDY_DATA, $UPDATE_ROOT and $ETC"
+    if mountpoint -q "$BUILD_BASE/work" 2>/dev/null; then
+      warn "$BUILD_BASE/work is still mounted; $BUILD_BASE was kept"
+    elif [ -d "$BUILD_BASE" ]; then
+      rm -rf -- "${BUILD_BASE:?}" && say "Deleted $BUILD_BASE"
+    fi
     if id -u ownpanel >/dev/null 2>&1; then userdel ownpanel && say "Removed user ownpanel"; fi
     if id -u ownpanel-mail >/dev/null 2>&1; then userdel ownpanel-mail && say "Removed user ownpanel-mail"; fi
     if getent group "$MAIL_WEB_GROUP" >/dev/null; then groupdel "$MAIL_WEB_GROUP" && say "Removed group $MAIL_WEB_GROUP"; fi
+    if id -u "$BUILD_USER" >/dev/null 2>&1; then
+      pkill -KILL -u "$BUILD_USER" 2>/dev/null || true
+      userdel "$BUILD_USER" && say "Removed user $BUILD_USER"
+    fi
+    # userdel of older shadow versions leaves the subordinate ids.
+    sed -i "/^$BUILD_USER:/d" /etc/subuid /etc/subgid 2>/dev/null || true
     # The caddy user may belong to a Caddy package; only remove ours.
     case $(getent passwd caddy | cut -d: -f6) in
       "$DATA/caddy-home" | "$CADDY_DATA/home") userdel caddy && say "Removed user caddy" ;;
@@ -953,6 +1319,10 @@ do_uninstall() {
   else
     say "Kept your data in $DATA and $MAIL_DATA and the settings in $ETC."
     say "Installing again picks them up; --uninstall --purge deletes them."
+  fi
+  if command -v podman >/dev/null; then
+    say "Podman and the other packages installed for builds were kept; remove them with"
+    say "apt-get remove if nothing else uses them."
   fi
   say "Firewall rules and DNS records were not changed."
 }

@@ -1,14 +1,16 @@
 # Configuration
 
-ownpaneld has two commands:
+ownpaneld has these commands:
 
 ```
 ownpaneld [serve] [flags]                    run the daemon
 ownpaneld backup -data <dir> -out <file>     write a backup archive
+ownpaneld mail [flags]                       run the mail service
+ownpaneld build-worker [flags]               run the build service
 ownpaneld version                            print the version
 ```
 
-`serve` is the default: if the first argument starts with `-` (or there is none), the daemon runs. Any other unknown command is an error ("use serve, backup or version"). Flags use Go's syntax: `-name value` or `-name=value`.
+`serve` is the default: if the first argument starts with `-` (or there is none), the daemon runs. Any other unknown command is an error. Flags use Go's syntax: `-name value` or `-name=value`.
 
 On a server installed with `install.sh`, flags live in `/etc/ownpanel/ownpaneld.env` (see [[Installation|Installation]]).
 
@@ -28,6 +30,7 @@ On a server installed with `install.sh`, flags live in `/etc/ownpanel/ownpaneld.
 | `-panel-domain` | empty | Serve the panel itself through Caddy on this domain, with a certificate like any site. The domain cannot also be used by a site. Also makes `/mcp` reachable on that domain and builds upload links on it. Overrides the panel settings (see below). |
 | `-mail-admin` | empty | Admin socket of the mail service (`ownpaneld mail`) as `unix:///absolute/path.sock`; the installer passes `unix:///run/ownpanel-mail/admin.sock`. Empty: no mail service; mail domains and mailboxes are only stored. See [[E-Mail architecture|E-Mail-Architecture]]. |
 | `-mail-web` | empty | Web socket of the mail service (`ownpaneld mail -web`) as `unix:///absolute/path.sock`; the installer passes `unix:///run/ownpanel-mail-web/web.sock`. With it, and a mail server name different from the panel domain, Caddy serves the mail server name over HTTPS for mailbox users (their sign-in page). Empty: no such site. See [[Groupware architecture|Groupware-Architecture]]. |
+| `-build-worker` | empty | Socket of the build service (`ownpaneld build-worker`) as `unix:///absolute/path.sock`; the installer passes `unix:///run/ownpanel-build/worker.sock`. The panel asks it whether this server can build sites. Empty: builds are reported as not set up. |
 | `-mail-host` | empty | Name of the mail server (MX target, what mail programs connect to), e.g. `mail.example.com`. It cannot be a site, redirect or mail domain; it may be the panel domain. Overrides the panel settings (see below). |
 | `-reconcile-interval` | `30s` | How often the web server is re-synced in the background (a Go duration such as `30s` or `1m`). |
 | `-releases-api` | `https://api.github.com` | Where the panel looks for new releases ([[Installation|Installation#updating]]). Only change it for testing. |
@@ -89,6 +92,36 @@ The mail service ([[E-Mail|E-Mail]]). `install.sh` runs it as `ownpanel-mail.ser
 | `-managesieve` | `:4190` | Mail programs editing a mailbox's filters (ManageSieve, STARTTLS before sign-in); `""` turns it off. |
 | `-ipv6-outbound` | off | Also deliver outgoing mail over IPv6. Only turn it on when the server's IPv6 address has the mail server name as reverse name. |
 | `-allow-private-mx` | off | **For test setups only.** Also deliver outgoing mail to mail servers whose addresses are loopback, private (e.g. `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`), link-local or otherwise not public. Off, mail to a domain whose mail servers have only such addresses is returned to the sender, so nobody can make the server connect into its own network. |
+
+## Builds
+
+The build service ([[Security|Security#builds]], [[Installation|Installation#building-sites]]). `install.sh` writes its settings to `/etc/ownpanel/build.env` once and keeps them on upgrades. Sizes are numbers with `K`, `M`, `G` or `T` (powers of 1024). Apply a change with `systemctl restart ownpanel-build-setup ownpanel-build`.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `OWNPANEL_BUILDS` | `on` | `off` after `install.sh --no-builds`; the installer then leaves builds off. |
+| `OWNPANEL_BUILD_DISK_SIZE` | 15 % of the disk, 8G to 32G | Size of the build disk, reserved in full on the server's disk. Changing it makes a new, empty build disk (caches and images are fetched again). It must hold all slots, the images, sources, results and one cache. |
+| `OWNPANEL_BUILD_SLOTS` | `1`, or `2` with 6 GB of memory or more | How many builds run at once (1 to 16). Builds of one site never run at the same time. |
+| `OWNPANEL_BUILD_WORKSPACE_SIZE` | `4G` (`2G` on small disks) | Disk space of one build: its source tree and everything it writes. |
+| `OWNPANEL_BUILD_CACHE_SIZE` | `1G` | Disk space of one site's build cache (`/cache` in a build, where its home and the package managers' downloads are). |
+| `OWNPANEL_BUILD_CACHES` | `100` | How many sites keep a cache. When all are taken, or the build disk runs low, the cache used longest ago is deleted. |
+| `OWNPANEL_BUILD_IMAGES_SIZE` | `3G` | Disk space for the build images. |
+| `OWNPANEL_BUILD_SOURCES_SIZE` | `1G` | Disk space for the source trees of builds that wait for a slot. |
+| `OWNPANEL_BUILD_RESULTS_SIZE` | `1G` | Disk space for logs and outputs of finished builds until the panel fetched them. |
+
+The limits of one build (processor, memory, processes, time, log) are chosen per build by the panel, up to fixed maxima the service lowers to the server: 4 CPUs (at most the server's), 4 GB of memory (at most half the server's), 2048 processes, 1 hour, 4 MB of log. Without a choice a build gets 2 CPUs, 2 GB, 1024 processes, 15 minutes and 2 MB.
+
+### `ownpaneld build-worker`
+
+Run by `ownpanel-build.service` as `ownpanel-build`; it refuses to run as root. Its flags come from `build.env`:
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `-socket` | `/run/ownpanel-build/worker.sock` | Unix socket the panel uses (`-build-worker unix://…` of `serve`). |
+| `-work` | `/var/lib/ownpanel-build/work` | Mount point of the build disk. |
+| `-resolvers` | `/run/ownpanel-build-setup/resolvers` | Name servers for builds, written by `ownpanel-build-setup`. |
+| `-run-dir` | `/run/ownpanel-build/podman` | Podman's private runtime directory. |
+| `-slots`, `-workspace-size`, `-cache-size`, `-caches` | | As in `build.env`; they must match the quotas `ownpanel-build-setup` set, or builds are reported unavailable. |
 
 ## Version
 

@@ -194,7 +194,7 @@ release_moved() {
 # Files an update replaces and a rollback puts back.
 previous_files() {
   printf '%s\n' "$BIN/ownpaneld" "$BIN/caddy" "$UNITS/ownpaneld.service" "$UNITS/ownpanel-caddy.service" \
-    "$UNITS/ownpanel-mail.service" \
+    "$UNITS/ownpanel-mail.service" "$UNITS/ownpanel-build.service" "$UNITS/ownpanel-build-setup.service" \
     "$ETC/caddy-bootstrap.json" "$RELEASE_FILE" "$ENV_FILE"
 }
 
@@ -248,7 +248,7 @@ healthy() {
 rollback() {
   step "Rolling back to ownpanel $old_version"
   report running rolling_back "The new version did not start; going back to $old_version."
-  systemctl stop ownpaneld ownpanel-mail ownpanel-caddy 2>/dev/null || true
+  systemctl stop ownpaneld ownpanel-mail ownpanel-caddy ownpanel-build 2>/dev/null || true
   local f
   while IFS= read -r f; do
     if [ -f "$f.previous" ]; then
@@ -260,9 +260,15 @@ rollback() {
     systemctl disable ownpanel-mail 2>/dev/null || true
     rm -f "$UNITS/ownpanel-mail.service"
   fi
+  # Nor a version from before builds a build service.
+  if [ ! -f "$UNITS/ownpanel-build.service.previous" ] && [ -f "$UNITS/ownpanel-build.service" ]; then
+    systemctl disable --now ownpanel-build ownpanel-build-setup 2>/dev/null || true
+    rm -f -- "${UNITS:?}/ownpanel-build.service" "${UNITS:?}/ownpanel-build-setup.service" "${UNITS:?}/nftables.service.d/ownpanel-build.conf"
+  fi
   systemctl daemon-reload
   systemctl start ownpanel-caddy ownpaneld || true
   [ -f "$UNITS/ownpanel-mail.service" ] && { systemctl start ownpanel-mail || true; }
+  [ -f "$UNITS/ownpanel-build.service" ] && { systemctl start ownpanel-build-setup ownpanel-build || true; }
   if healthy "$old_version"; then
     say "ownpanel $old_version is running again."
     report rolled_back "" "The update to $target failed, so $old_version was put back. $1"

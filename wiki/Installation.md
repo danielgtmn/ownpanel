@@ -7,6 +7,7 @@ This page installs ownpanel on a Linux server with systemd: one command download
 ## What you need
 
 - A server with **Debian 12+ or Ubuntu 22.04+**, systemd, **amd64 or arm64**, and a public IPv4 and/or IPv6 address.
+- To build sites on the server: **Debian 12+ or Ubuntu 24.04+** and at least 12 GB of free disk space (see [Building sites](#building-sites)). On other systems everything else works and the panel says why builds are not available.
 - Root access.
 - Ports **80/tcp and 443/tcp** reachable from the Internet.
 - A domain you control, for the panel itself (optional) and for your sites.
@@ -45,6 +46,9 @@ The installer never asks questions, except to confirm `--uninstall --purge`.
 | `--server-ip ADDR` | Public IPv4/IPv6 address domains should point at. Repeat it or separate with commas. Sets `-server-ip`. |
 | `--acme-email ADDR` | Contact address for the certificate authority. Sets `-acme-email`. |
 | `--from-dir DIR` | Install from an unpacked release directory instead of downloading, e.g. on a server without Internet access. |
+| `--no-builds` | Do not set up building sites on this server; upgrades keep it off. Stops the build service if it runs. |
+| `--builds` | Set it up again after `--no-builds`. |
+| `--build-disk SIZE` | Disk space reserved for builds, e.g. `20G`. Default: 15 % of the disk, at least 8 GB, at most 32 GB, and never so much that less than 4 GB stay free. Changing it later makes a new build disk (the build caches are lost). |
 | `-y`, `--yes` | Do not ask for confirmation (only `--purge` asks). |
 | `--uninstall` | Remove services and binaries, keep data and settings. |
 | `--purge` | With `--uninstall`: also delete all data, settings, the users and the group `ownpanel-mail-web`. |
@@ -105,6 +109,12 @@ Values given as installer options (`--panel-domain`, `--server-ip`, `--acme-emai
 | `/var/lib/ownpanel-update` | the updater's directory, owned by root (0755) |
 | `/var/lib/ownpanel-update/requests` | `root:ownpanel`, mode 1770: update requests from the panel and the update status |
 | `/var/lib/ownpanel-update/backups` | root only: the backups made before each update (the last three) |
+| User `ownpanel-build` | system user with its own group and 65536 subordinate user and group ids (`/etc/subuid`, `/etc/subgid`), home `/var/lib/ownpanel-build/home`; `ownpanel` is in its group. Only when builds are set up |
+| `/var/lib/ownpanel-build` | root (0755): `home` (the build user's, 0700), `disk.img` (the build disk, root 0600) and `work` (its mount point) |
+| `/etc/systemd/system/ownpanel-build-setup.service`, `ownpanel-build.service` | the root unit that mounts the build disk and sets the packet filter for builds, and the build service (runs as `ownpanel-build`), see [Building sites](#building-sites) |
+| `/etc/systemd/system/nftables.service.d/ownpanel-build.conf` | puts the packet filter for builds back when nftables restarts |
+| `/etc/ownpanel/build.env` | the build settings ([[Configuration\|Configuration#builds]]) |
+| `/etc/ownpanel/builds` | whether builds were set up, and why not; the panel reads it |
 
 Versions before this layout kept Caddy's directories, the update requests and the backups inside `/var/lib/ownpanel`. The first update or install of a version with this layout moves them to the places above and leaves links at the old names, so a rollback to the previous version still finds them; nothing run as root uses those links.
 
@@ -124,6 +134,27 @@ The mail service's admin socket works the same way: `/run/ownpanel-mail/admin.so
 The mail service has a second socket for Caddy: `/run/ownpanel-mail-web/web.sock`, where Caddy passes the mail server name's account pages (and later calendars and contacts). `ownpanel-mail.service` creates the directory with `RuntimeDirectory=` (0750); the service, a member of the group `ownpanel-mail-web` (`SupplementaryGroups=`), hands the directory and the socket (mode 0660) to that group (`-web-group`). Only `caddy` is a member of that group otherwise. Caddy is not in the group `ownpanel-mail`, so it can never reach the admin socket.
 
 Both units set `PrivateTmp`, `ProtectSystem=full` and `ProtectHome=true`; `ownpaneld.service` also sets `NoNewPrivileges`. Caddy gets `CAP_NET_BIND_SERVICE` to bind ports 80 and 443. Caddy is started with `--resume`, so after a restart it serves the last config until ownpaneld pushes the current one. `ownpanel-mail.service` is hardened further (see the unit file).
+
+## Building sites
+
+Sites will be built on the server from their source ([#58](https://github.com/danielgtmn/ownpanel/issues/58)). The installer sets up the environment they run in; how it keeps builds away from the panel, other sites and the server is described in [[Security|Security#builds]].
+
+- It installs **Podman** (rootless containers), `uidmap`, `slirp4netns`, `nftables`, `quota` and `e2fsprogs` from the distribution's packages. Debian 12 ships Podman 4.3, Debian 13 5.4, Ubuntu 24.04 4.9. **Ubuntu 22.04** ships 3.4, which is too old: there the panel is installed as usual and builds are reported as unavailable.
+- It needs control groups version 2, user namespaces and loop devices. A server that is itself a container usually has no loop devices; builds are then unavailable.
+- It creates the user `ownpanel-build` with a range of subordinate ids, and `/etc/ownpanel/build.env` with settings chosen from the server's disk and memory: one or two builds at a time, 4 GB of disk space per build (2 GB on small disks).
+- `ownpanel-build-setup.service` (root) makes the **build disk**: a file of the chosen size in `/var/lib/ownpanel-build`, **reserved in full**, formatted and mounted with quotas. That space is taken from the server's disk at once, whether builds run or not. It also puts the packet filter for builds in place.
+- `ownpanel-build.service` (user `ownpanel-build`) then fetches the build images in the background (a few hundred MB); the panel shows "Getting ready to build sites" until they are there.
+
+Nothing here can stop the install: if a step fails, the panel is installed and the reason is written to `/etc/ownpanel/builds` and shown in the panel's settings, under **Building sites**. Run the installer again after fixing it.
+
+An update from the panel installs the packages through `systemd-run`, because the updater's own sandbox does not allow installing programs with set-user-ID bits (`newuidmap`).
+
+Check it on the server:
+
+```sh
+systemctl status ownpanel-build-setup ownpanel-build
+/usr/local/lib/ownpanel/ownpanel-build-setup status   # packet filter and quotas
+```
 
 ## Flags
 
@@ -254,7 +285,7 @@ Back up before upgrading ([[Backup and Restore|Backup-and-Restore]]).
 curl -fsSL https://raw.githubusercontent.com/danielgtmn/ownpanel/main/install.sh | sudo bash -s -- --uninstall
 ```
 
-This stops and removes both services, the updater (`ownpanel-update.*` units and `/usr/local/lib/ownpanel`) and `/usr/local/bin/ownpaneld` and `/usr/local/bin/caddy`. It keeps `/var/lib/ownpanel` (sites, database, certificates, secret key), `/etc/ownpanel` and the users, so installing again brings everything back.
+This stops and removes the services, the updater (`ownpanel-update.*` units and `/usr/local/lib/ownpanel`) and `/usr/local/bin/ownpaneld` and `/usr/local/bin/caddy`. It also removes the build service, its packet filter and the build disk `/var/lib/ownpanel-build/disk.img` (it only holds build caches and images). It keeps `/var/lib/ownpanel` (sites, database, certificates, secret key), `/etc/ownpanel` and the users, so installing again brings everything back. Podman and the other packages installed for builds are kept; remove them with `apt-get remove` if nothing else uses them.
 
 To delete everything, add `--purge`. Run from a terminal it asks for confirmation; piped in (`curl … | sudo bash`) it needs `--yes`:
 
@@ -262,4 +293,4 @@ To delete everything, add `--purge`. Run from a terminal it asks for confirmatio
 curl -fsSL https://raw.githubusercontent.com/danielgtmn/ownpanel/main/install.sh | sudo bash -s -- --uninstall --purge --yes
 ```
 
-This deletes `/var/lib/ownpanel` and `/etc/ownpanel` and removes the users `ownpanel` and `caddy` (the latter only if it was created for ownpanel). Back up first. Firewall rules and DNS records are not changed.
+This deletes `/var/lib/ownpanel`, `/var/lib/ownpanel-build` and `/etc/ownpanel` and removes the users `ownpanel`, `ownpanel-mail`, `ownpanel-build` (with its subordinate ids) and `caddy` (the latter only if it was created for ownpanel). Back up first. Firewall rules and DNS records are not changed.
