@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -20,8 +21,8 @@ import (
 
 	"github.com/danielgtmn/ownpanel/internal/caddy"
 	"github.com/danielgtmn/ownpanel/internal/mail/config"
-	"github.com/danielgtmn/ownpanel/internal/secrets"
 	"github.com/danielgtmn/ownpanel/internal/store"
+	"github.com/danielgtmn/panzerschrank"
 )
 
 func init() {
@@ -218,9 +219,9 @@ func newMailWorld(t *testing.T) *mailWorld {
 	w := &mailWorld{world: newWorld(t), mail: &fakeMail{}, mx: &fakeMX{hosts: map[string][]string{}, errs: map[string]error{}},
 		now: time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)}
 	svc := w.svc
-	key := make([]byte, secrets.KeySize)
+	key := make([]byte, panzerschrank.KeySize)
 	rand.Read(key)
-	box, err := secrets.New(key)
+	box, err := panzerschrank.New(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -939,6 +940,12 @@ func TestMailCertificates(t *testing.T) {
 	svc.refreshMailCerts(ctx, true)
 	if res.count() != 1 || svc.certs.manager() == nil || !svc.mailCertsLoaded() || len(svc.mailCertificates()) != 0 {
 		t.Fatalf("ACME: %d lookups", res.count())
+	}
+	// HTTP-01 must be offered from the start, before any challenge request
+	// (autocert keeps this in an unexported field; port 443 is Caddy's, so
+	// TLS-ALPN-01 alone can never succeed).
+	if !reflect.ValueOf(svc.certs.manager()).Elem().FieldByName("tryHTTP01").Bool() {
+		t.Fatal("the certificate manager does not offer the HTTP-01 challenge")
 	}
 	svc.refreshMailCerts(ctx, true)
 	if res.count() != 1 {

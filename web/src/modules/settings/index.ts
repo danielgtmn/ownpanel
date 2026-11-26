@@ -8,5 +8,4 @@ export const settingsModule: PanelModule = {
   basePath: '/settings',
   railEntry: { icon: SettingsIcon },
   page: () => import('./SettingsPage.tsx').then((page) => page.SettingsPage),
-  visible: (user) => user.role === 'admin',
 }

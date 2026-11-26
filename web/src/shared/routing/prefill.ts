@@ -22,3 +22,13 @@ export function prefilledDomain(query: URLSearchParams): string | undefined {
   const value = (query.get('domain') ?? '').trim().toLowerCase().replace(/\.$/, '')
   return HOST.test(value) ? value : undefined
 }
+
+// Opens the dialog that adds a domain to the panel, with the domain filled in when given.
+export function addDomainHref(domain?: string): string {
+  return hrefWithQuery(['dns'], domain ? { add: '1', domain } : { add: '1' })
+}
+
+// Opens the dialog that connects an account at a DNS provider.
+export function connectAccountHref(): string {
+  return hrefWithQuery(['settings'], { connect: '1' })
+}

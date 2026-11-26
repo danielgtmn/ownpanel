@@ -139,3 +139,57 @@ func (s *Store) RecordDNSWrite(ctx context.Context, id int64, canWrite bool, las
 		canWrite, lastError, id)
 	return err
 }
+
+// AdoptedDNSZone is a zone someone chose to manage in the panel.
+type AdoptedDNSZone struct {
+	ConnectionID int64
+	Zone         string
+	CreatedAt    time.Time
+}
+
+// AdoptDNSZone records that a zone of a connection is managed in the panel.
+// It reports whether the zone was new; adopting it again changes nothing.
+func (s *Store) AdoptDNSZone(ctx context.Context, connID int64, zone string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `INSERT INTO dns_zones (connection_id, zone, created_at) VALUES (?, ?, ?)
+		ON CONFLICT (connection_id, zone) DO NOTHING`, connID, zone, s.now())
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ReleaseDNSZone forgets that a zone is managed in the panel.
+func (s *Store) ReleaseDNSZone(ctx context.Context, connID int64, zone string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM dns_zones WHERE connection_id = ? AND zone = ?`, connID, zone)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return notFoundf("the domain %s is not managed in the panel", zone)
+	}
+	return nil
+}
+
+// AdoptedDNSZones lists the adopted zones of one user's connections,
+// ordered by zone and connection.
+func (s *Store) AdoptedDNSZones(ctx context.Context, userID int64) ([]AdoptedDNSZone, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT z.connection_id, z.zone, z.created_at
+		FROM dns_zones z JOIN dns_connections c ON c.id = z.connection_id
+		WHERE c.user_id = ? ORDER BY z.zone, z.connection_id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AdoptedDNSZone{}
+	for rows.Next() {
+		var z AdoptedDNSZone
+		var created int64
+		if err := rows.Scan(&z.ConnectionID, &z.Zone, &created); err != nil {
+			return nil, err
+		}
+		z.CreatedAt = unix(created)
+		out = append(out, z)
+	}
+	return out, rows.Err()
+}

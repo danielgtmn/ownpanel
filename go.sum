@@ -1,5 +1,7 @@
 blitiri.com.ar/go/spf v1.6.0 h1:TK91HOya1R2J5b+x+NZfdYTqDqbr+Q+hil5gy8WzLDQ=
 blitiri.com.ar/go/spf v1.6.0/go.mod h1:x9HYT28jEB65YMJOIVWSx0p88YCJ2h1N0fDFEhhWFBc=
+github.com/danielgtmn/panzerschrank v0.1.0 h1:wjhmu0ljHldHYAMA6lpPYPbDPvK12hV/4K4SUhbxekY=
+github.com/danielgtmn/panzerschrank v0.1.0/go.mod h1:dMqO7KAGZQPlbTtIdvK39Dw7Yj8tbJQcUFQH763aXgg=
 github.com/danielgtmn/sesam v0.3.0 h1:FD/Z92A8iYLgpmPQXyRmus5LHpOujmkja9iLelGdOJI=
 github.com/danielgtmn/sesam v0.3.0/go.mod h1:S7i1/nzeYKzPC1lOYqII6JtLRKOpnn+J3zANavtpp8k=
 github.com/dustin/go-humanize v1.1.0 h1:dbKTrvD0klcbBV/h4AWJdMuZogJACoMlvWIWZ5b2xWg=

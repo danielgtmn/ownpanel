@@ -318,6 +318,9 @@ func TestToolsAndAnnotations(t *testing.T) {
 		"get_mailbox_out_of_office":    {readOnly: true, idempotent: true},
 		"set_mailbox_out_of_office":    {idempotent: true},
 		"clear_mailbox_out_of_office":  {destructive: true, idempotent: true},
+		"list_dns_domains":             {readOnly: true, idempotent: true},
+		"manage_dns_domain":            {idempotent: true},
+		"stop_managing_dns_domain":     {},
 	}
 	got := map[string]bool{}
 	for _, tool := range res.Tools {

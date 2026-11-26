@@ -137,7 +137,10 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 | `POST` | `/api/dns/connections` | password sign-in or unrestricted write | `{"provider": "hetzner", "name", "token"}` | `201` DNS connection |
 | `POST` | `/api/dns/connections/{id}/check` | password sign-in or unrestricted write, your own | | DNS connection; the outcome is in `last_error` |
 | `DELETE` | `/api/dns/connections/{id}` | same as above; admins may remove anyone's | | `204` |
-| `GET` | `/api/dns/zones` | anyone, not site-limited | | `{"zones": [{"connection_id", "connection_name", "name", "read_only"}], "problems": [{"connection_id", "connection_name", "error"}]}` across your connections |
+| `GET` | `/api/dns/zones` | anyone, not site-limited | | `{"zones": [Zone, …], "problems": [{"connection_id", "connection_name", "error"}]}`: the zones of your connections that are in the panel (chosen, or used by your own site, redirect or mail domain, or for administrators the panel domain) |
+| `GET` | `/api/dns/zones/available` | same | | the same shape: the zones of your connections that are not in the panel yet |
+| `PUT` | `/api/dns/connections/{id}/zones/{zone}/managed` | password sign-in or unrestricted write, your own connection | | Zone. Manages the zone in the panel; nothing changes at the provider. Repeating is fine. `404` if the connection has no such zone |
+| `DELETE` | `/api/dns/connections/{id}/zones/{zone}/managed` | same | | `204`. Stops managing it; nothing is deleted at the provider. `409` while something of yours uses it, `404` if it was not chosen |
 | `GET` | `/api/dns/connections/{id}/zones/{zone}/records` | anyone, not site-limited, your own connection | | list of Record set |
 | `PUT` | `/api/dns/connections/{id}/zones/{zone}/records/{name}/{type}` | write, unrestricted, your own connection | `{"ttl": 3600 or null, "values": [..]}` | Record set as written |
 | `DELETE` | `/api/dns/connections/{id}/zones/{zone}/records/{name}/{type}` | same | | `204`; deleting a missing record set is fine |
@@ -145,10 +148,10 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 | `POST` | `/api/sites/{name}/domains/{domain}/point` | write, own site | | `{"changed": [Record set, …]}` |
 | `GET` | `/api/dns/domain-status?domain=<domain>` | anyone; a domain of a site you may see or of a domain redirect you may see | | one element of the site domain status list above. `404` for other domains |
 | `POST` | `/api/dns/point` | write; same domains | `{"domain": "www.example.com"}` | `{"changed": [Record set, …]}`, like the site route |
-| `POST` | `/api/dns/connections/{id}/zones` | password sign-in or unrestricted write, your own connection | `{"name": "example.com"}` | `201` Zone. Only registrable domains (no subdomains). `409` if it exists already |
-| `DELETE` | `/api/dns/connections/{id}/zones/{zone}` | same | `{"confirm": "<zone name>"}` | `204`. `400` if `confirm` does not match; `409` while a site, redirect or the panel domain (of anyone) uses a domain in the zone, listing them, or if the zone is protected at the provider |
+| `POST` | `/api/dns/connections/{id}/zones` | password sign-in or unrestricted write, your own connection | `{"name": "example.com"}` | `201` Zone, managed in the panel right away. Only registrable domains (no subdomains). `409` if it exists already |
+| `DELETE` | `/api/dns/connections/{id}/zones/{zone}` | same | `{"confirm": "<zone name>"}` | `204`. `400` if `confirm` does not match; `409` while a site, redirect, mail domain or the panel domain (of anyone) uses a domain in the zone, listing them, or if the zone is protected at the provider |
 
-Entries of `GET /api/dns/zones` are Zone objects, with `nameservers`.
+**Zone:** `{"connection_id", "connection_name", "name", "read_only", "nameservers", "adopted", "used_by"}`. `adopted` is true when you chose to manage it here; `used_by` describes what of yours uses a domain in it and so keeps it in the panel; things of other people do not count here (they only block deleting the zone).
 
 ### Redirects
 

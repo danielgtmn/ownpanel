@@ -7,7 +7,7 @@ import (
 
 	mailconfig "github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/panel"
-	"github.com/danielgtmn/ownpanel/internal/secrets"
+	"github.com/danielgtmn/panzerschrank"
 )
 
 // rulesMail is a mail service that keeps one out-of-office reply.
@@ -39,7 +39,7 @@ func (f *rulesMail) SetForwarding(_ context.Context, _ string, ch mailconfig.For
 func TestOutOfOfficeTools(t *testing.T) {
 	mail := &rulesMail{rules: mailconfig.MailRules{Managed: true}}
 	e := newEnvWith(t, "", func(c *panel.Config) {
-		box, err := secrets.Open(filepath.Join(t.TempDir(), secrets.KeyFile))
+		box, err := panzerschrank.OpenKeyFile(filepath.Join(t.TempDir(), panzerschrank.KeyFile))
 		if err != nil {
 			t.Fatal(err)
 		}

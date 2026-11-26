@@ -26,7 +26,7 @@ type MailDomain struct {
 }
 
 // DKIMKey is one DKIM key of a mail domain. PrivateKey is sealed by the
-// caller (internal/secrets); the store never sees the plain key.
+// caller (with panzerschrank); the store never sees the plain key.
 type DKIMKey struct {
 	Domain     string
 	Selector   string

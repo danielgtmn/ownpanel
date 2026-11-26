@@ -5,8 +5,7 @@ import { Input } from '@ui-sdk/react/input'
 import { useState, type FormEvent } from 'react'
 import { errorMessage } from '../../shared/api/index.ts'
 import { FormDialog, PasswordField } from '../../shared/ui/index.ts'
-import { validateConnection } from './zones.ts'
-import type { NewConnection } from './types.ts'
+import { validateConnection, type NewConnection } from '../../shared/dns/index.ts'
 
 type FormErrors = { name?: string; token?: string; form?: string }
 
@@ -49,7 +48,7 @@ function ConnectForm({ onSubmit }: { onSubmit: (connection: NewConnection) => Pr
             setErrors((current) => ({ ...current, name: undefined, form: undefined }))
           }}
         />
-        <FieldDescription>Helps you recognize this connection.</FieldDescription>
+        <FieldDescription>Helps you recognize this account.</FieldDescription>
         {errors.name ? <FieldError match>{errors.name}</FieldError> : null}
       </Field>
       <PasswordField
@@ -91,7 +90,7 @@ export function ConnectDialog({ open, onOpenChange, onSubmit }: ConnectDialogPro
       open={open}
       onOpenChange={onOpenChange}
       title="Connect Hetzner"
-      description="Connect your Hetzner account so you can manage your domains' DNS records here."
+      description="This only gives the panel access to the account. Afterwards you choose which of its domains to manage here."
     >
       <ConnectForm onSubmit={onSubmit} />
     </FormDialog>

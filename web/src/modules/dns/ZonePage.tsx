@@ -6,13 +6,14 @@ import { errorMessage, isNotFound } from '../../shared/api/index.ts'
 import { usePageTitle, useResource } from '../../shared/hooks/index.ts'
 import { hrefFor, navigate } from '../../shared/routing/index.ts'
 import { ArrowLeftIcon, EmptyState, ErrorState, LoadingState, PageHeader, Section } from '../../shared/ui/index.ts'
-import { deleteRecord, deleteZone, listRecords, listZones, saveRecord } from './api.ts'
+import { staysBecause, zonesNamed, providerLabel } from '../../shared/dns/index.ts'
+import { adoptZone, deleteRecord, deleteZone, listAvailableZones, listRecords, listZones, releaseZone, saveRecord } from './api.ts'
 import { DeleteDomainDialog } from './DeleteDomainDialog.tsx'
 import { Nameservers } from './Nameservers.tsx'
 import { RecordDialog, type RecordSubmit } from './RecordDialog.tsx'
 import { fullName, isEditableRecordSet, isProviderManaged, setKey, sortRecordSets, ttlLabel } from './records.ts'
 import type { RecordSet, Zone } from './types.ts'
-import { findZone, providerLabel } from './zones.ts'
+import { findZone } from './zones.ts'
 
 const backLink = (
   <a className="inline-link" href={hrefFor('dns')}>
@@ -89,6 +90,23 @@ function Loaded({ connectionId, zoneInfo, records, reload }: LoadedProps) {
   const [deleting, setDeleting] = useState(false)
   const editable = !zoneInfo.read_only
   usePageTitle(zone)
+
+  async function stopManaging() {
+    const yes = await confirm({
+      title: `Stop managing ${zone} here?`,
+      description: `${zone} and its records stay at ${zoneInfo.connection_name} unchanged. You can add it here again at any time.`,
+      confirmLabel: 'Stop managing',
+      cancelLabel: 'Cancel',
+    })
+    if (!yes) return
+    try {
+      await releaseZone(connectionId, zone)
+      toast.success(`${zone} is no longer managed here.`)
+      navigate('dns')
+    } catch (error) {
+      toast.error(errorMessage(error))
+    }
+  }
 
   async function removeDomain(confirmName: string) {
     await deleteZone(connectionId, zone, confirmName)
@@ -168,6 +186,16 @@ function Loaded({ connectionId, zoneInfo, records, reload }: LoadedProps) {
         <Nameservers nameservers={zoneInfo.nameservers} domain={zone} />
       </Section>
       <Section
+        title="Manage here"
+        description={
+          staysBecause(zoneInfo) ??
+          `Takes ${zone} out of the panel. It stays at ${zoneInfo.connection_name} with all its records.`
+        }
+        actions={staysBecause(zoneInfo) ? null : <Button onClick={stopManaging}>Stop managing here</Button>}
+      >
+        {null}
+      </Section>
+      <Section
         title="Delete domain"
         description="Removes the domain and all its records from the DNS provider."
         tone="danger"
@@ -194,6 +222,49 @@ function Loaded({ connectionId, zoneInfo, records, reload }: LoadedProps) {
   )
 }
 
+// A domain that isn't managed here: offered when one of the person's accounts has it.
+function NotManaged({ connectionId, zone, onAdopted }: { connectionId: number | null; zone: string; onAdopted: () => Promise<void> }) {
+  usePageTitle(zone)
+  const available = useResource(
+    async () => (connectionId === null ? [] : zonesNamed((await listAvailableZones()).zones, zone).filter((z) => z.connection_id === connectionId)),
+    `dns-available:${connectionId}:${zone}`,
+  )
+  const match = available.status === 'ready' ? available.data[0] : undefined
+  if (available.status === 'loading') return <LoadingState label="Loading…" />
+  if (match) {
+    return (
+      <EmptyState
+        title={`${match.name} isn't managed here yet`}
+        description={`It's in ${match.connection_name}. Manage it here to see and change its DNS records. Nothing changes at the provider.`}
+        action={
+          <Button
+            data-variant="solid"
+            pendingAnnouncement="Adding"
+            onClick={async () => {
+              try {
+                await adoptZone(match.connection_id, match.name)
+                toast.success(`${match.name} is now managed here.`)
+                await onAdopted()
+              } catch (error) {
+                toast.error(errorMessage(error))
+              }
+            }}
+          >
+            Manage DNS here
+          </Button>
+        }
+      />
+    )
+  }
+  return (
+    <EmptyState
+      title="Domain not found"
+      description={`There's no domain "${zone}" in your connected accounts. The account may have been removed.`}
+      action={<a href={hrefFor('dns')}>Back to all domains</a>}
+    />
+  )
+}
+
 export function ZonePage({ connectionId, zone }: { connectionId: number | null; zone: string }) {
   const data = useResource(async () => {
     if (connectionId === null) return null
@@ -212,13 +283,7 @@ export function ZonePage({ connectionId, zone }: { connectionId: number | null; 
     )
   }
   if (data.status === 'error' || data.data === null || connectionId === null) {
-    return (
-      <EmptyState
-        title="Domain not found"
-        description={`There's no domain "${zone}" in your connections. The connection may have been removed.`}
-        action={<a href={hrefFor('dns')}>Back to all domains</a>}
-      />
-    )
+    return <NotManaged connectionId={connectionId} zone={zone} onAdopted={data.reload} />
   }
   return <Loaded connectionId={connectionId} zoneInfo={data.data.zoneInfo} records={data.data.records} reload={data.reload} />
 }

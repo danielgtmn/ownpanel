@@ -29,10 +29,10 @@ import (
 	mailconfig "github.com/danielgtmn/ownpanel/internal/mail/config"
 	"github.com/danielgtmn/ownpanel/internal/mcp"
 	"github.com/danielgtmn/ownpanel/internal/panel"
-	"github.com/danielgtmn/ownpanel/internal/secrets"
 	"github.com/danielgtmn/ownpanel/internal/store"
 	"github.com/danielgtmn/ownpanel/internal/timeouts"
 	"github.com/danielgtmn/ownpanel/internal/webui"
+	"github.com/danielgtmn/panzerschrank"
 )
 
 // version is reported to MCP clients and by the version command; release
@@ -175,7 +175,7 @@ func serve(args []string) error {
 	if err := os.MkdirAll(data, 0o755); err != nil {
 		return err
 	}
-	secretBox, err := secrets.Open(filepath.Join(data, secrets.KeyFile))
+	secretBox, err := panzerschrank.OpenKeyFile(filepath.Join(data, panzerschrank.KeyFile))
 	if err != nil {
 		return err
 	}

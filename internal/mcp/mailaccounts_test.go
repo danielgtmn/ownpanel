@@ -6,12 +6,12 @@ import (
 	"testing"
 
 	"github.com/danielgtmn/ownpanel/internal/panel"
-	"github.com/danielgtmn/ownpanel/internal/secrets"
+	"github.com/danielgtmn/panzerschrank"
 )
 
 func TestMailAccountTools(t *testing.T) {
 	e := newEnvWith(t, "", func(c *panel.Config) {
-		box, err := secrets.Open(filepath.Join(t.TempDir(), secrets.KeyFile))
+		box, err := panzerschrank.OpenKeyFile(filepath.Join(t.TempDir(), panzerschrank.KeyFile))
 		if err != nil {
 			t.Fatal(err)
 		}

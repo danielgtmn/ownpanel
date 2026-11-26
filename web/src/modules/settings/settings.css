@@ -310,3 +310,22 @@
   margin: 0;
   font-size: 0.875rem;
 }
+
+.connection-health {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.connection-health[data-tone='problem'] {
+  color: var(--ui-destructive);
+}
+
+.connection-health[data-tone='ok'],
+.connection-health[data-tone='unknown'] {
+  color: var(--ui-muted-foreground);
+}
+
+.connection-note {
+  margin: 0;
+  font-size: 0.875rem;
+}

@@ -156,7 +156,7 @@ export function familySummary(family: Family): string {
   if (family.sites.length > 0) parts.push(plural(family.sites.length, 'site', 'sites'))
   if (family.redirects.length > 0) parts.push(plural(family.redirects.length, 'redirect', 'redirects'))
   if (family.mailDomains.length > 0) parts.push('E-mail')
-  parts.push(family.zones.length > 0 ? 'DNS connected' : 'DNS not connected')
+  parts.push(family.zones.length > 0 ? 'DNS managed here' : 'DNS managed elsewhere')
   return parts.join(' · ')
 }
 

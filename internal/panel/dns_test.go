@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,7 +18,7 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/dns"
 	"github.com/danielgtmn/ownpanel/internal/dns/hetzner"
 	"github.com/danielgtmn/ownpanel/internal/dns/hetzner/hetznertest"
-	"github.com/danielgtmn/ownpanel/internal/secrets"
+	"github.com/danielgtmn/panzerschrank"
 )
 
 const (
@@ -79,9 +80,9 @@ func newDNSWorld(t *testing.T) *dnsWorld {
 		now: time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC),
 	}
 	d.reject = hetznertest.New(t, "never-accepted")
-	key := make([]byte, secrets.KeySize)
+	key := make([]byte, panzerschrank.KeySize)
 	rand.Read(key)
-	box, err := secrets.New(key)
+	box, err := panzerschrank.New(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,6 +198,28 @@ func TestDNSPermissionMatrix(t *testing.T) {
 			[]Kind{ok, ok, N, N, N, F, N, U}},
 		{"list zones", func(d *dnsWorld, a Actor) error { _, err := d.svc.DNSZones(ctx, a); return err },
 			[]Kind{ok, ok, ok, ok, F, ok, F, U}},
+		{"list available zones", func(d *dnsWorld, a Actor) error { _, err := d.svc.AvailableDNSZones(ctx, a); return err },
+			[]Kind{ok, ok, ok, ok, F, ok, F, U}},
+		{"adopt own zone", func(d *dnsWorld, a Actor) error {
+			_, err := d.svc.AdoptDNSZone(ctx, a, d.ownConn(a), "example.com")
+			return err
+		}, []Kind{ok, ok, ok, F, F, F, F, U}},
+		{"adopt other's zone", func(d *dnsWorld, a Actor) error {
+			_, err := d.svc.AdoptDNSZone(ctx, a, d.otherConn(a), "example.com")
+			return err
+		}, []Kind{F, F, N, F, F, F, F, U}},
+		{"release own zone", func(d *dnsWorld, a Actor) error {
+			if _, err := d.svc.store.AdoptDNSZone(ctx, d.ownConn(a), "unused.example"); err != nil {
+				d.t.Fatal(err)
+			}
+			return d.svc.ReleaseDNSZone(ctx, a, d.ownConn(a), "unused.example")
+		}, []Kind{ok, ok, ok, F, F, F, F, U}},
+		{"release other's zone", func(d *dnsWorld, a Actor) error {
+			if _, err := d.svc.store.AdoptDNSZone(ctx, d.otherConn(a), "unused.example"); err != nil {
+				d.t.Fatal(err)
+			}
+			return d.svc.ReleaseDNSZone(ctx, a, d.otherConn(a), "unused.example")
+		}, []Kind{F, F, N, F, F, F, F, U}},
 		{"list own records", func(d *dnsWorld, a Actor) error {
 			_, err := d.svc.DNSRecords(ctx, a, d.ownConn(a), "example.com")
 			return err
@@ -333,7 +356,7 @@ func TestCheckDNSConnectionReportsProblems(t *testing.T) {
 		t.Fatalf("%+v %v", c, err)
 	}
 	// With another secret key the stored token cannot be read.
-	other, _ := secrets.New(bytes.Repeat([]byte{7}, secrets.KeySize))
+	other, _ := panzerschrank.New(bytes.Repeat([]byte{7}, panzerschrank.KeySize))
 	d.svc.secrets = other
 	c, err = d.svc.CheckDNSConnection(ctx, bob, d.bobConn)
 	if err != nil || !strings.Contains(c.LastError, "secret key has changed") {
@@ -399,6 +422,9 @@ func TestZoneCacheExpires(t *testing.T) {
 	d := newDNSWorld(t)
 	ctx := context.Background()
 	srv := d.hz[bobToken]
+	if _, err := d.svc.AdoptDNSZone(ctx, bob, d.bobConn, "other.org"); err != nil {
+		t.Fatal(err)
+	}
 	srv.ResetCalls()
 	zones := func() []DNSZone {
 		t.Helper()
@@ -437,6 +463,9 @@ func TestZonesListSkipsFailingConnection(t *testing.T) {
 	d := newDNSWorld(t)
 	ctx := context.Background()
 	if _, err := d.svc.CreateDNSConnection(ctx, bob, "hetzner", "second", newToken); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.svc.AdoptDNSZone(ctx, bob, d.bobConn, "other.org"); err != nil {
 		t.Fatal(err)
 	}
 	d.hz[newToken].Token = "rotated"
@@ -876,4 +905,160 @@ func TestPointHereDropsCachedStatus(t *testing.T) {
 	if err != nil || len(list) != 1 || list[0].State != DomainPointsHere {
 		t.Fatalf("%+v %v", list, err)
 	}
+}
+
+// zoneNames lists "connection/zone" of a zone list.
+func zoneNames(t *testing.T, z DNSZones, err error) []string {
+	t.Helper()
+	if err != nil || len(z.Problems) != 0 {
+		t.Fatalf("%+v %v", z, err)
+	}
+	out := []string{}
+	for _, x := range z.Zones {
+		out = append(out, x.ConnectionName+"/"+x.Name)
+	}
+	return out
+}
+
+func TestChosenDNSZones(t *testing.T) {
+	d := newDNSWorld(t)
+	ctx := context.Background()
+	inPanel := func() []string { z, err := d.svc.DNSZones(ctx, bob); return zoneNames(t, z, err) }
+	available := func() []string { z, err := d.svc.AvailableDNSZones(ctx, bob); return zoneNames(t, z, err) }
+	want := func(what string, got []string, want ...string) {
+		t.Helper()
+		if want == nil {
+			want = []string{}
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: %v, want %v", what, got, want)
+		}
+	}
+
+	// Connecting adopts nothing; example.com is in because sites use it.
+	if _, err := d.svc.CreateDNSConnection(ctx, bob, "hetzner", "second", newToken); err != nil {
+		t.Fatal(err)
+	}
+	want("in the panel", inPanel(), "bob-main/example.com")
+	want("available", available(), "second/new.example", "bob-main/other.org")
+	z, _ := d.svc.DNSZones(ctx, bob)
+	// Only bob's own sites count; root's site in the zone is left out.
+	if used := z.Zones[0].UsedBy; z.Zones[0].Adopted || !reflect.DeepEqual(used,
+		[]string{"the site bobother (bobother.example.com)", "the site bobsite (bobsite.example.com)"}) {
+		t.Fatalf("example.com: %+v", z.Zones[0])
+	}
+
+	// Adopting brings a zone in, once; nothing changes at the provider.
+	srv := d.hz[bobToken]
+	srv.ResetCalls()
+	for range 2 {
+		got, err := d.svc.AdoptDNSZone(ctx, bob, d.bobConn, " Other.ORG. ")
+		if err != nil || got.Name != "other.org" || !got.Adopted || len(got.UsedBy) != 0 {
+			t.Fatalf("adopt: %+v %v", got, err)
+		}
+	}
+	for _, c := range srv.Calls() {
+		if !strings.HasPrefix(c, "GET ") {
+			t.Fatalf("adopting changed something at the provider: %v", srv.Calls())
+		}
+	}
+	want("after adopting", inPanel(), "bob-main/example.com", "bob-main/other.org")
+	want("available after adopting", available(), "second/new.example")
+	if _, err := d.svc.AdoptDNSZone(ctx, bob, d.bobConn, "missing.org"); KindOf(err) != NotFound {
+		t.Fatalf("unknown zone: %v", err)
+	}
+
+	// Use keeps a zone in without adopting it: e-mail, redirects and the panel itself.
+	d.svc.mx = &fakeMX{hosts: map[string][]string{}, errs: map[string]error{}}
+	if _, err := d.svc.UpdateSettings(ctx, admin, SettingsUpdate{MailHost: strp(testMailHost)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.svc.EnableMailDomain(ctx, bob, "shop.new.example"); err != nil {
+		t.Fatal(err)
+	}
+	want("with e-mail", inPanel(), "bob-main/example.com", "second/new.example", "bob-main/other.org")
+	if err := d.svc.ReleaseDNSZone(ctx, bob, d.bobConn, "example.com"); KindOf(err) != Conflict ||
+		!strings.Contains(err.Error(), "stays in the panel while it is used by the site bobother") {
+		t.Fatalf("release a used zone: %v", err)
+	}
+	z, _ = d.svc.DNSZones(ctx, bob)
+	if used := z.Zones[1].UsedBy; z.Zones[1].Name != "new.example" || !reflect.DeepEqual(used, []string{"e-mail for shop.new.example"}) {
+		t.Fatalf("new.example: %+v", z.Zones[1])
+	}
+
+	// Releasing takes an adopted zone out; it is available again.
+	if err := d.svc.ReleaseDNSZone(ctx, bob, d.bobConn, "other.org"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.svc.ReleaseDNSZone(ctx, bob, d.bobConn, "other.org"); KindOf(err) != NotFound {
+		t.Fatalf("release twice: %v", err)
+	}
+	want("after releasing", available(), "bob-main/other.org")
+	if !srv.HasZone("other.org") {
+		t.Fatal("releasing deleted the zone at the provider")
+	}
+
+	// Another person's things in a zone don't bring it into bob's panel, but
+	// they still keep it from being deleted at the provider.
+	if _, err := d.svc.SaveSite(ctx, admin, "rootother", []string{"blog.other.org"}); err != nil {
+		t.Fatal(err)
+	}
+	want("with another person's site", available(), "bob-main/other.org")
+	if err := d.svc.DeleteDNSZone(ctx, bob, d.bobConn, "other.org", "other.org"); KindOf(err) != Conflict ||
+		!strings.Contains(err.Error(), "a site of another person (blog.other.org)") {
+		t.Fatalf("delete a zone another person uses: %v", err)
+	}
+	if err := d.svc.DeleteSite(ctx, admin, "rootother"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The panel's own address counts for administrators only.
+	d.svc.settings.panelDomain = "panel.other.org"
+	want("with the panel domain", available(), "bob-main/other.org")
+	rootSecond, err := d.svc.CreateDNSConnection(ctx, admin, "hetzner", "root-second", bobToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rz, err := d.svc.DNSZones(ctx, admin)
+	if names := zoneNames(t, rz, err); !slices.Contains(names, "root-second/other.org") {
+		t.Fatalf("panel domain for an administrator: %v", names)
+	}
+	if err := d.svc.DeleteDNSConnection(ctx, admin, rootSecond.ID); err != nil {
+		t.Fatal(err)
+	}
+	d.svc.settings.panelDomain = ""
+
+	// A created zone is adopted; a deleted one is forgotten.
+	created, err := d.svc.CreateDNSZone(ctx, bob, d.bobConn, "fresh.org")
+	if err != nil || !created.Adopted {
+		t.Fatalf("create: %+v %v", created, err)
+	}
+	want("after creating", inPanel(), "bob-main/example.com", "bob-main/fresh.org", "second/new.example")
+	if err := d.svc.DeleteDNSZone(ctx, bob, d.bobConn, "fresh.org", "fresh.org"); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := d.svc.store.AdoptedDNSZones(ctx, bob.UserID); len(list) != 0 {
+		t.Fatalf("deleted zone still adopted: %+v", list)
+	}
+
+	// Someone else's adoption does not count for bob, and the root sees only its own.
+	if _, err := d.svc.AdoptDNSZone(ctx, admin, d.rootConn, "example.com"); err != nil {
+		t.Fatal(err)
+	}
+	rz, err = d.svc.DNSZones(ctx, admin)
+	want("root's zones", zoneNames(t, rz, err), "root-main/example.com")
+
+	acts, err := d.svc.store.Activities(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen []string
+	for _, a := range acts {
+		if strings.HasPrefix(a.Action, "dns.zone.") {
+			seen = append(seen, a.Action+" "+a.Target)
+		}
+	}
+	slices.Reverse(seen)
+	want("activity", seen, "dns.zone.adopt other.org", "dns.zone.release other.org", "dns.zone.create fresh.org",
+		"dns.zone.delete fresh.org", "dns.zone.adopt example.com")
 }
