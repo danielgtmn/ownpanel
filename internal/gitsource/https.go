@@ -82,7 +82,7 @@ func httpFailure(a Address, err error, ctx context.Context) error {
 }
 
 // httpAdvert asks for the ref advertisement.
-func httpAdvert(ctx context.Context, c *http.Client, a Address) (advert, error) {
+func httpAdvert(ctx context.Context, c *http.Client, a Address, ol openLimits) (advert, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, repoURL(a, "/info/refs")+"?service=git-upload-pack", nil)
 	if err != nil {
 		return advert{}, err
@@ -100,7 +100,7 @@ func httpAdvert(ctx context.Context, c *http.Client, a Address) (advert, error) 
 	if mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); mt != "application/x-git-upload-pack-advertisement" {
 		return advert{}, &HTTPError{Server: a.ServerName(), Status: http.StatusNotFound}
 	}
-	p := newPktReader(io.LimitReader(resp.Body, maxAdvertBytes+1<<20))
+	p := newPktReader(&rawLimit{r: resp.Body, max: int64(ol.advertBytes) + 64<<10})
 	line, err := p.next()
 	if err != nil || string(bytes.TrimSuffix(line, []byte("\n"))) != "# service=git-upload-pack" {
 		return advert{}, protocolf("no service line")
@@ -108,12 +108,12 @@ func httpAdvert(ctx context.Context, c *http.Client, a Address) (advert, error) 
 	if _, err := p.next(); !errors.Is(err, errFlush) {
 		return advert{}, protocolf("no flush after the service line")
 	}
-	return readAdvert(p)
+	return readAdvert(p, ol.branch, ol.advertBytes)
 }
 
 // httpPack sends the fetch request and returns the answer's body, read up
 // to the pack.
-func httpPack(ctx context.Context, c *http.Client, a Address, body []byte, ad advert) (io.ReadCloser, io.Reader, error) {
+func httpPack(ctx context.Context, c *http.Client, a Address, body []byte, ad advert, transfer int64) (io.ReadCloser, io.Reader, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, repoURL(a, "/git-upload-pack"), bytes.NewReader(body))
 	if err != nil {
 		return nil, nil, err
@@ -133,7 +133,8 @@ func httpPack(ctx context.Context, c *http.Client, a Address, body []byte, ad ad
 		resp.Body.Close()
 		return nil, nil, protocolf("unexpected type of answer")
 	}
-	p := newPktReader(resp.Body)
+	// Every raw byte of the answer counts, side-band progress included.
+	p := newPktReader(&rawLimit{r: resp.Body, max: transfer})
 	if err := readUntilPack(p); err != nil {
 		resp.Body.Close()
 		return nil, nil, err

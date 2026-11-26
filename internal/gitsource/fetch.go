@@ -41,19 +41,29 @@ type Limits struct {
 	FilesBytes int64
 	Depth      int
 	PathLength int
+	// TreeBytes: folder listings read while walking the commit, counted
+	// every time a listing is named (a folder can be named many times).
+	TreeBytes int64
+	// LinkParts: parts of one link target; LinkWork: steps of resolving
+	// every link through the tree's own links.
+	LinkParts int
+	LinkWork  int64
 }
 
 // DefaultLimits match what the build service accepts as a source tree
 // (internal/build: 1 GB, 100,000 entries).
 var DefaultLimits = Limits{
 	TransferBytes: 1 << 30,
-	StoreBytes:    2 << 30,
+	StoreBytes:    3 << 29, // 1.5 GB
 	ObjectBytes:   100 << 20,
 	Objects:       300_000,
 	Files:         100_000,
 	FilesBytes:    1 << 30,
 	Depth:         64,
 	PathLength:    4096,
+	TreeBytes:     128 << 20,
+	LinkParts:     256,
+	LinkWork:      64 << 20,
 }
 
 func (l Limits) withDefaults() Limits {
@@ -81,6 +91,15 @@ func (l Limits) withDefaults() Limits {
 	}
 	if l.PathLength > 0 {
 		d.PathLength = l.PathLength
+	}
+	if l.TreeBytes > 0 {
+		d.TreeBytes = l.TreeBytes
+	}
+	if l.LinkParts > 0 {
+		d.LinkParts = l.LinkParts
+	}
+	if l.LinkWork > 0 {
+		d.LinkWork = l.LinkWork
 	}
 	return d
 }
@@ -119,7 +138,36 @@ type conversation struct {
 	close func()
 }
 
-func open(ctx context.Context, r Remote) (*conversation, error) {
+// openLimits bound a conversation: the advertisement's bytes, and every
+// raw byte read from the server after it (side-band progress and empty
+// packets included).
+type openLimits struct {
+	branch      string // "" for every branch (up to MaxBranches)
+	advertBytes int
+	transfer    int64
+}
+
+// rawLimit counts the raw bytes read from a server and refuses more than
+// max.
+type rawLimit struct {
+	r   io.Reader
+	n   int64
+	max int64
+}
+
+func (l *rawLimit) Read(b []byte) (int, error) {
+	if l.n >= l.max {
+		return 0, limitf("the repository is larger than %s to download", byteSize(l.max))
+	}
+	if int64(len(b)) > l.max-l.n {
+		b = b[:l.max-l.n]
+	}
+	n, err := l.r.Read(b)
+	l.n += int64(n)
+	return n, err
+}
+
+func open(ctx context.Context, r Remote, ol openLimits) (*conversation, error) {
 	a := r.Address
 	switch a.Scheme {
 	case SchemeSSH:
@@ -130,9 +178,9 @@ func open(ctx context.Context, r Remote) (*conversation, error) {
 		if err != nil {
 			return nil, err
 		}
-		limited := &countingReader{r: newBufReader(s.stdout), max: maxAdvertBytes + 1<<20}
-		p := newPktReader(limited)
-		ad, err := readAdvert(p)
+		raw := &rawLimit{r: s.stdout, max: int64(ol.advertBytes) + 64<<10}
+		p := newPktReader(raw)
+		ad, err := readAdvert(p, ol.branch, ol.advertBytes)
 		if err != nil {
 			s.Close()
 			return nil, s.failure(err)
@@ -143,8 +191,9 @@ func open(ctx context.Context, r Remote) (*conversation, error) {
 				if _, err := s.stdin.Write(req); err != nil {
 					return nil, nil, s.failure(err)
 				}
-				// From here on the pack's own limit applies.
-				limited.max = 1<<62 - 1
+				// From here on everything the server sends counts against
+				// the transfer limit.
+				raw.max = raw.n + ol.transfer
 				if err := readUntilPack(p); err != nil {
 					return nil, nil, s.failure(err)
 				}
@@ -157,7 +206,7 @@ func open(ctx context.Context, r Remote) (*conversation, error) {
 		}, nil
 	case SchemeHTTPS:
 		c := httpClient()
-		ad, err := httpAdvert(ctx, c, a)
+		ad, err := httpAdvert(ctx, c, a, ol)
 		if err != nil {
 			c.CloseIdleConnections()
 			return nil, err
@@ -165,7 +214,7 @@ func open(ctx context.Context, r Remote) (*conversation, error) {
 		return &conversation{
 			ad: ad,
 			fetch: func(req []byte) (io.Reader, func(), error) {
-				body, pack, err := httpPack(ctx, c, a, req, ad)
+				body, pack, err := httpPack(ctx, c, a, req, ad, ol.transfer)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -195,7 +244,7 @@ func (f *failingReader) Read(b []byte) (int, error) {
 func BranchTip(ctx context.Context, r Remote, branch string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, CheckTimeout)
 	defer cancel()
-	c, err := open(ctx, r)
+	c, err := open(ctx, r, openLimits{branch: branch, advertBytes: checkAdvertBytes})
 	if err != nil {
 		return "", timeoutErr(ctx, r.Address, err)
 	}
@@ -223,7 +272,7 @@ func Fetch(ctx context.Context, r Remote, branch, want, dir string, lim Limits) 
 	lim = lim.withDefaults()
 	ctx, cancel := context.WithTimeout(ctx, FetchTimeout)
 	defer cancel()
-	c, err := open(ctx, r)
+	c, err := open(ctx, r, openLimits{branch: branch, advertBytes: maxAdvertBytes, transfer: lim.TransferBytes})
 	if err != nil {
 		return Fetched{}, timeoutErr(ctx, r.Address, err)
 	}
@@ -239,7 +288,7 @@ func Fetch(ctx context.Context, r Remote, branch, want, dir string, lim Limits) 
 	if err != nil {
 		return Fetched{}, timeoutErr(ctx, r.Address, err)
 	}
-	store, err := readPack(&transferLimit{r: pack, max: lim.TransferBytes}, dir, lim)
+	store, err := readPack(pack, dir, lim)
 	done()
 	if err != nil {
 		return Fetched{}, timeoutErr(ctx, r.Address, err)
@@ -249,13 +298,13 @@ func Fetch(ctx context.Context, r Remote, branch, want, dir string, lim Limits) 
 	if err != nil {
 		return Fetched{}, err
 	}
-	entries, err := walk(store, root, lim)
+	entries, err := walk(ctx, store, root, lim)
 	if err != nil {
-		return Fetched{}, err
+		return Fetched{}, timeoutErr(ctx, r.Address, err)
 	}
-	links, err := checkLinks(store, entries)
+	links, err := checkLinks(ctx, store, entries, lim)
 	if err != nil {
-		return Fetched{}, err
+		return Fetched{}, timeoutErr(ctx, r.Address, err)
 	}
 	out, err := os.CreateTemp(dir, "source-*.tar.gz")
 	if err != nil {
@@ -266,8 +315,8 @@ func Fetch(ctx context.Context, r Remote, branch, want, dir string, lim Limits) 
 		os.Remove(out.Name())
 		return Fetched{}, err
 	}
-	if err := writeTar(store, entries, links, out); err != nil {
-		return fail(err)
+	if err := writeTar(ctx, store, entries, links, out); err != nil {
+		return fail(timeoutErr(ctx, r.Address, err))
 	}
 	size, err := out.Seek(0, io.SeekCurrent)
 	if err != nil {
@@ -277,25 +326,6 @@ func Fetch(ctx context.Context, r Remote, branch, want, dir string, lim Limits) 
 		return fail(err)
 	}
 	return Fetched{Commit: tip, Tree: &tempFile{File: out}, Size: size}, nil
-}
-
-// transferLimit refuses more than max bytes of pack.
-type transferLimit struct {
-	r   io.Reader
-	n   int64
-	max int64
-}
-
-func (t *transferLimit) Read(b []byte) (int, error) {
-	if t.n >= t.max {
-		return 0, limitf("the repository is larger than %s to download", byteSize(t.max))
-	}
-	if int64(len(b)) > t.max-t.n {
-		b = b[:t.max-t.n]
-	}
-	n, err := t.r.Read(b)
-	t.n += int64(n)
-	return n, err
 }
 
 type tempFile struct{ *os.File }
@@ -335,21 +365,18 @@ type Branches struct {
 func ListBranches(ctx context.Context, r Remote) (Branches, error) {
 	ctx, cancel := context.WithTimeout(ctx, CheckTimeout)
 	defer cancel()
-	c, err := open(ctx, r)
+	c, err := open(ctx, r, openLimits{advertBytes: checkAdvertBytes})
 	if err != nil {
 		return Branches{}, timeoutErr(ctx, r.Address, err)
 	}
 	defer c.close()
-	var out Branches
+	out := Branches{Truncated: c.ad.truncated}
 	for name := range c.ad.refs {
 		if b, ok := strings.CutPrefix(name, "refs/heads/"); ok {
 			out.Names = append(out.Names, b)
 		}
 	}
 	slices.Sort(out.Names)
-	if len(out.Names) > MaxBranches {
-		out.Names, out.Truncated = out.Names[:MaxBranches], true
-	}
 	// symref=HEAD:refs/heads/main (readAdvert keeps only HEAD's).
 	if v, ok := c.ad.caps["symref"]; ok {
 		if b, ok := strings.CutPrefix(v, "HEAD:refs/heads/"); ok {

@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -70,9 +71,14 @@ func commitTree(s *packStore, commit string) (*object, error) {
 
 // walk lists every entry below the root tree, folders before their
 // contents, within the limits.
-func walk(s *packStore, root *object, lim Limits) ([]entry, error) {
+//
+// Every tree read is charged to lim.TreeBytes, also when the same tree is
+// named many times (a small pack can name one large tree from thousands
+// of folders), and submodules count as entries like everything else.
+func walk(ctx context.Context, s *packStore, root *object, lim Limits) ([]entry, error) {
 	var out []entry
-	var total int64
+	var total, treeBytes int64
+	entries := 0
 	type frame struct {
 		dir   string
 		tree  *object
@@ -84,6 +90,12 @@ func walk(s *packStore, root *object, lim Limits) ([]entry, error) {
 		stack = stack[:len(stack)-1]
 		if f.depth > lim.Depth {
 			return nil, limitf("the repository's folders are nested deeper than %d levels", lim.Depth)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if treeBytes += f.tree.size; treeBytes > lim.TreeBytes {
+			return nil, limitf("the repository's folder listings are larger than %s together", byteSize(lim.TreeBytes))
 		}
 		data, err := s.data(f.tree)
 		if err != nil {
@@ -123,15 +135,15 @@ func walk(s *packStore, root *object, lim Limits) ([]entry, error) {
 				return nil, treef("the folder %q contains %q twice (or in different upper and lower case)", f.dir+"/", name)
 			}
 			seen[key] = true
+			if entries++; entries > lim.Files {
+				return nil, limitf("the repository has more than %d files and folders", lim.Files)
+			}
 			if mode == modeGitlink {
 				continue // a submodule: never fetched
 			}
 			o, ok := s.get(id)
 			if !ok {
 				return nil, protocolf("the server did not send all of the commit's files")
-			}
-			if len(out) >= lim.Files {
-				return nil, limitf("the repository has more than %d files and folders", lim.Files)
 			}
 			switch mode {
 			case modeTree:
@@ -190,91 +202,181 @@ func checkName(name string) error {
 	case len(name) > 255:
 		return treef("the repository contains a name longer than 255 bytes")
 	}
+	for i := 0; i < len(name); i++ {
+		if name[i] < 0x20 || name[i] == 0x7f {
+			return treef("the repository contains a name with a control character")
+		}
+	}
 	return nil
 }
 
 // checkLinks makes sure no link points out of the tree: absolute targets,
 // and targets that leave the tree when resolved through the tree's own
 // folders and links, are refused. Targets that do not exist are fine.
-func checkLinks(s *packStore, entries []entry) (map[string]string, error) {
-	kinds := make(map[string]int, len(entries))
+//
+// The work is bounded: a target has at most lim.LinkParts parts, the
+// distinct targets together at most linkTargetBytes, and resolving all
+// links at most lim.LinkWork steps (a step is one part, plus the bytes of
+// the path looked up), however the links lead through each other.
+func checkLinks(ctx context.Context, s *packStore, entries []entry, lim Limits) (map[string]string, error) {
 	targets := map[string]string{}
+	read := map[*object]string{} // a blob named by many links is read once
+	var distinct int64
 	for _, e := range entries {
-		kinds[e.path] = e.mode
-		if e.mode == modeLink {
+		if e.mode != modeLink {
+			continue
+		}
+		t, ok := read[e.object]
+		if !ok {
 			if e.object.size > 4096 {
 				return nil, treef("the link %q is too long", e.path)
+			}
+			if distinct += e.object.size; distinct > linkTargetBytes {
+				return nil, limitf("the repository's links are longer than %s together", byteSize(linkTargetBytes))
 			}
 			data, err := s.data(e.object)
 			if err != nil {
 				return nil, err
 			}
-			t := string(data)
+			t = string(data)
 			if t == "" || strings.ContainsRune(t, 0) {
 				return nil, treef("the link %q is empty or contains a zero byte", e.path)
 			}
-			targets[e.path] = t
+			if strings.Count(t, "/") >= lim.LinkParts {
+				return nil, limitf("the link %q has more than %d parts", e.path, lim.LinkParts)
+			}
+			read[e.object] = t
 		}
+		targets[e.path] = t
 	}
+	r := linkResolver{links: targets, budget: lim.LinkWork, ctx: ctx}
+	// Links in the same folder with the same target resolve the same way.
+	done := map[[2]string]bool{}
 	for p, t := range targets {
 		if strings.HasPrefix(t, "/") {
 			return nil, treef("the link %q points to %q, outside the repository", p, t)
 		}
-		if !insideTree(path.Dir(p), t, targets, 0) {
+		key := [2]string{path.Dir(p), t}
+		inside, ok := done[key]
+		if !ok {
+			var err error
+			if inside, err = r.inside(key[0], t); err != nil {
+				return nil, err
+			}
+			done[key] = inside
+		}
+		if !inside {
 			return nil, treef("the link %q points to %q, outside the repository", p, t)
 		}
 	}
 	return targets, nil
 }
 
-// insideTree resolves target relative to dir ("." for the root) through
-// the tree's links and reports whether it stays inside.
-func insideTree(dir, target string, links map[string]string, hops int) bool {
-	if hops > 40 {
-		return false // a loop; refuse rather than guess
+// linkTargetBytes bounds the distinct link targets of a fetch.
+const linkTargetBytes = 16 << 20
+
+// maxLinkHops is how many links one resolution may follow (Linux's
+// limit); more is treated as a loop and refused.
+const maxLinkHops = 40
+
+// linkResolver resolves link targets through the tree's own links, with a
+// shared budget of work.
+type linkResolver struct {
+	links  map[string]string
+	budget int64
+	steps  int
+	ctx    context.Context
+}
+
+var errLinkBudget = &LimitError{Msg: "the repository's links lead through each other too often to be checked"}
+
+// inside resolves target relative to dir ("." for the root) and reports
+// whether it stays inside the tree. The path walked so far is kept as a
+// string and a stack of lengths, so each part costs one lookup of the
+// current path; the parts still to walk are a stack, so following a link
+// pushes its target's parts instead of joining strings.
+func (r *linkResolver) inside(dir, target string) (bool, error) {
+	cur := ""         // the path so far, without a leading "/"
+	var lens []int    // len(cur) before each part was added
+	var rest []string // parts still to walk, last first
+	push := func(t string) {
+		parts := strings.Split(t, "/")
+		for i := len(parts) - 1; i >= 0; i-- {
+			rest = append(rest, parts[i])
+		}
 	}
-	var cur []string
-	if dir != "." && dir != "" {
-		cur = strings.Split(dir, "/")
+	setDir := func(d string) {
+		cur, lens = "", lens[:0]
+		if d == "." || d == "" {
+			return
+		}
+		for _, part := range strings.Split(d, "/") {
+			lens = append(lens, len(cur))
+			if cur != "" {
+				cur += "/"
+			}
+			cur += part
+		}
 	}
-	parts := strings.Split(target, "/")
-	for i, part := range parts {
+	setDir(dir)
+	push(target)
+	hops := 0
+	for len(rest) > 0 {
+		part := rest[len(rest)-1]
+		rest = rest[:len(rest)-1]
+		if r.steps++; r.steps%4096 == 0 {
+			if err := r.ctx.Err(); err != nil {
+				return false, err
+			}
+		}
 		switch part {
 		case "", ".":
+			r.budget--
 			continue
 		case "..":
-			if len(cur) == 0 {
-				return false
+			r.budget--
+			if len(lens) == 0 {
+				return false, nil
 			}
-			cur = cur[:len(cur)-1]
+			cur, lens = cur[:lens[len(lens)-1]], lens[:len(lens)-1]
 			continue
 		}
-		cur = append(cur, part)
-		joined := strings.Join(cur, "/")
-		if t, ok := links[joined]; ok {
+		lens = append(lens, len(cur))
+		if cur != "" {
+			cur += "/"
+		}
+		cur += part
+		if r.budget -= int64(1 + len(cur)); r.budget < 0 {
+			return false, errLinkBudget
+		}
+		if t, ok := r.links[cur]; ok {
 			if strings.HasPrefix(t, "/") {
-				return false
+				return false, nil
 			}
-			// Resolve the link, then go on from where it leads.
-			rest := strings.Join(parts[i+1:], "/")
-			next := t
-			if rest != "" {
-				next = t + "/" + rest
+			if hops++; hops > maxLinkHops {
+				return false, nil // a loop, or too deep: refuse rather than guess
 			}
-			return insideTree(path.Dir(joined), next, links, hops+1)
+			// Go on from the link's folder with its target.
+			cur, lens = cur[:lens[len(lens)-1]], lens[:len(lens)-1]
+			push(t)
 		}
 	}
-	return true
+	return true, nil
 }
 
 // writeTar writes the entries as a tar.gz (names relative to the tree,
 // folders 0755, files 0644 or 0755, links as links, no owners, the
 // commit's time unknown so every time is the same fixed one).
-func writeTar(s *packStore, entries []entry, links map[string]string, w io.Writer) error {
+func writeTar(ctx context.Context, s *packStore, entries []entry, links map[string]string, w io.Writer) error {
 	gz := gzip.NewWriter(w)
 	tw := tar.NewWriter(gz)
 	when := time.Unix(0, 0).UTC()
-	for _, e := range entries {
+	for i, e := range entries {
+		if i%1024 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		h := &tar.Header{Name: e.path, ModTime: when, Format: tar.FormatPAX}
 		switch e.mode {
 		case modeTree:

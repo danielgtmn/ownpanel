@@ -468,7 +468,8 @@ func applyDelta(base, delta []byte, max int64) ([]byte, error) {
 	if dstSize > max {
 		return nil, limitf("the repository contains a file or object larger than %s", byteSize(max))
 	}
-	out := make([]byte, 0, dstSize)
+	// The announced size is untrusted: grow as data is written.
+	out := make([]byte, 0, min(dstSize, 64<<10))
 	for len(delta) > 0 {
 		op := delta[0]
 		delta = delta[1:]

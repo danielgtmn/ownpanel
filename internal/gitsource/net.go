@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -21,11 +22,31 @@ var allowPrivate bool
 // against repository addresses that point into the server's own network.
 func AllowPrivateHosts() { allowPrivate = true }
 
+// ownAddresses, when set, lists the server's own addresses (its public
+// addresses and those of its interfaces): a repository address may not
+// point back at the server itself. Set it with SetOwnAddresses.
+var ownAddresses atomic.Pointer[func() []netip.Addr]
+
+// SetOwnAddresses tells the package how to find the server's own
+// addresses, which are refused like private ones.
+func SetOwnAddresses(fn func() []netip.Addr) { ownAddresses.Store(&fn) }
+
 func publicAddr(ip netip.Addr) bool {
 	if allowPrivate {
 		return ip.IsValid()
 	}
-	return netcheck.Public(ip.AsSlice())
+	if !netcheck.Public(ip.AsSlice()) {
+		return false
+	}
+	if fn := ownAddresses.Load(); fn != nil {
+		ip = ip.Unmap()
+		for _, own := range (*fn)() {
+			if own.Unmap() == ip {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // errNotPublic is returned when a name resolves to an address that is not

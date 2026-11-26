@@ -30,7 +30,7 @@ func FuzzReadAdvert(f *testing.F) {
 	f.Add(b.Bytes())
 	f.Fuzz(func(t *testing.T, data []byte) {
 		p := newPktReader(bytes.NewReader(data))
-		if ad, err := readAdvert(p); err == nil {
+		if ad, err := readAdvert(p, "", maxAdvertBytes); err == nil {
 			_ = fetchRequest(ad, "1111111111111111111111111111111111111111")
 		}
 		_ = readUntilPack(newPktReader(bytes.NewReader(data)))

@@ -18,7 +18,10 @@ const (
 	// Limits on what the server announces before the pack.
 	maxRefs        = 100_000
 	maxAdvertBytes = 32 << 20
-	maxServerTexts = 4 << 10
+	// checkAdvertBytes bounds the advertisement when only branches are
+	// asked for (checks); fetching allows maxAdvertBytes.
+	checkAdvertBytes = 8 << 20
+	maxServerTexts   = 4 << 10
 	// What a server may send between the request and the pack (a depth
 	// of 1 for one commit needs a single shallow line).
 	maxLinesBeforePack = 1000
@@ -105,7 +108,10 @@ func (p *pktReader) next() ([]byte, error) {
 	}
 	data := p.buf[:n-4]
 	if _, err := io.ReadFull(p.r, data); err != nil {
-		return nil, io.ErrUnexpectedEOF
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, io.ErrUnexpectedEOF
+		}
+		return nil, err // a limit, a closed connection
 	}
 	return data, nil
 }
@@ -116,10 +122,13 @@ func writePkt(w *bytes.Buffer, s string) {
 
 func writeFlush(w *bytes.Buffer) { w.WriteString("0000") }
 
-// advert is what a server announces before the fetch (protocol v0).
+// advert is what a server announces before the fetch (protocol v0), as
+// far as the caller asked for it: refs holds only the branches kept.
 type advert struct {
 	refs map[string]string // name → object id
 	caps map[string]string // capability → value ("" if none)
+	// truncated: there were more branches than were kept.
+	truncated bool
 }
 
 func validOID(s string) bool {
@@ -135,10 +144,19 @@ func validOID(s string) bool {
 	return true
 }
 
-// readAdvert reads the ref advertisement up to its flush.
-func readAdvert(p *pktReader) (advert, error) {
+// readAdvert reads the ref advertisement up to its flush, at most
+// maxBytes of it. Only branches are kept: the one named branch, or (branch
+// "") the first MaxBranches; everything else a server announces (tags,
+// other refs, more branches) is read and dropped, so what is kept in
+// memory stays small whatever the server sends.
+func readAdvert(p *pktReader, branch string, maxBytes int) (advert, error) {
 	ad := advert{refs: map[string]string{}, caps: map[string]string{}}
-	total := 0
+	var want []byte
+	if branch != "" {
+		want = []byte("refs/heads/" + branch)
+	}
+	heads := []byte("refs/heads/")
+	total, seen := 0, 0
 	first := true
 	for {
 		line, err := p.next()
@@ -153,9 +171,9 @@ func readAdvert(p *pktReader) (advert, error) {
 		if err != nil {
 			return ad, err
 		}
-		total += len(line)
-		if total > maxAdvertBytes || len(ad.refs) > maxRefs {
-			return ad, protocolf("the server announces too many branches and tags")
+		total += len(line) + 4
+		if seen++; total > maxBytes || seen > maxRefs {
+			return ad, limitf("the server announces too many branches and tags")
 		}
 		if bytes.HasPrefix(line, []byte("ERR ")) {
 			return ad, &ServerError{Msg: serverText(line[4:])}
@@ -181,21 +199,32 @@ func readAdvert(p *pktReader) (advert, error) {
 				if k == "symref" && !strings.HasPrefix(v, "HEAD:") {
 					continue // only HEAD's matters here
 				}
-				ad.caps[k] = v
+				if len(ad.caps) < 64 {
+					ad.caps[k] = v
+				}
 			}
 			line = line[:nul]
 		}
-		oid, name, ok := strings.Cut(string(line), " ")
-		if !ok || !validOID(oid) || name == "" {
-			if strings.HasPrefix(string(line), "shallow ") {
+		sp := bytes.IndexByte(line, ' ')
+		if sp != 40 || len(line) == 41 || !validOID(string(line[:40])) {
+			if bytes.HasPrefix(line, []byte("shallow ")) {
 				continue
 			}
 			return ad, protocolf("bad ref line")
 		}
-		if name == "capabilities^{}" {
-			continue
+		name := line[41:]
+		switch {
+		case want != nil:
+			if bytes.Equal(name, want) {
+				ad.refs[string(name)] = string(line[:40])
+			}
+		case bytes.HasPrefix(name, heads):
+			if len(ad.refs) >= MaxBranches {
+				ad.truncated = true
+				continue
+			}
+			ad.refs[string(name)] = string(line[:40])
 		}
-		ad.refs[name] = oid
 	}
 }
 
