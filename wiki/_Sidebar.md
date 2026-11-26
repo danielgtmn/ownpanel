@@ -25,5 +25,6 @@
 - [[Security|Security]]
 - [[Architecture|Architecture]]
 - [[E-Mail architecture|E-Mail-Architecture]]
+- [[Groupware architecture (plan)|Groupware-Architecture]]
 - [[Development|Development]]
 - [[Roadmap|Roadmap]]
