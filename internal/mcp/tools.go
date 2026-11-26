@@ -161,6 +161,28 @@ type uploadLinkInput struct {
 	Live *bool  `json:"live,omitempty" jsonschema:"make the uploaded version live at once (default true); false only adds it, like publish_files with live false"`
 }
 
+type buildSiteInput struct {
+	Site    string            `json:"site" jsonschema:"name of an existing site"`
+	Files   []File            `json:"files" jsonschema:"every file of the source, e.g. package.json, package-lock.json, index.html, src/main.js"`
+	Command string            `json:"command" jsonschema:"build command, run with sh in the source folder; one command per line, e.g. npm ci then npm run build"`
+	Output  string            `json:"output" jsonschema:"folder with the built site, relative to the source, e.g. dist; . for the source itself"`
+	Image   string            `json:"image" jsonschema:"build image: node-24 or node-22"`
+	Env     map[string]string `json:"env,omitempty" jsonschema:"environment variables for the build command"`
+	Secrets map[string]string `json:"secrets,omitempty" jsonschema:"more environment variables whose values are blanked out of the log (keys, tokens)"`
+	Live    *bool             `json:"live,omitempty" jsonschema:"make the new version live at once (default true); false keeps the current version live, the new one can be opened at its preview_url"`
+}
+
+type buildSiteOutput struct {
+	Status     string `json:"status" jsonschema:"succeeded, failed, cancelled or skipped (a newer build of the site replaced it)"`
+	Reason     string `json:"reason,omitempty" jsonschema:"why it failed: exit (the command failed), timeout, memory, disk, output (the output folder is missing or cannot be published), source, internal"`
+	Message    string `json:"message,omitempty" jsonschema:"what happened, for people"`
+	ExitCode   int    `json:"exit_code,omitempty" jsonschema:"exit code of the build command when reason is exit"`
+	LogTail    string `json:"log_tail,omitempty" jsonschema:"the end of the build's log, with secrets blanked out"`
+	Version    string `json:"version,omitempty" jsonschema:"id of the new version after success"`
+	Live       bool   `json:"live" jsonschema:"whether the new version is what visitors see now"`
+	PreviewURL string `json:"preview_url,omitempty" jsonschema:"address where the new version can be opened; empty when there is no domain for previews"`
+}
+
 type publishOutput struct {
 	Site       siteInfo `json:"site"`
 	Version    string   `json:"version" jsonschema:"id of the new version"`
@@ -356,6 +378,38 @@ func newServer(p *panel.Service, version string) *sdk.Server {
 			ExpiresAt:   link.ExpiresAt.UTC().Format(time.RFC3339),
 			MaxSizeMB:   512,
 		}, nil
+	})
+
+	add(s, &sdk.Tool{
+		Name:  "build_site",
+		Title: "Build a site from its source",
+		Description: "Build a site from its source files on the server and publish the result as a new version. Only for " +
+			"administrators. Give every file of the source (e.g. package.json, the lock file, src/...), the build command " +
+			"(run with sh in the source folder, stops at the first failing line, e.g. \"npm ci\\nnpm run build\"), the output " +
+			"folder (e.g. dist) and the image (node-24 or node-22). The build runs isolated, with limited time, memory and " +
+			"network; it can download packages. The tool answers when the build has ended, which can take minutes. With " +
+			"live false the current version stays live and the new one can be checked at its preview_url first. A failed " +
+			"build changes nothing; the answer says why and shows the end of the build's log. Only one build of a site " +
+			"runs at a time; a newer one replaces one that waits. Limits of the source: 2000 files, 10 MB.",
+		Annotations: annotations("Build a site from its source", false, false, false),
+	}, func(ctx context.Context, c call, in buildSiteInput) (buildSiteOutput, error) {
+		data, err := buildArchive(in.Files)
+		if err != nil {
+			return buildSiteOutput{}, plainError(err.Error())
+		}
+		settings := panel.BuildSettings{Command: in.Command, Output: in.Output, Image: in.Image, Env: in.Env, Secrets: in.Secrets}
+		res, err := p.BuildSiteFromUpload(ctx, c.actor, in.Site, bytes.NewReader(data), settings, in.Live == nil || *in.Live)
+		if err != nil && (res.Status == "" || (panel.CodeOf(err) == "" && panel.KindOf(err) != panel.NotSynced)) {
+			return buildSiteOutput{}, err
+		}
+		out := buildSiteOutput{Status: res.Status, Reason: res.Reason, Message: res.Message, ExitCode: res.ExitCode, LogTail: res.LogTail}
+		if err != nil {
+			out.Message = capitalize(err.Error())
+		}
+		if pub := res.Publication; pub != nil {
+			out.Version, out.Live, out.PreviewURL = pub.Release, pub.Live, pub.PreviewURL
+		}
+		return out, nil
 	})
 
 	return s
