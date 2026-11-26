@@ -68,11 +68,11 @@ type Run struct {
 	ShortCommit  string `json:"short_commit"`
 	// CommitURL is the commit's page on GitHub, "" if the repository's
 	// name is not a plain owner/name.
-	CommitURL string `json:"commit_url,omitempty"`
-	Message      string `json:"message"`
-	AuthorName   string `json:"author_name"`
-	AuthorLogin  string `json:"author_login,omitempty"`
-	Pusher       string `json:"pusher,omitempty"`
+	CommitURL   string `json:"commit_url,omitempty"`
+	Message     string `json:"message"`
+	AuthorName  string `json:"author_name"`
+	AuthorLogin string `json:"author_login,omitempty"`
+	Pusher      string `json:"pusher,omitempty"`
 	// Detail says why a run was skipped, failed or cancelled.
 	Detail string `json:"detail,omitempty"`
 	// Waiting is set on a queued run while the panel cannot build yet.
