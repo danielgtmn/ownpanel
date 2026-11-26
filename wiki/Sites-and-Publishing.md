@@ -132,7 +132,9 @@ The panel keeps the newest five versions of a site. Besides them it always keeps
 - the **live version**, and
 - the version **going back** would return to: the newest version older than the live one that was live itself.
 
-Older versions are removed when a new one is published. So a burst of previews (for example one per pull request) can push out older previews, but never what is live or the version you would roll back to.
+Older versions are removed when a new one is published. So a burst of versions that are not live can push out older ones, but never what is live or the version you would roll back to.
+
+**Previews of pull requests** ([below](#previews-of-pull-requests)) do not count against these five: each site keeps the newest preview of each pull request, for at most 10 pull requests (those built most recently), besides its normal versions. However many pull requests there are, they cannot push out the live version, the one to go back to or the newest normal versions. A preview that is made live becomes a normal version.
 
 Making a version live is an atomic switch of a symlink (`current`), so visitors never see a half-written site, and no web server reload is needed.
 
@@ -156,6 +158,19 @@ Every kept version, live or not, can be opened on an address of its own once an 
 - **Certificates** are obtained only when a preview is opened for the first time, one per opened version, and only after the web server asked the panel that this exact name is a kept version. Names below the preview domain that are not previews get no certificate. See [[Security|Security]].
 - The preview domain and everything below it are reserved: no site, redirect, panel domain or mail server name may be below it.
 
+## Previews of pull requests
+
+A site linked to a GitHub repository builds every pull request against its branch as a version that is **not live**, with its own [preview address](#previews), and the panel posts the address on the pull request ([[GitHub|GitHub#pull-requests]]). Visitors keep seeing the live version.
+
+- **On by default** for pull requests from the same repository; switch it off with **Pull requests** in the Source section of the site page (`PUT /api/sites/{name}/source/previews`, MCP `set_site_pull_request_previews`). Who may change the site may change it. Linking the site anew keeps the choice.
+- **Pull requests from forks** are built only with **Also from forks** on (off by default), and then without the site's variables and with an empty cache of their own ([[GitHub|GitHub#pull-requests-from-forks]]).
+- Every new commit of the pull request builds a new preview that replaces the previous one: **one preview per pull request**. Its address changes with every build.
+- **Closing or merging** the pull request removes its preview. The live version and the one to go back to are never removed; a preview someone made live stays as a normal version.
+- The versions list marks such versions **Preview of pull request #n**; the Builds section has **Open preview** on the pull request's newest run.
+- **The link on the pull request:** with the key for private repositories; for public repositories a link to the run in the panel, where whoever may see the site finds the preview's link ([[GitHub|GitHub#who-sees-the-preview-link]]).
+- A failed build of a pull request changes nothing; its comment on GitHub says that it failed.
+- Without a [domain for previews](#previews), pull requests are still built, but their versions have no address.
+
 ## Source: repository and branch
 
 A site can be linked to a **repository and branch** its code comes from, with **publish on push** on or off. On the site page, the **Source** section shows the repository (with a link to it), the branch, whether a push publishes, and who linked it; **Link repository** or **Change** opens a dialog to choose the repository and one of its branches, **Unlink** removes the link.
@@ -166,6 +181,7 @@ A push to the linked branch is recorded as a run of the site and built with the 
 - **Who may link:** linking (and changing the branch or publish on push, which links anew) needs the same rights as changing the site (its owner or an administrator, a `write` token, a token limited to sites only for its sites) **and** the repository must be usable by that person: only administrators may use the connected repositories. A member therefore cannot link their site to an organisation's repository; to them those repositories do not exist. Members see a link an administrator made on their site and may unlink it.
 - **Checks:** the panel asks GitHub, as the connection, whether the repository is still shared with the panel and whether the branch exists, and refuses otherwise. Branch names follow Git's rules: at most 255 characters, no spaces or control characters, none of `~ ^ : ? * [ \`, no `..`, `//` or `@{`, no leading `-` or `/`, no part starting with `.` or ending in `.lock`, not `@` or `HEAD`.
 - **Status:** `linked`; `connection_missing` (the GitHub connection or its installation was removed: link again or unlink); `suspended` (access is paused on GitHub); `repository_missing` (the connection no longer sees the repository); `unchecked` (GitHub could not be asked; `problem` says why).
+- **Pull requests** against the branch are built as previews (on by default, see [above](#previews-of-pull-requests)); the Source section shows which ("Pull requests: previews", "…, also from forks", "no previews").
 - A site has at most one source. Deleting the site deletes its link; a new site of the same name starts without one. Linking and unlinking appear in the activity log (repository, branch and publish on push; never a token).
 - Later, any Git host with a deploy key ([#111](https://github.com/danielgtmn/ownpanel/issues/111)) is a second kind of source; the stored link already has room for it.
 

@@ -210,7 +210,7 @@ func addSourceTools(s *sdk.Server, p *panel.Service) {
 			"live, each with its own preview address (posted on the pull request, and removed when it is closed): " +
 			"those from the same repository (on by default) and those from forks (off by default; built without the " +
 			"site's variables and secrets). Takes effect from the next pull request or push to one.",
-		Annotations: annotations("Choose which pull requests get previews", false, false, true),
+		Annotations: reachesGitHub(annotations("Choose which pull requests get previews", false, false, true)),
 	}, func(ctx context.Context, c call, in sitePreviewsInput) (siteSourceOutput, error) {
 		st, err := p.SetSitePreviews(ctx, c.actor, in.Site, panel.SitePreviewsInput{PullRequests: in.PullRequests, Forks: in.Forks})
 		return sourceOutput(st), err
