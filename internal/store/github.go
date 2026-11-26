@@ -94,6 +94,11 @@ func (s *Store) GitHubApp(ctx context.Context, id int64) (GitHubApp, error) {
 	return scanGitHubApp(s.db.QueryRowContext(ctx, `SELECT `+githubAppCols+githubAppFrom+` WHERE a.id = ?`, id))
 }
 
+// GitHubAppByAppID returns the App with GitHub's id appID.
+func (s *Store) GitHubAppByAppID(ctx context.Context, appID int64) (GitHubApp, error) {
+	return scanGitHubApp(s.db.QueryRowContext(ctx, `SELECT `+githubAppCols+githubAppFrom+` WHERE a.app_id = ?`, appID))
+}
+
 // GitHubApps lists every App, oldest first.
 func (s *Store) GitHubApps(ctx context.Context) ([]GitHubApp, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+githubAppCols+githubAppFrom+` ORDER BY a.created_at, a.id`)
@@ -248,4 +253,33 @@ func (s *Store) ReplaceGitHubInstallations(ctx context.Context, appID int64, lis
 func (s *Store) SetGitHubRepositoryCount(ctx context.Context, id int64, n int) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE github_installations SET repository_count = ? WHERE id = ?`, n, id)
 	return err
+}
+
+// DeleteGitHubInstallation forgets an installation of an App (the panel's
+// id); sources linked through it show "connection missing". ErrNotFound if
+// the App has no such installation.
+func (s *Store) DeleteGitHubInstallation(ctx context.Context, appID, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM github_installations WHERE id = ? AND app_id = ?`, id, appID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return notFoundf("GitHub installation not found")
+	}
+	return nil
+}
+
+// SetGitHubInstallationSuspended records whether an installation of an App
+// (the panel's id) is suspended. ErrNotFound if the App has no such
+// installation.
+func (s *Store) SetGitHubInstallationSuspended(ctx context.Context, appID, id int64, suspended bool) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE github_installations SET suspended = ?, updated_at = ?
+		WHERE id = ? AND app_id = ?`, suspended, s.now(), id, appID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return notFoundf("GitHub installation not found")
+	}
+	return nil
 }

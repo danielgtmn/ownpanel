@@ -29,13 +29,17 @@ type SiteSource struct {
 	// DeployKey and NotifySecret are sealed (kind git, #111).
 	DeployKey    []byte
 	NotifySecret []byte
+	// RepositoryGone: GitHub reported that the installation no longer sees
+	// the repository (MarkRepositoryGone); linking again clears it.
+	RepositoryGone bool
 	CreatedBy    string // user name, "" if the user was removed
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
 
 const sourceCols = `s.site_name, s.kind, coalesce(s.installation_id, 0), coalesce(s.repository_id, 0), s.repository,
-	s.branch, s.publish_on_push, s.deploy_key, s.notify_secret, coalesce(u.name, ''), s.created_at, s.updated_at`
+	s.branch, s.publish_on_push, s.deploy_key, s.notify_secret, s.repository_gone, coalesce(u.name, ''), s.created_at,
+	s.updated_at`
 
 const sourceFrom = ` FROM site_sources s LEFT JOIN users u ON u.id = s.created_by`
 
@@ -43,7 +47,7 @@ func scanSource(row interface{ Scan(...any) error }) (SiteSource, error) {
 	var src SiteSource
 	var created, updated int64
 	err := row.Scan(&src.Site, &src.Kind, &src.InstallationID, &src.RepositoryID, &src.Repository, &src.Branch,
-		&src.PublishOnPush, &src.DeployKey, &src.NotifySecret, &src.CreatedBy, &created, &updated)
+		&src.PublishOnPush, &src.DeployKey, &src.NotifySecret, &src.RepositoryGone, &src.CreatedBy, &created, &updated)
 	if err != nil {
 		if noRows(err) {
 			return SiteSource{}, notFoundf("the site has no source")
@@ -101,7 +105,8 @@ func (s *Store) PutSiteSource(ctx context.Context, src SiteSource, by int64) (Si
 			ON CONFLICT (site_name) DO UPDATE SET kind = excluded.kind, installation_id = excluded.installation_id,
 				repository_id = excluded.repository_id, repository = excluded.repository, branch = excluded.branch,
 				publish_on_push = excluded.publish_on_push, deploy_key = excluded.deploy_key,
-				notify_secret = excluded.notify_secret, created_by = excluded.created_by, updated_at = excluded.updated_at`,
+				notify_secret = excluded.notify_secret, repository_gone = 0, created_by = excluded.created_by,
+				updated_at = excluded.updated_at`,
 			src.Site, src.Kind, nullID(src.InstallationID), nullID(src.RepositoryID), src.Repository, src.Branch,
 			src.PublishOnPush, src.DeployKey, src.NotifySecret, nullID(by), now, now)
 		return err
@@ -117,6 +122,20 @@ func (s *Store) RenameSourceRepository(ctx context.Context, repositoryID int64, 
 	_, err := s.db.ExecContext(ctx, `UPDATE site_sources SET repository = ?
 		WHERE kind = 'github' AND repository_id = ? AND repository <> ?`, fullName, repositoryID, fullName)
 	return err
+}
+
+// MarkRepositoryGone records whether GitHub reported that an installation
+// no longer sees a repository (installationID 0: whichever installation
+// the sources use). It returns how many sources changed.
+func (s *Store) MarkRepositoryGone(ctx context.Context, installationID, repositoryID int64, gone bool) (int, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE site_sources SET repository_gone = ?
+		WHERE kind = 'github' AND repository_id = ? AND (? = 0 OR installation_id = ?) AND repository_gone <> ?`,
+		gone, repositoryID, installationID, installationID, gone)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 // DeleteSiteSource unlinks a site; ErrNotFound if it had no source.
