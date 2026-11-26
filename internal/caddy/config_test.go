@@ -288,3 +288,66 @@ func TestBuildMailSetupRouteBeforeRedirectsAndSites(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildPreviews(t *testing.T) {
+	site := Site{Name: "a", Domains: []string{"a.example.com"}, Root: "/sites/a/current",
+		Previews: []Preview{{Label: "abc123", Root: "/sites/a/releases/r1", Key: strings.Repeat("k", 26)}}}
+	opts := Options{AdminListen: "127.0.0.1:2019", StorageDir: "/data/caddy", TLSMode: TLSACME, HTTPPort: 80, HTTPSPort: 443,
+		PreviewDomain: "preview.example.net", PreviewPermission: "http://127.0.0.1:8600/ask", ACMEEmail: "a@example.com"}
+	cfg, err := Build(opts, []Site{site})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(cfg)
+	got := string(b)
+	for _, want := range []string{
+		`"host":["*.preview.example.net"]`,
+		`"host":["abc123.preview.example.net"]`,
+		`"root":"/sites/a/releases/r1"`,
+		`"X-Robots-Tag":["noindex, nofollow"]`,
+		`"on_demand":{"permission":{"endpoint":"http://127.0.0.1:8600/ask","module":"http"}}`,
+		`{"issuers":[{"email":"a@example.com","module":"acme"}],"on_demand":true,"subjects":["*.preview.example.net"]}`,
+		`"skip_certificates":["*.preview.example.net"]`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("config misses %s", want)
+		}
+	}
+	// The preview policy comes before the catch-all one.
+	if strings.Index(got, `"on_demand":true`) > strings.Index(got, `{"issuers":[{"email":"a@example.com","module":"acme"}]}`) {
+		t.Error("catch-all policy before the preview policy")
+	}
+
+	// Without previews nothing of it is there.
+	opts.PreviewDomain = ""
+	cfg, _ = Build(opts, []Site{site})
+	b, _ = json.Marshal(cfg)
+	if s := string(b); strings.Contains(s, "on_demand") || strings.Contains(s, "abc123") || strings.Contains(s, "skip_certificates") {
+		t.Errorf("previews in a config without a preview domain: %s", s)
+	}
+
+	bad := map[string]func(o *Options, s *Site){
+		"no permission":   func(o *Options, s *Site) { o.PreviewPermission = "" },
+		"bad label":       func(o *Options, s *Site) { s.Previews[0].Label = "ABC.def" },
+		"short key":       func(o *Options, s *Site) { s.Previews[0].Key = "short" },
+		"key with braces": func(o *Options, s *Site) { s.Previews[0].Key = strings.Repeat("k", 20) + "{x}" },
+		"relative root":   func(o *Options, s *Site) { s.Previews[0].Root = "releases/r1" },
+		"duplicate label": func(o *Options, s *Site) { s.Previews = append(s.Previews, s.Previews[0]) },
+		"wildcard domain": func(o *Options, s *Site) { o.PreviewDomain = "*.example.net" },
+	}
+	for name, change := range bad {
+		o := opts
+		o.PreviewDomain = "preview.example.net"
+		s := site
+		s.Previews = slices.Clone(site.Previews)
+		change(&o, &s)
+		if _, err := Build(o, []Site{s}); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+	// Plain HTTP needs no permission address.
+	opts.PreviewDomain, opts.PreviewPermission, opts.TLSMode = "preview.example.net", "", TLSOff
+	if _, err := Build(opts, []Site{site}); err != nil {
+		t.Fatal(err)
+	}
+}
