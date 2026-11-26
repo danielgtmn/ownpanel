@@ -140,7 +140,7 @@ type GitHub struct {
 // GitHubApp is one connection: an App the panel created. Never its
 // secrets.
 type GitHubApp struct {
-	ID        int64  `json:"id"`
+	ID        string `json:"id"`
 	AppID     int64  `json:"app_id"`
 	Name      string `json:"name"`
 	Slug      string `json:"slug"`
@@ -309,9 +309,9 @@ const (
 type githubFlow struct {
 	purpose string
 	session string
-	userID  int64
+	userID  string
 	org     string // flowCreate: the organisation, "" for the person's own account
-	appID   int64  // flowInstall: the panel's id of the App
+	appID   string // flowInstall: the panel's id of the App
 	expires time.Time
 }
 
@@ -488,7 +488,7 @@ func (s *Service) GitHubConnections(ctx context.Context, a Actor) (GitHub, error
 	if err != nil {
 		return GitHub{}, storeError(err)
 	}
-	insts, err := s.store.GitHubInstallations(ctx, 0)
+	insts, err := s.store.GitHubInstallations(ctx, "")
 	if err != nil {
 		return GitHub{}, storeError(err)
 	}
@@ -644,7 +644,7 @@ func (s *Service) FinishGitHubApp(ctx context.Context, a Actor, code, state stri
 
 // StartGitHubInstall returns GitHub's page where the App of a connection
 // is installed and its repositories are chosen.
-func (s *Service) StartGitHubInstall(ctx context.Context, a Actor, id int64) (GitHubStart, error) {
+func (s *Service) StartGitHubInstall(ctx context.Context, a Actor, id string) (GitHubStart, error) {
 	if err := needGitHubBrowser(a); err != nil {
 		return GitHubStart{}, err
 	}
@@ -700,14 +700,14 @@ func (s *Service) FinishGitHubInstall(ctx context.Context, a Actor, installation
 	return s.githubApp(context.WithoutCancel(ctx), app.ID)
 }
 
-func installationRow(appID int64, i github.Installation) store.GitHubInstallation {
+func installationRow(appID string, i github.Installation) store.GitHubInstallation {
 	return store.GitHubInstallation{
 		ID: i.ID, AppID: appID, AccountLogin: i.Account.Login, AccountType: i.Account.Type,
 		RepositorySelection: i.RepositorySelection, Suspended: i.Suspended,
 	}
 }
 
-func (s *Service) githubApp(ctx context.Context, id int64) (GitHubApp, error) {
+func (s *Service) githubApp(ctx context.Context, id string) (GitHubApp, error) {
 	app, err := s.store.GitHubApp(ctx, id)
 	if err != nil {
 		return GitHubApp{}, storeError(err)
@@ -907,7 +907,7 @@ func (s *Service) githubReadToken(ctx context.Context, installationID, repositor
 // DeleteGitHubApp forgets a connection: its stored key and secrets and its
 // installations. The App itself stays on GitHub until it is deleted there
 // (at SettingsURL); without its key the panel can no longer use it.
-func (s *Service) DeleteGitHubApp(ctx context.Context, a Actor, id int64) (GitHubRemoved, error) {
+func (s *Service) DeleteGitHubApp(ctx context.Context, a Actor, id string) (GitHubRemoved, error) {
 	if err := needAdmin(a); err != nil {
 		return GitHubRemoved{}, err
 	}

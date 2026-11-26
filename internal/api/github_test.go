@@ -165,7 +165,7 @@ func TestGitHubConnectOverHTTP(t *testing.T) {
 	bodies = append(bodies, rec.Body.String())
 	app := decode[panel.GitHubApp](t, rec)
 
-	rec = e.as("POST", "/api/github/apps/"+strconv.FormatInt(app.ID, 10)+"/install", "")
+	rec = e.as("POST", "/api/github/apps/"+app.ID+"/install", "")
 	if rec.Code != 200 {
 		t.Fatalf("install: %d %s", rec.Code, rec.Body)
 	}
@@ -201,7 +201,7 @@ func TestGitHubConnectOverHTTP(t *testing.T) {
 	bodies = append(bodies, rec.Body.String())
 	rec = e.as("GET", "/api/github", "")
 	bodies = append(bodies, rec.Body.String())
-	rec = e.as("DELETE", "/api/github/apps/"+strconv.FormatInt(app.ID, 10), "")
+	rec = e.as("DELETE", "/api/github/apps/"+app.ID, "")
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"settings_url":"`+gh.URL+`/organizations/acme/settings/apps/`) {
 		t.Fatalf("remove: %d %s", rec.Code, rec.Body)
 	}

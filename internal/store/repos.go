@@ -218,6 +218,49 @@ type noForwardingRow struct {
 	MailboxID string `db:",unique,ref=mailboxes,cascade"`
 }
 
+// githubAppRow is a GitHub App the panel created. AppID is GitHub's id of
+// the App (external data, unique); the row id is the panel's own.
+// OwnerType is "User" or "Organization", checked in Go (checkGitHubApp).
+// PrivateKey, WebhookSecret and ClientSecret are sealed by the panel
+// (internal/panel/github.go names the purposes); they are never stored in
+// the clear and never leave the panel.
+type githubAppRow struct {
+	ID            string
+	AppID         int64 `db:",unique"`
+	Slug          string
+	Name          string
+	ClientID      string
+	OwnerLogin    string
+	OwnerType     string
+	HTMLURL       string `db:"html_url"`
+	PrivateKey    []byte
+	WebhookSecret []byte
+	ClientSecret  []byte
+	CreatedBy     *string `db:",ref=users,setnull,index"`
+	CreatedAt     time.Time
+	LastCheckedAt *time.Time
+	LastError     string
+}
+
+// githubInstallationRow is an installation as GitHub last reported it
+// (GitHub stays the source of truth; a refresh replaces the rows of an
+// App). The id is GitHub's installation id in decimal: it is the natural
+// key, GitHub's webhooks and the install redirect name it, and it never
+// changes. AccountType ("User", "Organization") and RepositorySelection
+// ("all", "selected") are checked in Go (checkGitHubInstallation).
+// RepositoryCount is nil until the repositories were listed once.
+type githubInstallationRow struct {
+	ID                  string
+	AppID               string `db:",ref=github_apps,cascade,index"`
+	AccountLogin        string
+	AccountType         string
+	RepositorySelection string
+	Suspended           bool
+	RepositoryCount     *int
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
 // formatRow marks the storage format: a row with id formatAblage means the
 // database is kept by ablage (legacy.go).
 type formatRow struct {
@@ -247,6 +290,8 @@ type repos struct {
 	appPasswords *ablage.Repository[appPasswordRow]
 	grants       *ablage.Repository[grantRow]
 	noForwarding *ablage.Repository[noForwardingRow]
+	githubApps   *ablage.Repository[githubAppRow]
+	githubInsts  *ablage.Repository[githubInstallationRow]
 	format       *ablage.Repository[formatRow]
 }
 
@@ -298,6 +343,10 @@ func newRepos(st ablage.Store) (repos, error) {
 	add(err)
 	r.noForwarding, err = ablage.NewRepository[noForwardingRow](st, "mailbox_no_forwarding")
 	add(err)
+	r.githubApps, err = ablage.NewRepository[githubAppRow](st, "github_apps")
+	add(err)
+	r.githubInsts, err = ablage.NewRepository[githubInstallationRow](st, "github_installations")
+	add(err)
 	r.format, err = ablage.NewRepository[formatRow](st, "store_format")
 	add(err)
 	return r, errors.Join(errs...)
@@ -326,6 +375,8 @@ func (r repos) with(tx ablage.Store) repos {
 		appPasswords: r.appPasswords.With(tx),
 		grants:       r.grants.With(tx),
 		noForwarding: r.noForwarding.With(tx),
+		githubApps:   r.githubApps.With(tx),
+		githubInsts:  r.githubInsts.With(tx),
 		format:       r.format.With(tx),
 	}
 }

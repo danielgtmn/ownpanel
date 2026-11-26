@@ -1,4 +1,4 @@
-import { request } from '../../shared/api/index.ts'
+import { encodeSegment, request } from '../../shared/api/index.ts'
 
 export type GitHubInstallation = {
   id: number
@@ -11,7 +11,9 @@ export type GitHubInstallation = {
 }
 
 export type GitHubConnection = {
-  id: number
+  /** The panel's id of the connection. */
+  id: string
+  /** GitHub's id of the app. */
   app_id: number
   name: string
   slug: string
@@ -46,8 +48,8 @@ export const finishConnecting = (code: string, state: string) =>
   request<GitHubConnection>('/github/apps/finish', { method: 'POST', body: { code, state } })
 
 /** Returns GitHub's page where the repositories are chosen. */
-export const startChoosingRepositories = (id: number) =>
-  request<{ url: string }>(`/github/apps/${id}/install`, { method: 'POST' })
+export const startChoosingRepositories = (id: string) =>
+  request<{ url: string }>(`/github/apps/${encodeSegment(id)}/install`, { method: 'POST' })
 
 export const finishChoosingRepositories = (installationId: number, state: string) =>
   request<GitHubConnection>('/github/installations', {
@@ -55,7 +57,7 @@ export const finishChoosingRepositories = (installationId: number, state: string
     body: { installation_id: installationId, state },
   })
 
-export const removeConnection = (id: number) => request<GitHubRemoved>(`/github/apps/${id}`, { method: 'DELETE' })
+export const removeConnection = (id: string) => request<GitHubRemoved>(`/github/apps/${encodeSegment(id)}`, { method: 'DELETE' })
 
 /** What the address says when GitHub sent the person back to the settings. */
 export type GitHubReturn =
