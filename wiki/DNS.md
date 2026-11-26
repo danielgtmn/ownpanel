@@ -64,7 +64,7 @@ The DNS page and the sidebar list the domains that are **in the panel**:
 
 The page of a domain (**`#/d/<domain>`**) offers **Manage DNS here** when one of your accounts has its zone, or a link to create it when none has (or to connect an account when you have none). For a domain with nothing on it yet, it links to creating a site, a redirect or e-mail for it.
 
-A domain you added whose DNS is managed elsewhere has **Remove from the panel** on its page. That removes only the entry; nothing changes at any provider, and sites, redirects and e-mail stay. While something of yours still uses a name in the domain, it stays in the sidebar through that use, and the panel says so. These entries are per person: nobody else sees yours, administrators included.
+A domain you added whose DNS is managed elsewhere has **Remove from the panel** on its page. That removes only the entry; nothing changes at any provider, and sites, redirects and e-mail stay. While something of yours still uses a name in the domain, it stays in the sidebar through that use, and the panel says so. These entries are per person: nobody else sees yours, administrators included. Once you manage its DNS here instead (choosing its zone from your accounts, **Manage DNS here**, or creating it at Hetzner), the entry is removed on its own, so the domain is not listed twice.
 
 **Stop managing here** on a zone's page takes a chosen domain out of the panel. The zone and its records stay at Hetzner unchanged, and you can add it again any time. A domain that something of yours uses cannot be taken out; the page says what uses it.
 

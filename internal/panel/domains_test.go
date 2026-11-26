@@ -145,3 +145,46 @@ func TestDomainsWithDNSElsewhere(t *testing.T) {
 		t.Fatalf("activity: %v, want %v", seen, want)
 	}
 }
+
+// Managing the DNS of a domain entered by hand, by choosing its zone or by
+// creating it, forgets the hand-made entry; someone else's entry stays.
+func TestManagingDNSDropsTheHandEntry(t *testing.T) {
+	d := newDNSWorld(t)
+	ctx := context.Background()
+	names := func(a Actor) []string {
+		t.Helper()
+		list, err := d.svc.Domains(ctx, a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := []string{}
+		for _, x := range list {
+			out = append(out, x.Name)
+		}
+		return out
+	}
+	for _, name := range []string{"other.org", "fresh.org", "kept.org"} {
+		if _, err := d.svc.AddDomain(ctx, bob, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := d.svc.AddDomain(ctx, admin, "other.org"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.svc.AdoptDNSZone(ctx, bob, d.bobConn, "other.org"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.svc.CreateDNSZone(ctx, bob, d.bobConn, "fresh.org"); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(bob); !reflect.DeepEqual(got, []string{"kept.org"}) {
+		t.Fatalf("bob's entries: %v", got)
+	}
+	if got := names(admin); !reflect.DeepEqual(got, []string{"other.org"}) {
+		t.Fatalf("someone else's entry: %v", got)
+	}
+	// Choosing a zone without an entry is fine.
+	if _, err := d.svc.AdoptDNSZone(ctx, bob, d.bobConn, "other.org"); err != nil {
+		t.Fatal(err)
+	}
+}

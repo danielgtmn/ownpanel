@@ -96,6 +96,7 @@ func (s *Service) CreateDNSZone(ctx context.Context, a Actor, connID int64, name
 		slog.Error("could not mark a created DNS zone as managed", "connection", c.ID, "zone", z.Name, "err", err)
 	} else {
 		v.Adopted = true
+		s.dropHandEntry(ctx, a, z.Name)
 	}
 	return v, nil
 }
@@ -292,6 +293,7 @@ func (s *Service) AdoptDNSZone(ctx context.Context, a Actor, connID int64, zone 
 	if err != nil {
 		return DNSZone{}, storeError(err)
 	}
+	s.dropHandEntry(ctx, a, z.Name)
 	if created {
 		s.record(ctx, a, "dns.zone.adopt", z.Name, fmt.Sprintf("connection %q", c.Name))
 	}
@@ -301,6 +303,19 @@ func (s *Service) AdoptDNSZone(ctx context.Context, a Actor, connID int64, zone 
 		return DNSZone{}, err
 	}
 	return v, nil
+}
+
+// dropHandEntry forgets the actor's entry for a domain entered by hand once
+// its DNS is managed here, so the domain is not in the panel twice. Failing
+// to do so is only logged: the entry is harmless and can be removed later.
+func (s *Service) dropHandEntry(ctx context.Context, a Actor, zone string) {
+	err := s.store.RemoveDomain(context.WithoutCancel(ctx), a.UserID, zone)
+	switch {
+	case err == nil:
+		s.record(ctx, a, "domain.remove", zone, "DNS is now managed in the panel")
+	case !errors.Is(err, store.ErrNotFound):
+		slog.Error("could not forget a domain entered by hand", "zone", zone, "err", err)
+	}
 }
 
 // ReleaseDNSZone stops managing a zone in the panel; nothing is deleted at
