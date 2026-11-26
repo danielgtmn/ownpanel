@@ -1,7 +1,18 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { ConnectionRow } from './GitHubSection.tsx'
-import { readGitHubReturn, repositoriesLabel, validateOrganization, type GitHubConnection, type GitHubInstallation } from './github.ts'
+import { ConnectionRow, SitesWithoutConnection } from './GitHubSection.tsx'
+import {
+  readGitHubReturn,
+  repositoriesLabel,
+  sitesLabel,
+  sitesOf,
+  sortRepositories,
+  validateOrganization,
+  type GitHubConnection,
+  type GitHubInstallation,
+  type GitHubRepository,
+} from './github.ts'
+import { RepositoryList } from './RepositoriesDialog.tsx'
 
 const installation: GitHubInstallation = {
   id: 7,
@@ -11,6 +22,7 @@ const installation: GitHubInstallation = {
   suspended: false,
   repository_count: 3,
   settings_url: 'https://github.com/organizations/acme/settings/installations/7',
+  sites: [],
 }
 
 const connection: GitHubConnection = {
@@ -96,5 +108,63 @@ describe('a connection', () => {
       <ConnectionRow connection={{ ...connection, last_error: 'GitHub no longer accepts the connection.' }} onRemove={remove} />,
     )
     expect(html).toContain('data-tone="problem">GitHub no longer accepts the connection.</p>')
+  })
+})
+
+describe('linked sites and repositories', () => {
+  const site = { site: 'blog', repository: 'acme/website', repository_id: 2, branch: 'main' }
+  const repo = (id: number, name: string): GitHubRepository => ({
+    id,
+    installation_id: 7,
+    owner: 'acme',
+    name,
+    full_name: `acme/${name}`,
+    private: id === 2,
+    archived: id === 3,
+    default_branch: 'main',
+    html_url: `https://github.com/acme/${name}`,
+  })
+
+  it('says how many sites an account is used by and offers its repositories', () => {
+    const html = renderToStaticMarkup(
+      <ConnectionRow
+        connection={{ ...connection, installations: [{ ...installation, sites: [site] }] }}
+        onRemove={remove}
+        onShowRepositories={() => undefined}
+      />,
+    )
+    expect(html).toContain('used by 1 site')
+    expect(html).toMatch(/<button[^>]*>Show repositories<span class="visually-hidden"> of acme<\/span><\/button>/)
+    expect(sitesLabel(2)).toBe('2 sites')
+  })
+
+  it('lists repositories with the linked ones first', () => {
+    const list = [repo(1, 'api'), repo(3, 'old'), repo(2, 'website')]
+    expect(sortRepositories(list, [site]).map((r) => r.name)).toEqual(['website', 'api', 'old'])
+    expect(sitesOf(repo(2, 'renamed'), [site])).toEqual([site])
+    const html = renderToStaticMarkup(
+      <RepositoryList data={{ repositories: list, truncated: true }} installation={{ ...installation, sites: [site] }} />,
+    )
+    expect(html).toContain('href="https://github.com/acme/website"')
+    expect(html).toContain('Private')
+    expect(html).toContain('Archived')
+    expect(html).toContain('href="#/sites/blog"')
+    expect(html).toContain('Only the first 3 repositories are shown.')
+  })
+
+  it('says when GitHub lets the panel see none', () => {
+    const html = renderToStaticMarkup(
+      <RepositoryList data={{ repositories: [], truncated: false }} installation={installation} />,
+    )
+    expect(html).toContain('GitHub lets the panel see no repositories of acme right now.')
+    expect(html).toContain('Choose some on GitHub')
+  })
+
+  it('points to sites whose connection was removed', () => {
+    expect(renderToStaticMarkup(<SitesWithoutConnection sites={[]} />)).toBe('')
+    const html = renderToStaticMarkup(<SitesWithoutConnection sites={[site]} />)
+    expect(html).toContain('This site is linked to a repository whose connection was removed.')
+    expect(html).toContain('href="#/sites/blog"')
+    expect(html).toContain('acme/website')
   })
 })
