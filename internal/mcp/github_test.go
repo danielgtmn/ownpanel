@@ -111,9 +111,49 @@ func TestGitHubTools(t *testing.T) {
 	refused(t, call_(t, bcs, "get_github_status", nil), "only administrators")
 	refused(t, call_(t, bcs, "list_github_repositories", map[string]any{"installation_id": id}), "only administrators")
 
+	// Link a site to the repository, change it, unlink it.
+	wcs := e.connect(t, e.write)
+	var site siteOutput
+	ok(t, call_(t, wcs, "create_site", map[string]any{"name": "blog", "domains": []string{"blog.example.com"}}), &site)
+	var src siteSourceOutput
+	ok(t, call_(t, wcs, "get_site_source", map[string]any{"site": "blog"}), &src)
+	if src.Source != nil || src.PublishingAvailable {
+		t.Fatalf("before linking: %+v", src)
+	}
+	var linkable linkableRepositoriesOutput
+	ok(t, call_(t, wcs, "list_site_source_repositories", map[string]any{"site": "blog"}), &linkable)
+	if !linkable.Connected || len(linkable.Repositories) != 1 || linkable.Repositories[0].FullName != "acme/site" {
+		t.Fatalf("linkable: %+v", linkable)
+	}
+	r := linkable.Repositories[0]
+	var branches panel.SourceBranches
+	ok(t, call_(t, wcs, "list_site_source_branches", map[string]any{"site": "blog", "installation_id": r.InstallationID, "repository_id": r.RepositoryID}), &branches)
+	if len(branches.Branches) != 1 || branches.Branches[0] != "main" {
+		t.Fatalf("branches: %+v", branches)
+	}
+	link := map[string]any{"site": "blog", "installation_id": r.InstallationID, "repository_id": r.RepositoryID, "branch": "main", "publish_on_push": true}
+	ok(t, call_(t, wcs, "link_site_source", link), &src)
+	if src.Source == nil || src.Source.Repository != "acme/site" || src.Source.Status != "linked" || !src.Source.PublishOnPush {
+		t.Fatalf("linked: %+v", src)
+	}
+	refused(t, call_(t, wcs, "link_site_source", with(link, "branch", "-x")), "not a valid branch name")
+	refused(t, call_(t, wcs, "link_site_source", with(link, "branch", "gone")), "has no branch")
+	refused(t, call_(t, cs, "link_site_source", link), "can only read")
+	ok(t, call_(t, cs, "get_site_source", map[string]any{"site": "blog"}), &src)
+	if src.Source == nil || src.Source.Branch != "main" {
+		t.Fatalf("read token sees: %+v", src)
+	}
+	var unlinked unlinkSourceOutput
+	ok(t, call_(t, wcs, "unlink_site_source", map[string]any{"site": "blog"}), &unlinked)
+	refused(t, call_(t, wcs, "unlink_site_source", map[string]any{"site": "blog"}), "no source")
+	// A member cannot link their site to the organisation's repository.
+	ok(t, call_(t, bcs, "create_site", map[string]any{"name": "bobs", "domains": []string{"bobs.example.com"}}), &site)
+	refused(t, call_(t, bcs, "link_site_source", with(link, "site", "bobs")), "not found")
+	refused(t, call_(t, bcs, "get_site_source", map[string]any{"site": "blog"}), "not found")
+
 	// No secret in any answer.
 	fake, _ := gh.App(app.AppID)
-	for _, res := range []any{status, repos} {
+	for _, res := range []any{status, repos, linkable, branches, src} {
 		b, _ := json.Marshal(res)
 		s := strings.ToLower(string(b))
 		for _, secret := range []string{fake.WebhookSecret, fake.ClientSecret, "private key", "ghs_"} {
