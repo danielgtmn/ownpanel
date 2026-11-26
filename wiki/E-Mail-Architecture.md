@@ -815,7 +815,11 @@ separate web app on top of the mail service; decided later.
   `RuntimeDirectory=ownpanel-mail` (0750), `UMask=0077`,
   `AmbientCapabilities=CAP_NET_BIND_SERVICE`,
   `CapabilityBoundingSet=CAP_NET_BIND_SERVICE`, `NoNewPrivileges`,
-  `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`.
+  `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`. Resource limits as
+  a safety net (one process serves every mailbox): `GOMEMLIMIT=1280MiB`,
+  `MemoryHigh=1536M`, `MemoryMax=2G` (the service is killed and restarts
+  above it), `TasksMax=1024`. Normal use stays far below; change them with
+  `systemctl edit ownpanel-mail` on servers with very many mailboxes.
 - Every binary update restarts the service. On stop it refuses new
   connections with `421`, finishes running transactions (bounded), then exits.
 - Development: `scripts/dev.sh` starts the service with high ports (2525,
