@@ -5,7 +5,8 @@
 //	go run ./internal/github/githubtest/fakegithub -listen 127.0.0.1:9101
 //	bin/ownpaneld -github-url http://127.0.0.1:9101 …
 //
-// Its pages confirm at once (no sign-in, nothing to click). Apps created
+// Creating the App asks for one click, as on GitHub; installing confirms
+// at once with all of the account's repositories chosen. Apps created
 // for the person's own account belong to "octo-admin". It is not part of
 // the panel's binary.
 package main
@@ -28,6 +29,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer srv.Close()
+	srv.AskToConfirm = true
 	for _, r := range []struct {
 		owner, name string
 		private     bool

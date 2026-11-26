@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"html"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -115,6 +116,11 @@ type Server struct {
 	User string
 	// Now is the fake's clock.
 	Now func() time.Time
+	// AskToConfirm makes the manifest form answer with a page and a
+	// "Create GitHub App" button, as GitHub does, instead of redirecting
+	// back at once. A browser needs it: the panel's page only allows its
+	// form to go to GitHub, and that rule also covers redirects.
+	AskToConfirm bool
 
 	mu       sync.Mutex
 	nextID   int64
@@ -342,6 +348,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /organizations/{org}/settings/apps/new", func(w http.ResponseWriter, r *http.Request) {
 		s.manifestForm(w, r, r.PathValue("org"))
 	})
+	mux.HandleFunc("POST /settings/apps/confirm", s.confirmForm)
 	mux.HandleFunc("GET /apps/{slug}/installations/new", s.installPage)
 	mux.HandleFunc("GET /apps/{slug}", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "App page") })
 	// API.
@@ -372,11 +379,42 @@ func (s *Server) handler() http.Handler {
 }
 
 func (s *Server) manifestForm(w http.ResponseWriter, r *http.Request, org string) {
+	raw := r.PostFormValue("manifest")
+	var m Manifest
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		http.Error(w, "invalid manifest", http.StatusBadRequest)
+		return
+	}
+	state := r.URL.Query().Get("state")
+	if s.AskToConfirm {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="color-scheme" content="light dark"><title>Create GitHub App</title></head>
+<body><h1>Create GitHub App (stand-in)</h1><p>App %s for %s</p>
+<form method="post" action="/settings/apps/confirm"><input type="hidden" name="manifest" value="%s"><input type="hidden" name="org" value="%s"><input type="hidden" name="state" value="%s">
+<button type="submit">Create GitHub App</button></form></body></html>`,
+			html.EscapeString(m.Name), html.EscapeString(orDefault(org, s.User)), html.EscapeString(raw), html.EscapeString(org), html.EscapeString(state))
+		return
+	}
+	s.createAndReturn(w, r, m, org, state)
+}
+
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+func (s *Server) confirmForm(w http.ResponseWriter, r *http.Request) {
 	var m Manifest
 	if err := json.Unmarshal([]byte(r.PostFormValue("manifest")), &m); err != nil {
 		http.Error(w, "invalid manifest", http.StatusBadRequest)
 		return
 	}
+	s.createAndReturn(w, r, m, r.PostFormValue("org"), r.PostFormValue("state"))
+}
+
+func (s *Server) createAndReturn(w http.ResponseWriter, r *http.Request, m Manifest, org, state string) {
 	s.mu.Lock()
 	code, err := s.createCode(m, org)
 	s.mu.Unlock()
@@ -385,8 +423,8 @@ func (s *Server) manifestForm(w http.ResponseWriter, r *http.Request, org string
 		return
 	}
 	q := url.Values{"code": {code}}
-	if st := r.URL.Query().Get("state"); st != "" {
-		q.Set("state", st)
+	if state != "" {
+		q.Set("state", state)
 	}
 	http.Redirect(w, r, m.RedirectURL+"?"+q.Encode(), http.StatusFound)
 }
