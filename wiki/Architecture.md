@@ -53,7 +53,7 @@ If a change is saved but the sync fails, the API answers `502` with "saved, but 
 |---|---|
 | `cmd/ownpaneld` | Entry point: the `serve` and `backup` commands, flags, wiring, routing of `/api/`, `/mcp` and the web app |
 | `internal/panel` | All operations and **all permission checks**; actors, tokens, sign-in (through sesam's Go API), password reset by e-mail, upload links, DNS rules. Every front door calls this |
-| `internal/store` | SQLite database, migrations (`internal/store/migrations`), validation of names and domains |
+| `internal/store` | the panel's data in [ablage](https://github.com/danielgtmn/ablage) repositories on SQLite (`repos.go`), the one-time conversion of databases from before (`legacy.go`), validation of names and domains |
 | `internal/caddy` | Caddy config builder and admin API client |
 | `internal/deploy` | Versions ("releases"): unpacking archives, activation, going back, pruning |
 | `internal/dns` | Provider interface, zone lookup, "does this domain point here?", lookups at authoritative nameservers; `dns/hetzner` is the Hetzner Cloud client |

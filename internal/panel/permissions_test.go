@@ -12,12 +12,12 @@ import (
 // Users of the permission tests: root (1, admin, from newService),
 // bob (2, member). Sites: rootsite (root), bobsite and bobother (bob).
 var (
-	bob          = Actor{UserID: 2, Name: "bob", Via: ViaSession}
-	bobRead      = Actor{UserID: 2, Name: "bob", Via: ViaToken, ReadOnly: true, tokenName: "r"}
-	bobLimited   = Actor{UserID: 2, Name: "bob", Via: ViaToken, Sites: []string{"bobsite"}, tokenName: "l"}
-	rootRead     = Actor{UserID: 1, Name: "root", Admin: true, Via: ViaToken, ReadOnly: true, tokenName: "r"}
-	rootLimited  = Actor{UserID: 1, Name: "root", Admin: true, Via: ViaToken, Sites: []string{"rootsite"}, tokenName: "l"}
-	rootWriteTok = Actor{UserID: 1, Name: "root", Admin: true, Via: ViaToken, tokenName: "w"}
+	bob          = Actor{UserID: "2", Name: "bob", Via: ViaSession}
+	bobRead      = Actor{UserID: "2", Name: "bob", Via: ViaToken, ReadOnly: true, tokenName: "r"}
+	bobLimited   = Actor{UserID: "2", Name: "bob", Via: ViaToken, Sites: []string{"bobsite"}, tokenName: "l"}
+	rootRead     = Actor{UserID: "1", Name: "root", Admin: true, Via: ViaToken, ReadOnly: true, tokenName: "r"}
+	rootLimited  = Actor{UserID: "1", Name: "root", Admin: true, Via: ViaToken, Sites: []string{"rootsite"}, tokenName: "l"}
+	rootWriteTok = Actor{UserID: "1", Name: "root", Admin: true, Via: ViaToken, tokenName: "w"}
 	nobody       = Actor{}
 )
 

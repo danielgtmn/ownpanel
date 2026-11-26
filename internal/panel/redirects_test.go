@@ -104,7 +104,7 @@ func TestRedirectValidation(t *testing.T) {
 // /old on bobsite. Both Hetzner projects also hold an unused zone spare.com.
 type redirectWorld struct {
 	*dnsWorld
-	bobDomain, rootDomain, bobPath int64
+	bobDomain, rootDomain, bobPath string
 }
 
 func newRedirectWorld(t *testing.T) *redirectWorld {
@@ -112,13 +112,13 @@ func newRedirectWorld(t *testing.T) *redirectWorld {
 	d := newDNSWorld(t)
 	ctx := context.Background()
 	w := &redirectWorld{dnsWorld: d}
-	mk := func(a Actor, in RedirectInput) int64 {
+	mk := func(a Actor, in RedirectInput) string {
 		t.Helper()
 		r, err := d.svc.CreateRedirect(ctx, a, in)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return mustStoreID(r.ID)
+		return r.ID
 	}
 	w.bobDomain = mk(bob, RedirectInput{SourceDomain: "bobold.example.com", Target: "https://bobsite.example.com", Code: 301})
 	w.rootDomain = mk(admin, RedirectInput{SourceDomain: "rootold.example.com", Target: "https://rootsite.example.com", Code: 302})
@@ -153,12 +153,12 @@ func TestRedirectPermissionMatrix(t *testing.T) {
 		{"site redirects", func(w *redirectWorld, a Actor) error { _, err := w.svc.SiteRedirects(ctx, a, "bobsite"); return err },
 			[]Kind{ok, ok, ok, ok, ok, ok, N, U}},
 		{"get bob's domain redirect", func(w *redirectWorld, a Actor) error {
-			_, err := w.svc.Redirect(ctx, a, idString(w.bobDomain))
+			_, err := w.svc.Redirect(ctx, a, w.bobDomain)
 			return err
 		},
 			[]Kind{ok, ok, ok, ok, N, ok, N, U}},
 		{"get bob's path redirect", func(w *redirectWorld, a Actor) error {
-			_, err := w.svc.Redirect(ctx, a, idString(w.bobPath))
+			_, err := w.svc.Redirect(ctx, a, w.bobPath)
 			return err
 		},
 			[]Kind{ok, ok, ok, ok, ok, ok, N, U}},
@@ -179,26 +179,26 @@ func TestRedirectPermissionMatrix(t *testing.T) {
 			return err
 		}, []Kind{ok, ok, ok, F, F, F, F, U}},
 		{"update bob's domain redirect", func(w *redirectWorld, a Actor) error {
-			_, err := w.svc.UpdateRedirect(ctx, a, idString(w.bobDomain), upd("bobold.example.com"))
+			_, err := w.svc.UpdateRedirect(ctx, a, w.bobDomain, upd("bobold.example.com"))
 			return err
 		}, []Kind{ok, ok, ok, F, N, F, N, U}},
 		{"update root's domain redirect", func(w *redirectWorld, a Actor) error {
-			_, err := w.svc.UpdateRedirect(ctx, a, idString(w.rootDomain), upd("rootold.example.com"))
+			_, err := w.svc.UpdateRedirect(ctx, a, w.rootDomain, upd("rootold.example.com"))
 			return err
 		}, []Kind{ok, ok, N, N, N, F, N, U}},
 		{"update bob's path redirect", func(w *redirectWorld, a Actor) error {
-			_, err := w.svc.UpdateRedirect(ctx, a, idString(w.bobPath), RedirectInput{SourceDomain: "bobsite.example.com", SourcePath: "/older", Target: "/new", Code: 302})
+			_, err := w.svc.UpdateRedirect(ctx, a, w.bobPath, RedirectInput{SourceDomain: "bobsite.example.com", SourcePath: "/older", Target: "/new", Code: 302})
 			return err
 		}, []Kind{ok, ok, ok, F, ok, F, N, U}},
 		{"turn a path redirect into a domain redirect", func(w *redirectWorld, a Actor) error {
-			_, err := w.svc.UpdateRedirect(ctx, a, idString(w.bobPath), upd("another.example.org"))
+			_, err := w.svc.UpdateRedirect(ctx, a, w.bobPath, upd("another.example.org"))
 			return err
 		}, []Kind{ok, ok, ok, F, F, F, N, U}},
-		{"delete bob's path redirect", func(w *redirectWorld, a Actor) error { return w.svc.DeleteRedirect(ctx, a, idString(w.bobPath)) },
+		{"delete bob's path redirect", func(w *redirectWorld, a Actor) error { return w.svc.DeleteRedirect(ctx, a, w.bobPath) },
 			[]Kind{ok, ok, ok, F, ok, F, N, U}},
-		{"delete bob's domain redirect", func(w *redirectWorld, a Actor) error { return w.svc.DeleteRedirect(ctx, a, idString(w.bobDomain)) },
+		{"delete bob's domain redirect", func(w *redirectWorld, a Actor) error { return w.svc.DeleteRedirect(ctx, a, w.bobDomain) },
 			[]Kind{ok, ok, ok, F, N, F, N, U}},
-		{"delete root's domain redirect", func(w *redirectWorld, a Actor) error { return w.svc.DeleteRedirect(ctx, a, idString(w.rootDomain)) },
+		{"delete root's domain redirect", func(w *redirectWorld, a Actor) error { return w.svc.DeleteRedirect(ctx, a, w.rootDomain) },
 			[]Kind{ok, ok, N, N, N, F, N, U}},
 		{"status of a redirect domain", func(w *redirectWorld, a Actor) error {
 			_, err := w.svc.DomainStatusOf(ctx, a, "bobold.example.com")
@@ -221,18 +221,18 @@ func TestRedirectPermissionMatrix(t *testing.T) {
 			return err
 		}, []Kind{ok, ok, ok, F, ok, F, N, U}},
 		{"create a zone", func(w *redirectWorld, a Actor) error {
-			_, err := w.svc.CreateDNSZone(ctx, a, idString(w.ownConn(a)), "fresh.com")
+			_, err := w.svc.CreateDNSZone(ctx, a, w.ownConn(a), "fresh.com")
 			return err
 		}, []Kind{ok, ok, ok, F, F, F, F, U}},
 		{"create a zone in another's connection", func(w *redirectWorld, a Actor) error {
-			_, err := w.svc.CreateDNSZone(ctx, a, idString(w.otherConn(a)), "fresh.com")
+			_, err := w.svc.CreateDNSZone(ctx, a, w.otherConn(a), "fresh.com")
 			return err
 		}, []Kind{F, F, N, F, F, F, F, U}},
 		{"delete a zone", func(w *redirectWorld, a Actor) error {
-			return w.svc.DeleteDNSZone(ctx, a, idString(w.ownConn(a)), "spare.com", "spare.com")
+			return w.svc.DeleteDNSZone(ctx, a, w.ownConn(a), "spare.com", "spare.com")
 		}, []Kind{ok, ok, ok, F, F, F, F, U}},
 		{"delete a zone in another's connection", func(w *redirectWorld, a Actor) error {
-			return w.svc.DeleteDNSZone(ctx, a, idString(w.otherConn(a)), "spare.com", "spare.com")
+			return w.svc.DeleteDNSZone(ctx, a, w.otherConn(a), "spare.com", "spare.com")
 		}, []Kind{F, F, N, F, F, F, F, U}},
 	}
 	for _, op := range ops {
@@ -453,11 +453,11 @@ func TestDNSZoneCreateAndDelete(t *testing.T) {
 	ctx := context.Background()
 	srv := w.hz[bobToken]
 
-	z, err := w.svc.CreateDNSZone(ctx, bob, idString(w.bobConn), " Fresh.COM ")
+	z, err := w.svc.CreateDNSZone(ctx, bob, w.bobConn, " Fresh.COM ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := DNSZone{ConnectionID: idString(w.bobConn), ConnectionName: "bob-main", Name: "fresh.com",
+	want := DNSZone{ConnectionID: w.bobConn, ConnectionName: "bob-main", Name: "fresh.com",
 		Nameservers: []string{"hydrogen.ns.hetzner.com", "oxygen.ns.hetzner.com", "helium.ns.hetzner.de"},
 		Adopted:     true, UsedBy: []string{}}
 	if !reflect.DeepEqual(z, want) {
@@ -488,7 +488,7 @@ func TestDNSZoneCreateAndDelete(t *testing.T) {
 		"münchen.de":    Invalid,
 		"":              Invalid,
 	} {
-		_, err := w.svc.CreateDNSZone(ctx, bob, idString(w.bobConn), name)
+		_, err := w.svc.CreateDNSZone(ctx, bob, w.bobConn, name)
 		if KindOf(err) != kind {
 			t.Errorf("%q: %v, want %v", name, err, kind)
 		}
@@ -496,18 +496,18 @@ func TestDNSZoneCreateAndDelete(t *testing.T) {
 	// Exists elsewhere at Hetzner.
 	w.svc.dnsCache.dropZones(w.bobConn)
 	srv.Fail("POST /zones", 1, hetznerUniqueness)
-	if _, err := w.svc.CreateDNSZone(ctx, bob, idString(w.bobConn), "taken.com"); KindOf(err) != Conflict || !strings.Contains(err.Error(), "already exists at Hetzner") {
+	if _, err := w.svc.CreateDNSZone(ctx, bob, w.bobConn, "taken.com"); KindOf(err) != Conflict || !strings.Contains(err.Error(), "already exists at Hetzner") {
 		t.Fatalf("uniqueness: %v", err)
 	}
 
 	// Delete: confirmation, use, protection.
-	if err := w.svc.DeleteDNSZone(ctx, bob, idString(w.bobConn), "fresh.com", "fresh.co"); KindOf(err) != Invalid {
+	if err := w.svc.DeleteDNSZone(ctx, bob, w.bobConn, "fresh.com", "fresh.co"); KindOf(err) != Invalid {
 		t.Fatalf("wrong confirmation: %v", err)
 	}
-	if err := w.svc.DeleteDNSZone(ctx, bob, idString(w.bobConn), "nope.com", "nope.com"); KindOf(err) != NotFound {
+	if err := w.svc.DeleteDNSZone(ctx, bob, w.bobConn, "nope.com", "nope.com"); KindOf(err) != NotFound {
 		t.Fatalf("unknown zone: %v", err)
 	}
-	err = w.svc.DeleteDNSZone(ctx, bob, idString(w.bobConn), "example.com", "example.com")
+	err = w.svc.DeleteDNSZone(ctx, bob, w.bobConn, "example.com", "example.com")
 	if KindOf(err) != Conflict {
 		t.Fatalf("zone in use: %v", err)
 	}
@@ -520,16 +520,16 @@ func TestDNSZoneCreateAndDelete(t *testing.T) {
 	}
 	// The panel domain counts too.
 	w.svc.settings.panelDomain = "panel.fresh.com"
-	if err := w.svc.DeleteDNSZone(ctx, bob, idString(w.bobConn), "fresh.com", "fresh.com"); KindOf(err) != Conflict || !strings.Contains(err.Error(), "the panel itself (panel.fresh.com)") {
+	if err := w.svc.DeleteDNSZone(ctx, bob, w.bobConn, "fresh.com", "fresh.com"); KindOf(err) != Conflict || !strings.Contains(err.Error(), "the panel itself (panel.fresh.com)") {
 		t.Fatalf("panel domain: %v", err)
 	}
 	w.svc.settings.panelDomain = ""
 	srv.ProtectZone("fresh.com", true)
-	if err := w.svc.DeleteDNSZone(ctx, bob, idString(w.bobConn), "fresh.com", "fresh.com"); KindOf(err) != Conflict || !strings.Contains(err.Error(), "protected against deletion") {
+	if err := w.svc.DeleteDNSZone(ctx, bob, w.bobConn, "fresh.com", "fresh.com"); KindOf(err) != Conflict || !strings.Contains(err.Error(), "protected against deletion") {
 		t.Fatalf("protected: %v", err)
 	}
 	srv.ProtectZone("fresh.com", false)
-	if err := w.svc.DeleteDNSZone(ctx, bob, idString(w.bobConn), "fresh.com", "fresh.com."); err != nil {
+	if err := w.svc.DeleteDNSZone(ctx, bob, w.bobConn, "fresh.com", "fresh.com."); err != nil {
 		t.Fatal(err)
 	}
 	if srv.HasZone("fresh.com") {

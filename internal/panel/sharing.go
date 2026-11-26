@@ -123,7 +123,7 @@ func (s *Service) organisations(ctx context.Context) (map[string]string, error) 
 // addSharing fills the grants of the views: who has access to each
 // mailbox, and what each has access to.
 func (s *Service) addSharing(ctx context.Context, views []Mailbox) ([]Mailbox, error) {
-	grants, err := s.store.MailboxGrants(ctx, 0, 0)
+	grants, err := s.store.MailboxGrants(ctx, "", "")
 	if err != nil {
 		return nil, storeError(err)
 	}
@@ -137,14 +137,14 @@ func (s *Service) addSharing(ctx context.Context, views []Mailbox) ([]Mailbox, e
 	}
 	for _, g := range grants {
 		active := orgs[g.MailboxDomain] != "" && orgs[g.MailboxDomain] == orgs[g.GranteeDomain]
-		if i, ok := byID[idString(g.MailboxID)]; ok {
+		if i, ok := byID[g.MailboxID]; ok {
 			views[i].SharedWith = append(views[i].SharedWith, MailboxGrant{
-				MailboxID: idString(g.GranteeID), Address: g.GranteeAddress, DisplayName: g.GranteeName, Rights: g.Rights, Active: active,
+				MailboxID: g.GranteeID, Address: g.GranteeAddress, DisplayName: g.GranteeName, Rights: g.Rights, Active: active,
 			})
 		}
-		if i, ok := byID[idString(g.GranteeID)]; ok {
+		if i, ok := byID[g.GranteeID]; ok {
 			views[i].AccessTo = append(views[i].AccessTo, MailboxAccess{
-				MailboxID: idString(g.MailboxID), Address: g.MailboxAddress, Kind: g.MailboxKind, Rights: g.Rights, Active: active,
+				MailboxID: g.MailboxID, Address: g.MailboxAddress, Kind: g.MailboxKind, Rights: g.Rights, Active: active,
 			})
 		}
 	}
@@ -327,13 +327,13 @@ func (s *Service) RemoveMailboxGrant(ctx context.Context, a Actor, id, granteeID
 	if err := needMailWrite(a); err != nil {
 		return Mailbox{}, err
 	}
-	grants, err := s.store.MailboxGrants(ctx, m.ID, 0)
+	grants, err := s.store.MailboxGrants(ctx, m.ID, "")
 	if err != nil {
 		return Mailbox{}, storeError(err)
 	}
 	var found *store.MailboxGrant
 	for i := range grants {
-		if idString(grants[i].GranteeID) == granteeID {
+		if grants[i].GranteeID == granteeID {
 			found = &grants[i]
 		}
 	}
@@ -357,8 +357,8 @@ func (s *Service) RemoveMailboxGrant(ctx context.Context, a Actor, id, granteeID
 }
 
 // configGrants are the grants of the configuration, by mailbox id.
-func configGrants(grants []store.MailboxGrant) map[int64][]config.Grant {
-	out := map[int64][]config.Grant{}
+func configGrants(grants []store.MailboxGrant) map[string][]config.Grant {
+	out := map[string][]config.Grant{}
 	for _, g := range grants {
 		out[g.MailboxID] = append(out[g.MailboxID], config.Grant{StorageID: g.GranteeStorage, Rights: g.Rights})
 	}

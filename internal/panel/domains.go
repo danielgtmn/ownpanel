@@ -34,7 +34,7 @@ func needDomains(a Actor) error {
 	if err := needAuth(a); err != nil {
 		return err
 	}
-	if a.Via == ViaSystem || a.UserID == 0 {
+	if a.Via == ViaSystem || a.UserID == "" {
 		return errorf(Forbidden, "domains can only be added by a person")
 	}
 	if a.Sites != nil {

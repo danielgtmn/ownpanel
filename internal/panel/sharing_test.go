@@ -50,7 +50,7 @@ func TestSharedMailboxAndGrants(t *testing.T) {
 	if len(pushed.Grants) != 1 || pushed.Grants[0].StorageID != info.StorageID {
 		t.Fatalf("pushed grants %+v", pushed.Grants)
 	}
-	infoView, _ := svc.MailboxOf(ctx, bob, idString(w.bobBox))
+	infoView, _ := svc.MailboxOf(ctx, bob, w.bobBox)
 	if len(infoView.AccessTo) != 1 || infoView.AccessTo[0].Address != "team@bobsite.example.com" || infoView.AccessTo[0].Kind != "shared" {
 		t.Errorf("access to %+v", infoView.AccessTo)
 	}
@@ -75,17 +75,17 @@ func TestSharedMailboxAndGrants(t *testing.T) {
 		t.Errorf("missing: %v", err)
 	}
 	for name, c := range map[string]struct {
-		id    int64
+		id    string
 		addr  string
 		right []string
 	}{
-		"itself":           {mustStoreID(team.ID), "team@bobsite.example.com", []string{"read"}},
-		"no rights":        {mustStoreID(team.ID), "info@bobsite.example.com", nil},
-		"unknown right":    {mustStoreID(team.ID), "info@bobsite.example.com", []string{"admin"}},
+		"itself":           {team.ID, "team@bobsite.example.com", []string{"read"}},
+		"no rights":        {team.ID, "info@bobsite.example.com", nil},
+		"unknown right":    {team.ID, "info@bobsite.example.com", []string{"admin"}},
 		"personal mailbox": {w.bobBox, "info@bobsite.example.com", []string{"read"}},
-		"bad address":      {mustStoreID(team.ID), "not an address", []string{"read"}},
+		"bad address":      {team.ID, "not an address", []string{"read"}},
 	} {
-		if _, err := svc.SetMailboxGrant(ctx, bob, idString(c.id), c.addr, c.right); KindOf(err) != Invalid {
+		if _, err := svc.SetMailboxGrant(ctx, bob, c.id, c.addr, c.right); KindOf(err) != Invalid {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
@@ -107,7 +107,7 @@ func TestSharedMailboxAndGrants(t *testing.T) {
 			t.Errorf("%s: %v", c.a.Name, err)
 		}
 	}
-	if _, err := svc.SetMailboxGrant(ctx, bob, idString(w.rootBox), "info@bobsite.example.com", []string{"read"}); KindOf(err) != NotFound {
+	if _, err := svc.SetMailboxGrant(ctx, bob, w.rootBox, "info@bobsite.example.com", []string{"read"}); KindOf(err) != NotFound {
 		t.Errorf("member on admin's mailbox: %v", err)
 	}
 	if _, err := svc.SetMailboxGrant(ctx, admin, team.ID, "info@bobsite.example.com", []string{"read", "manage"}); err != nil {
@@ -144,7 +144,7 @@ func TestSharedMailboxAndGrants(t *testing.T) {
 	}
 
 	// Taking access away.
-	rootView, _ := svc.MailboxOf(ctx, admin, idString(w.rootBox))
+	rootView, _ := svc.MailboxOf(ctx, admin, w.rootBox)
 	if _, err := svc.RemoveMailboxGrant(ctx, bob, team.ID, rootView.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestSharedMailboxAndGrants(t *testing.T) {
 	if _, err := svc.SetMailboxAccount(ctx, bob, team.ID, MailboxAccount{AppPasswordsOnly: &on}); KindOf(err) != Invalid {
 		t.Errorf("only app passwords: %v", err)
 	}
-	if _, err := svc.SetMailboxKeepSentCopy(ctx, bob, idString(w.bobBox), true); KindOf(err) != Invalid {
+	if _, err := svc.SetMailboxKeepSentCopy(ctx, bob, w.bobBox, true); KindOf(err) != Invalid {
 		t.Errorf("keep copies on a personal mailbox: %v", err)
 	}
 	if v, err := svc.SetMailboxKeepSentCopy(ctx, bob, team.ID, false); err != nil || v.KeepSentCopy {
@@ -185,15 +185,15 @@ func TestMailboxConversion(t *testing.T) {
 	if _, err := svc.SetMailboxGrant(ctx, bob, team.ID, "info@bobsite.example.com", []string{"read"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.CreateAppPassword(ctx, bob, idString(w.bobBox), "Laptop"); err != nil {
+	if _, err := svc.CreateAppPassword(ctx, bob, w.bobBox, "Laptop"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Personal → shared: password, app passwords and the access it had go.
-	if _, err := svc.SetMailboxKind(ctx, bob, idString(w.bobBox), "shared", "a password"); KindOf(err) != Invalid {
+	if _, err := svc.SetMailboxKind(ctx, bob, w.bobBox, "shared", "a password"); KindOf(err) != Invalid {
 		t.Errorf("shared with a password: %v", err)
 	}
-	v, err := svc.SetMailboxKind(ctx, bob, idString(w.bobBox), "shared", "")
+	v, err := svc.SetMailboxKind(ctx, bob, w.bobBox, "shared", "")
 	if err != nil || v.Kind != "shared" || len(v.AccessTo) != 0 {
 		t.Fatalf("to shared %+v %v", v, err)
 	}
@@ -236,7 +236,7 @@ func TestSelfDelegationEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, _ := svc.store.Mailbox(ctx, w.bobBox)
-	annaBox, _ := svc.store.Mailbox(ctx, mustStoreID(anna.ID))
+	annaBox, _ := svc.store.Mailbox(ctx, anna.ID)
 	grants := []config.Grant{
 		{StorageID: annaBox.StorageID, Rights: []string{"read", "send-on-behalf"}},
 		{StorageID: info.StorageID, Rights: []string{"read"}}, // itself: dropped
@@ -249,7 +249,7 @@ func TestSelfDelegationEvent(t *testing.T) {
 	if err := svc.recordMailEvents(ctx); err != nil {
 		t.Fatal(err)
 	}
-	v, _ := svc.MailboxOf(ctx, bob, idString(w.bobBox))
+	v, _ := svc.MailboxOf(ctx, bob, w.bobBox)
 	if len(v.SharedWith) != 1 || v.SharedWith[0].Address != "anna@bobsite.example.com" ||
 		!slices.Equal(v.SharedWith[0].Rights, []string{"read", "send-on-behalf"}) {
 		t.Fatalf("shared with %+v", v.SharedWith)
@@ -263,10 +263,10 @@ func TestSelfDelegationEvent(t *testing.T) {
 		t.Errorf("pushed %+v", p)
 	}
 	// The domain owner may take it away (staff who left), not give it.
-	if _, err := svc.SetMailboxGrant(ctx, bob, idString(w.bobBox), "anna@bobsite.example.com", []string{"read"}); KindOf(err) != Invalid {
+	if _, err := svc.SetMailboxGrant(ctx, bob, w.bobBox, "anna@bobsite.example.com", []string{"read"}); KindOf(err) != Invalid {
 		t.Errorf("owner gives access to a personal mailbox: %v", err)
 	}
-	if _, err := svc.RemoveMailboxGrant(ctx, bob, idString(w.bobBox), anna.ID); err != nil {
+	if _, err := svc.RemoveMailboxGrant(ctx, bob, w.bobBox, anna.ID); err != nil {
 		t.Errorf("remove: %v", err)
 	}
 	if p := pushedMailbox(t, w.mail.last(), "info@bobsite.example.com"); len(p.Grants) != 0 {
@@ -311,7 +311,7 @@ func TestDistributionGroups(t *testing.T) {
 		}
 	}
 	// Default: anyone, pushed without a policy.
-	plain, err := svc.MailAliasOf(ctx, bob, idString(w.bobAlias))
+	plain, err := svc.MailAliasOf(ctx, bob, w.bobAlias)
 	if err != nil || plain.SenderPolicy != "anyone" {
 		t.Fatalf("plain %+v %v", plain, err)
 	}

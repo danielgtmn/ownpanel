@@ -240,7 +240,7 @@ type recordsWorld struct {
 	*mailWorld
 	bobDNS, rootDNS *memDNS
 	look            *zoneLookups
-	bobConn         int64
+	bobConn         string
 }
 
 // newRecordsWorld: the mail world where bob's DNS connection holds the
@@ -268,7 +268,7 @@ func newRecordsWorld(t *testing.T) *recordsWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.bobConn = mustStoreID(c.ID)
+	w.bobConn = c.ID
 	if _, err := svc.CreateDNSConnection(ctx, admin, "hetzner", "root-main", rootToken); err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +307,7 @@ func TestMailRecordStatuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Domain != "bobzone.org" || r.MailHost != testMailHost || !r.CanApply || r.ConnectionID != idString(w.bobConn) || r.Zone != "bobzone.org" || r.ApplyNote != "" {
+	if r.Domain != "bobzone.org" || r.MailHost != testMailHost || !r.CanApply || r.ConnectionID != w.bobConn || r.Zone != "bobzone.org" || r.ApplyNote != "" {
 		t.Fatalf("records %+v", r)
 	}
 	if len(r.Records) != 8 {

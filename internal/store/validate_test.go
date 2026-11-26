@@ -33,3 +33,38 @@ func TestValidateName(t *testing.T) {
 		}
 	}
 }
+
+// The checks the tables made before ablage are made in Go now.
+func TestFormerTableChecks(t *testing.T) {
+	eachStore(t, func(t *testing.T, s *Store) {
+		u, err := s.CreateUser(ctx, "root", "", RoleAdmin, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.CreateRedirect(ctx, Redirect{OwnerID: u.ID, SourceDomain: "a.example.com", Target: "https://b.example.com", Code: 200}, 0); !errors.Is(err, ErrInvalid) {
+			t.Errorf("status code: %v", err)
+		}
+		if _, err := s.CreateMailDomain(ctx, "m.example.com", u.ID, DKIMKey{Selector: "s", State: "bogus"}, 0); !errors.Is(err, ErrInvalid) {
+			t.Errorf("DKIM state: %v", err)
+		}
+		if _, err := s.CreateMailDomain(ctx, "m.example.com", u.ID, DKIMKey{Selector: "s", State: DKIMActive}, 0); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.CreateMailbox(ctx, Mailbox{StorageID: "x", Domain: "m.example.com", LocalPart: "a", QuotaBytes: -1}, 0); !errors.Is(err, ErrInvalid) {
+			t.Errorf("negative quota: %v", err)
+		}
+		m, err := s.CreateMailbox(ctx, Mailbox{StorageID: "x", Domain: "m.example.com", LocalPart: "a"}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SetMailboxLimits(ctx, m.ID, 0, -1, 0); !errors.Is(err, ErrInvalid) {
+			t.Errorf("negative limit: %v", err)
+		}
+		if _, err := s.CreateMailAlias(ctx, MailAlias{Domain: "m.example.com", LocalPart: "b", Targets: []string{"a@m.example.com"}, SenderPolicy: "nobody"}); !errors.Is(err, ErrInvalid) {
+			t.Errorf("sender policy: %v", err)
+		}
+		if _, err := s.SetMailboxGrant(ctx, m.ID, m.ID, []string{"read"}, 0); !errors.Is(err, ErrInvalid) {
+			t.Errorf("grant to itself: %v", err)
+		}
+	})
+}

@@ -126,7 +126,7 @@ func (s *Service) domainUses(ctx context.Context, a Actor) ([]domainUse, error) 
 			continue
 		}
 		name, visible := site.Name, a.canSee(site)
-		own := visible && a.UserID != 0 && site.OwnerID == a.UserID
+		own := visible && a.UserID != "" && site.OwnerID == a.UserID
 		uses = append(uses, domainUse{domains: site.Domains, own: own, what: func(in []string) string {
 			if visible {
 				return fmt.Sprintf("the site %s (%s)", name, strings.Join(in, ", "))
@@ -143,7 +143,7 @@ func (s *Service) domainUses(ctx context.Context, a Actor) ([]domainUse, error) 
 			continue // path redirects are on site domains, listed above
 		}
 		d, visible := r.SourceDomain, a.canSeeRedirect(r, byName)
-		own := visible && a.UserID != 0 && r.OwnerID == a.UserID
+		own := visible && a.UserID != "" && r.OwnerID == a.UserID
 		uses = append(uses, domainUse{domains: []string{d}, own: own, what: func([]string) string {
 			if visible {
 				return "the redirect of " + d
@@ -157,7 +157,7 @@ func (s *Service) domainUses(ctx context.Context, a Actor) ([]domainUse, error) 
 	}
 	for _, md := range mailDomains {
 		d, visible := md.Domain, a.canSeeMail(md.OwnerID)
-		own := visible && a.UserID != 0 && md.OwnerID == a.UserID
+		own := visible && a.UserID != "" && md.OwnerID == a.UserID
 		uses = append(uses, domainUse{domains: []string{d}, own: own, what: func([]string) string {
 			if visible {
 				return "e-mail for " + d
@@ -257,7 +257,7 @@ func (s *Service) DeleteDNSZone(ctx context.Context, a Actor, connID string, zon
 // ---- choosing which zones are managed in the panel ----
 
 type zoneKey struct {
-	conn int64
+	conn string
 	zone string
 }
 
