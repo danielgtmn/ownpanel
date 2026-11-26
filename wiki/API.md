@@ -34,9 +34,10 @@ Errors are JSON with a readable sentence:
 | `401` | not signed in, wrong credentials, or an invalid token |
 | `403` | known, but not allowed (read-only or site-limited token, not an admin, missing header) |
 | `404` | missing, or not visible to you (the two look the same); unknown endpoint |
+| `422` | a build ran and failed; the answer carries its result |
 | `409` | cannot be done in the current state: name taken, nothing to go back to, last admin, user still owns sites, setup already done, another import of the mailbox running |
 | `413` | a file or part of an upload is too large |
-| `429` | too many failed sign-in attempts, too many sign-ins at the same moment, Hetzner's request limit was reached, or too many mail imports in an hour |
+| `429` | the build service is busy, too many failed sign-in attempts, too many sign-ins at the same moment, Hetzner's request limit was reached, or too many mail imports in an hour |
 | `502` | the change is saved but the web server could not be updated yet (the loop retries), or an outside service such as Hetzner or another mail server is unavailable or refused (for an import: its answer, never the password) |
 | `507` | not enough free disk space on the server (mail import) |
 | `500` | something went wrong on the server; the details are only in the log |
@@ -54,6 +55,8 @@ Every id the API returns or takes is a **string**: `"id": "42"`, `"connection_id
 **Version:** `{"id", "live": bool, "pending": bool, "preview_url"}`. `pending` is true for a version published without making it live that has not been live since. `preview_url` opens the version (live or not) and works for anyone who has it; `""` without a domain for previews.
 
 **Publication** (the answer to publishing): a Site plus `{"published_release", "published_live": bool, "preview_url"}` for the new version. When only the web server could not be updated (`502`), the answer carries the Publication next to `error`: the version exists.
+
+**Build result** (the answer to building a site): `{"status", "reason", "message", "exit_code", "log_tail", "publication"}`. `status` is `succeeded`, `failed`, `cancelled` or `skipped` (a newer build of the site replaced it before it started); `reason` says why it failed: `exit` (the command failed, `exit_code` is set), `timeout`, `memory`, `disk`, `output` (the output folder is missing, holds something that is not a plain file or folder, is too large or cannot be published), `source`, `unprotected` or `internal`. `log_tail` is the end of the build's log with the values of `secrets` replaced by `***`; it is left out when a secret is shorter than 4 characters. `publication` is the Publication after success.
 
 **User:** `{"id", "name", "email", "role", "created_at"}`, role `"admin"` or `"member"`; `email` is `""` when the person has none.
 
@@ -136,6 +139,7 @@ Domains whose DNS is managed elsewhere: kept in your panel as domains of their o
 | `POST` | `/api/sites/{name}/deployments` | write, own site | raw `.zip` or `.tar.gz` body; `?live=false` adds the version without making it live | `201` Publication |
 | `POST` | `/api/sites/{name}/rollback` | write, own site | optional `{"release": "<id>"}`; no body means the last earlier version that was live | Site |
 | `GET` | `/api/sites/{name}/icon` | anyone, own site | | the icon of the live version: a `<link rel="icon">` (or `shortcut icon`, `apple-touch-icon`) in `index.html` pointing at a file in the same version or a `data:` URL up to 64 KB, else `favicon.svg`, `favicon.png`, `favicon.ico` or `apple-touch-icon.png`; PNG, ICO, SVG, WebP, GIF or JPEG up to 256 KB. Nothing is fetched from elsewhere. `404` if there is none |
+| `POST` | `/api/sites/{name}/builds` | admins (signed in, or an unrestricted write token) | `multipart/form-data` with two parts in this order: `settings` (JSON `{"command", "output", "image", "env": {..}, "secrets": {..}, "live"}`) and `source` (the source tree as `.tar.gz`, up to 512 MB) | `201` Build result once the build has ended. A build that ran and failed answers `422` with `"code": "build_failed"` next to the result; one replaced by a newer build of the site before it started `409` with `"code": "build_replaced"`. `429` when the build service is busy, `502` when it is unavailable. See [[Sites and Publishing\|Sites-and-Publishing#building-a-site-from-its-source]] |
 | `POST` | `/api/uploads/{id}` | open (upload link) | raw archive body | `201` Publication (made live or not, as the link was created); `404` for unknown, used or expired links |
 | `GET` | `/api/previews/certificate-allowed?domain=<name>` | only the web server on this machine | | `200` if the name is the preview address of a kept version, else `404`. Asked by Caddy before it obtains a certificate for a preview ([[Security|Security#previews]]) |
 

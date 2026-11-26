@@ -11,15 +11,24 @@ import (
 	"github.com/danielgtmn/ownpanel/internal/build"
 )
 
-// Builds. Sites will be built on the server (#58) by a separate service
+// Builds. Sites are built on the server (#58) by a separate service
 // running as a user of its own (internal/build/worker); the panel only
-// talks to its socket. For now the panel shows administrators whether this
-// server can build sites, and why not.
+// talks to its socket. Here: whether this server can build sites, and why
+// not; building a site is in sitebuild.go.
 
 // BuildService is the build service as the panel uses it. *build.Client
-// satisfies it.
+// satisfies it; see there for what each method does.
 type BuildService interface {
 	Status(ctx context.Context) (build.Status, error)
+	List(ctx context.Context) ([]build.Build, error)
+	Create(ctx context.Context, spec build.Spec) (build.Build, error)
+	Source(ctx context.Context, id uint64, tree io.Reader, strip int) (build.Build, error)
+	Start(ctx context.Context, id uint64) (build.Build, error)
+	Cancel(ctx context.Context, id uint64) (build.Build, error)
+	Get(ctx context.Context, id uint64) (build.Build, error)
+	Log(ctx context.Context, id uint64, offset int64, follow bool) (io.ReadCloser, error)
+	Output(ctx context.Context, id uint64) (io.ReadCloser, error)
+	Remove(ctx context.Context, id uint64) error
 }
 
 // buildStatusTimeout bounds the question to the build service.

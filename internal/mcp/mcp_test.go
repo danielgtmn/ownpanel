@@ -284,6 +284,7 @@ func TestToolsAndAnnotations(t *testing.T) {
 		"delete_site":                  {destructive: true},
 		"make_version_live":            {idempotent: true},
 		"publish_files":                {},
+		"build_site":                   {},
 		"create_upload_link":           {},
 		"check_site_domains":           {readOnly: true, idempotent: true},
 		"list_redirects":               {readOnly: true, idempotent: true},
