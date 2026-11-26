@@ -171,10 +171,10 @@ func TestManagingDNSDropsTheHandEntry(t *testing.T) {
 	if _, err := d.svc.AddDomain(ctx, admin, "other.org"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.svc.AdoptDNSZone(ctx, bob, d.bobConn, "other.org"); err != nil {
+	if _, err := d.svc.AdoptDNSZone(ctx, bob, idString(d.bobConn), "other.org"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.svc.CreateDNSZone(ctx, bob, d.bobConn, "fresh.org"); err != nil {
+	if _, err := d.svc.CreateDNSZone(ctx, bob, idString(d.bobConn), "fresh.org"); err != nil {
 		t.Fatal(err)
 	}
 	if got := names(bob); !reflect.DeepEqual(got, []string{"kept.org"}) {
@@ -184,7 +184,7 @@ func TestManagingDNSDropsTheHandEntry(t *testing.T) {
 		t.Fatalf("someone else's entry: %v", got)
 	}
 	// Choosing a zone without an entry is fine.
-	if _, err := d.svc.AdoptDNSZone(ctx, bob, d.bobConn, "other.org"); err != nil {
+	if _, err := d.svc.AdoptDNSZone(ctx, bob, idString(d.bobConn), "other.org"); err != nil {
 		t.Fatal(err)
 	}
 }
