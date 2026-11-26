@@ -86,6 +86,12 @@ type Config struct {
 	// MailTLSDir keeps the ACME account and the certificates of the mail
 	// host; "" means none are obtained (tests).
 	MailTLSDir string
+	// Builds is the build service's socket (-build-worker); nil means
+	// builds are not set up for this panel. *build.Client satisfies it.
+	Builds BuildService
+	// BuildsStateFile is install.sh's record of the build environment
+	// (build.StateFile); "" means there is none.
+	BuildsStateFile string
 	// MXResolver looks up MX records to activate mail domains; nil means
 	// Resolver if it can, else (only when Resolver is nil too) asking the
 	// authoritative nameservers.
@@ -168,6 +174,8 @@ type Service struct {
 	appKeyMu sync.Mutex
 	appKey   string
 
+	builds          BuildService
+	buildsStateFile string
 	// github talks to GitHub; githubFlows are connections waiting for the
 	// person to come back from GitHub; githubRepos caches repository
 	// lists (github.go).
@@ -183,29 +191,31 @@ func New(cfg Config) (*Service, error) {
 		return nil, err
 	}
 	s := &Service{
-		store:          cfg.Store,
-		deploys:        cfg.Deploys,
-		web:            cfg.Web,
-		opts:           cfg.Caddy,
-		setupCodeFile:  cfg.SetupCodeFile,
-		now:            time.Now,
-		passwordChecks: make(chan struct{}, maxPasswordChecks),
-		unhealthyRetry: 2 * time.Second,
-		startupGrace:   15 * time.Second,
-		startupRetry:   250 * time.Millisecond,
-		secrets:        cfg.Secrets,
-		serverIPs:      slices.Clone(cfg.ServerIPs),
-		newProvider:    cfg.NewDNSProvider,
-		resolver:       cfg.Resolver,
-		dnsCache:       newDNSCache(),
-		interfaces:     cfg.Interfaces,
-		certRoots:      cfg.CertRoots,
-		certAddr:       cfg.CertCheckAddr,
-		updates:        newUpdater(cfg.Updates),
-		mail:           cfg.Mail,
-		mx:             cfg.MXResolver,
-		certs:          newMailCerts(cfg.MailTLSDir, cfg.Caddy.TLSMode),
-		github:         cfg.GitHub,
+		store:           cfg.Store,
+		deploys:         cfg.Deploys,
+		web:             cfg.Web,
+		opts:            cfg.Caddy,
+		setupCodeFile:   cfg.SetupCodeFile,
+		now:             time.Now,
+		passwordChecks:  make(chan struct{}, maxPasswordChecks),
+		unhealthyRetry:  2 * time.Second,
+		startupGrace:    15 * time.Second,
+		startupRetry:    250 * time.Millisecond,
+		secrets:         cfg.Secrets,
+		serverIPs:       slices.Clone(cfg.ServerIPs),
+		newProvider:     cfg.NewDNSProvider,
+		resolver:        cfg.Resolver,
+		dnsCache:        newDNSCache(),
+		interfaces:      cfg.Interfaces,
+		certRoots:       cfg.CertRoots,
+		certAddr:        cfg.CertCheckAddr,
+		updates:         newUpdater(cfg.Updates),
+		mail:            cfg.Mail,
+		builds:          cfg.Builds,
+		buildsStateFile: cfg.BuildsStateFile,
+		mx:              cfg.MXResolver,
+		certs:           newMailCerts(cfg.MailTLSDir, cfg.Caddy.TLSMode),
+		github:          cfg.GitHub,
 	}
 	if s.github == nil {
 		s.github = DefaultGitHub()

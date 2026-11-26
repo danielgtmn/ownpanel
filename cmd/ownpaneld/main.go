@@ -4,6 +4,7 @@
 //	ownpaneld [serve] [flags]                    run the daemon
 //	ownpaneld backup -data <dir> -out <file>     write a backup archive (with -mail-data, -no-mail)
 //	ownpaneld mail [flags]                       run the mail service
+//	ownpaneld build-worker [flags]               run the build service
 //	ownpaneld version                            print the version
 package main
 
@@ -24,6 +25,7 @@ import (
 
 	"github.com/danielgtmn/ownpanel/internal/api"
 	"github.com/danielgtmn/ownpanel/internal/backup"
+	"github.com/danielgtmn/ownpanel/internal/build"
 	"github.com/danielgtmn/ownpanel/internal/caddy"
 	"github.com/danielgtmn/ownpanel/internal/deploy"
 	"github.com/danielgtmn/ownpanel/internal/github"
@@ -69,10 +71,12 @@ func main() {
 		err = runBackupDB(args)
 	case "mail":
 		err = runMail(args)
+	case "build-worker":
+		err = runBuildWorker(args)
 	case "version":
 		fmt.Println(version)
 	default:
-		err = fmt.Errorf("unknown command %q (use serve, backup or version)", cmd)
+		err = fmt.Errorf("unknown command %q (use serve, backup, mail, build-worker or version)", cmd)
 	}
 	if err != nil {
 		slog.Error("fatal", "err", err)
@@ -127,6 +131,7 @@ func serve(args []string) error {
 		interval    = fs.Duration("reconcile-interval", 30*time.Second, "how often the web server is re-synced in the background")
 		releasesAPI = fs.String("releases-api", "https://api.github.com", "GitHub API address used to look for new releases (change it only for testing)")
 		mailAdmin   = fs.String("mail-admin", "", "admin socket of the mail service as unix:///absolute/path.sock (optional; without it e-mail is only stored, not served)")
+		buildWorker = fs.String("build-worker", "", "socket of the build service as unix:///absolute/path.sock (optional; without it sites cannot be built on this server)")
 		mailHost    = fs.String("mail-host", "", "name of the mail server, e.g. mail.example.com (optional; overrides the panel settings)")
 		mailWeb     = fs.String("mail-web", "", "web socket of the mail service as unix:///absolute/path.sock (optional; without it mailbox users have no sign-in page on the mail server's name)")
 		githubURL   = fs.String("github-url", github.DefaultURL, "address of GitHub for connecting repositories (change it only for testing; http only on a loopback address)")
@@ -176,6 +181,14 @@ func serve(args []string) error {
 			return fmt.Errorf("-mail-web: %q must be unix:///absolute/path/to.sock", *mailWeb)
 		}
 		opts.MailWebSocket = path
+	}
+	var buildService panel.BuildService
+	if *buildWorker != "" {
+		path, ok := strings.CutPrefix(*buildWorker, "unix://")
+		if !ok || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+			return fmt.Errorf("-build-worker: %q must be unix:///absolute/path/to.sock", *buildWorker)
+		}
+		buildService = build.NewClient(path)
 	}
 	if *mailHost != "" {
 		if _, err := store.NormalizeDomain(*mailHost); err != nil {
@@ -229,10 +242,12 @@ func serve(args []string) error {
 			ReleaseFile: releaseFile,
 			Dir:         orDefault(*updateDir, filepath.Join(data, "update")),
 		},
-		Mail:       mailService,
-		MailHost:   *mailHost,
-		MailTLSDir: filepath.Join(data, "mail-tls"),
-		GitHub:     githubClient,
+		Mail:            mailService,
+		Builds:          buildService,
+		BuildsStateFile: build.StateFile,
+		MailHost:        *mailHost,
+		MailTLSDir:      filepath.Join(data, "mail-tls"),
+		GitHub:          githubClient,
 	})
 	if err != nil {
 		return err

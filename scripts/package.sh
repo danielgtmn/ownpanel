@@ -95,12 +95,14 @@ for arch in "${arches[@]}"; do
 
   cp deploy/ownpaneld.service deploy/ownpanel-caddy.service deploy/ownpanel-mail.service deploy/caddy-bootstrap.json \
     deploy/ownpanel-update deploy/ownpanel-update.service deploy/ownpanel-update.path deploy/ownpanel-update.timer \
+    deploy/ownpanel-build-setup deploy/ownpanel-build-setup.service deploy/ownpanel-build.service \
+    deploy/nftables-ownpanel-build.conf \
     "$stage/deploy/"
   cp install.sh update.sh LICENSE README.md "$stage/"
   echo "$version" > "$stage/VERSION"
   chmod 0644 "$stage"/deploy/* "$stage/LICENSE" "$stage/README.md" "$stage/VERSION"
   chmod 0755 "$stage/ownpaneld" "$stage/caddy" "$stage/install.sh" "$stage/update.sh" "$stage/deploy" \
-    "$stage/deploy/ownpanel-update"
+    "$stage/deploy/ownpanel-update" "$stage/deploy/ownpanel-build-setup"
 
   COPYFILE_DISABLE=1 tar "${tar_owner[@]}" -czf "$dist/$name.tar.gz" -C "$dist" "$name"
   rm -rf "$stage"

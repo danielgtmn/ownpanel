@@ -1,0 +1,27 @@
+[Unit]
+Description=Disk and network limits for ownpanel builds
+Documentation=https://github.com/danielgtmn/ownpanel/wiki/Security#builds
+# After nftables.service: it flushes the whole ruleset when it starts.
+After=local-fs.target network-online.target nftables.service
+Wants=network-online.target
+ConditionPathExists=/etc/ownpanel/build.env
+
+# Root's part of builds (see /usr/local/lib/ownpanel/ownpanel-build-setup):
+# mounts the build disk with its quotas and puts the packet filter for the
+# build user in place. ownpanel-build.service is bound to this unit, so the
+# build service never runs without it.
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/ownpanel/ownpanel-build-setup start
+# systemctl reload: the packet filter again (e.g. after the resolvers changed).
+ExecReload=/usr/local/lib/ownpanel/ownpanel-build-setup firewall
+ExecStop=/usr/local/lib/ownpanel/ownpanel-build-setup stop
+RuntimeDirectory=ownpanel-build-setup
+RuntimeDirectoryMode=0755
+# Making the build disk the first time formats a file of several GB.
+TimeoutStartSec=15min
+UMask=0022
+
+[Install]
+WantedBy=multi-user.target
