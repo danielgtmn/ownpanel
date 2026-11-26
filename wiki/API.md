@@ -61,6 +61,8 @@ Responses carry `Cache-Control: no-store`. Request bodies that are JSON are limi
 
 **GitHub repository:** `{"id", "installation_id", "owner", "name", "full_name", "private", "archived", "default_branch", "html_url"}`.
 
+**Site source:** `{"site", "source", "publishing_available"}`. `source` is `null` when the site is not linked, else `{"kind", "repository", "repository_id", "installation_id", "account", "url", "branch", "publish_on_push", "status", "problem", "linked_by", "linked_at"}`: `kind` is `"github"`; `repository` is `owner/name` as last seen; `installation_id` is left out once the connection was removed; `status` is `linked`, `connection_missing`, `suspended`, `repository_missing` or `unchecked` (then `problem` says why). `publishing_available` is `false` while pushes are not built and published yet. See [[Sites and Publishing|Sites-and-Publishing#source-repository-and-branch]].
+
 **Redirect:** `{"id", "owner", "source_domain", "source_path", "target", "code", "keep_path", "keep_query", "created_at"}`. `source_path` is `""` for a whole-domain redirect, otherwise `/exact` or a prefix `/path/*`; `code` is `301`, `302`, `307` or `308`. See [[Redirects|Redirects]].
 
 Domains whose DNS is managed elsewhere: kept in your panel as domains of their own, with nothing at any DNS provider. Each person has their own list; another person's entry answers `404`, also for administrators.
@@ -130,6 +132,11 @@ Domains whose DNS is managed elsewhere: kept in your panel as domains of their o
 | `POST` | `/api/sites/{name}/deployments` | write, own site | raw `.zip` or `.tar.gz` body | `201` Site |
 | `POST` | `/api/sites/{name}/rollback` | write, own site | optional `{"release": "<id>"}`; no body means the previous version | Site |
 | `GET` | `/api/sites/{name}/icon` | anyone, own site | | the icon of the live version: a `<link rel="icon">` (or `shortcut icon`, `apple-touch-icon`) in `index.html` pointing at a file in the same version or a `data:` URL up to 64 KB, else `favicon.svg`, `favicon.png`, `favicon.ico` or `apple-touch-icon.png`; PNG, ICO, SVG, WebP, GIF or JPEG up to 256 KB. Nothing is fetched from elsewhere. `404` if there is none |
+| `GET` | `/api/sites/{name}/source` | anyone, own site | | Site source. Asks GitHub (through the list kept for a minute) whether the repository is still there and refreshes its name |
+| `PUT` | `/api/sites/{name}/source` | write, own site, and the repository must be usable by you (administrators only) | `{"installation_id", "repository_id", "branch", "publish_on_push"}` | Site source. Links the site, replacing its link. `400` for an invalid branch name or a branch the repository does not have; `404` for a repository you may not use, one the connection does not see, or a site you may not see |
+| `DELETE` | `/api/sites/{name}/source` | write, own site | | `204`; `404` if the site is not linked |
+| `GET` | `/api/sites/{name}/source/repositories` | anyone, own site | | `{"connected", "repositories": [GitHub repository with "account", …], "problems": [..], "truncated"}`: the repositories you may link the site to. Empty (and `connected` false) for anyone but administrators. `problems` lists accounts that could not be listed |
+| `GET` | `/api/sites/{name}/source/branches?installation_id=…&repository_id=…` | own site, repository usable by you | | `{"branches": [..], "default_branch", "truncated"}` |
 | `POST` | `/api/uploads/{id}` | open (upload link) | raw archive body | `201` Site; `404` for unknown, used or expired links |
 
 ### Users and activity

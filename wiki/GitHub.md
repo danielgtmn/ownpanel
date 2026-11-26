@@ -1,6 +1,6 @@
 # GitHub
 
-An administrator connects ownpanel to a GitHub account or organisation in a few clicks. Later steps use the connection to publish a site from a repository on every push ([#108](https://github.com/danielgtmn/ownpanel/issues/108), [#109](https://github.com/danielgtmn/ownpanel/issues/109), [#113](https://github.com/danielgtmn/ownpanel/issues/113)). Today the panel connects, shows the accounts and lists their repositories. Linking a site to a repository is not built yet.
+An administrator connects ownpanel to a GitHub account or organisation in a few clicks. Later steps use the connection to publish a site from a repository on every push ([#108](https://github.com/danielgtmn/ownpanel/issues/108), [#109](https://github.com/danielgtmn/ownpanel/issues/109), [#113](https://github.com/danielgtmn/ownpanel/issues/113)). Today the panel connects, shows the accounts and lists their repositories, and a site can be linked to a repository and branch ([[Linking a site|Sites-and-Publishing#source-repository-and-branch]]). Building and publishing on push is not available yet: linking records the choice, and publishing on push starts once building on the server is available.
 
 To publish from GitHub without connecting anything, use the [[GitHub Action|GitHub-Action]]: it builds in GitHub's CI and uploads the result.
 
@@ -39,6 +39,7 @@ It subscribes to **push** and **pull request** notices. GitHub always sends noti
 For each use the panel asks GitHub for a short-lived token (at most an hour) narrowed to what that use needs:
 
 - listing repositories: metadata read only;
+- listing a repository's branches and checking the branch when a site is linked: read access to the contents of that one repository;
 - fetching code (later, for builds): read access to the contents of the one repository being built.
 
 These tokens are never stored and never shown.
@@ -47,14 +48,14 @@ Asking for permissions now saves you from approving new ones on every installati
 
 ## Who may use it
 
-- **Administrators** connect and remove accounts, see them and their repositories, and (once [#108](https://github.com/danielgtmn/ownpanel/issues/108) exists) link sites to their repositories.
+- **Administrators** connect and remove accounts, see them and their repositories, and link sites to their repositories.
 - **Members** do not see the connections, and cannot list or use their repositories. To them a repository of a connection looks like one that does not exist. The repositories belong to the administrators' accounts and organisations, and a member could otherwise publish (and so expose) any of them on a domain of their own.
 
 Members who want to publish from their own repositories use the [[GitHub Action|GitHub-Action]] or, later, deploy keys ([#111](https://github.com/danielgtmn/ownpanel/issues/111)).
 
 ## Removing a connection
 
-**Remove** forgets the app's private key and secrets and its installations. The panel can no longer use the app. Sites keep their published versions; once sites can be linked ([#108](https://github.com/danielgtmn/ownpanel/issues/108)), the links to the removed account stop publishing.
+**Remove** forgets the app's private key and secrets and its installations. The panel can no longer use the app. Sites keep their published versions. Sites linked to one of its repositories keep the link, marked **connection missing** on the site page (status `connection_missing` in the API): the repository and branch stay visible, nothing is published from them, and an administrator links the site again (after connecting the account again) or unlinks it. The same happens when the app is uninstalled on GitHub and **Check again** notices it.
 
 The app itself stays on GitHub until you delete it there: the panel shows a link to its settings page, where **Advanced → Delete GitHub App** removes it and all its installations. Do that too; an app whose key exists nowhere any more is harmless but clutters your account.
 
@@ -68,6 +69,7 @@ See [[Security|Security#github]]: what is stored, how the return from GitHub is 
 
 - HTTP: `/api/github/…` ([[API|API#github]]).
 - MCP: `get_github_status` and `list_github_repositories`, read only ([[MCP|MCP]]). Connecting and removing are done in the web interface.
+- Linking a site: `/api/sites/{name}/source` and the MCP tools `get_site_source`, `list_site_source_repositories`, `list_site_source_branches`, `link_site_source`, `unlink_site_source`.
 
 ## Testing without GitHub
 
@@ -78,4 +80,4 @@ go run ./internal/github/githubtest/fakegithub -listen 127.0.0.1:9101
 bin/ownpaneld … -panel-domain panel.localhost -tls internal -github-url http://127.0.0.1:9101
 ```
 
-The stand-in confirms the app with one click and installs it on all repositories of the account at once. It is not part of the panel's binary.
+The stand-in confirms the app with one click and installs it on all repositories of the account at once. Its repositories have a few branches (`acme/website` has `main`, `release/2.0` and `dev`) to try linking a site. It is not part of the panel's binary.
