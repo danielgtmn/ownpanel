@@ -2,7 +2,7 @@
 
 A site can take its code from **any Git repository**: GitLab, Codeberg, Forgejo, Gitea, Bitbucket, a server of your own, or a GitHub repository where the [[GitHub connection|GitHub]] cannot be installed. The panel makes a **deploy key** for the site (a key that may only read that repository) and a **notification address** the Git host calls on every push. Unlike a GitHub connection, this works for **members** too: the repository is your own, and you add the key yourself.
 
-> **Not yet:** a push is recorded as a run of the site, like a push through a GitHub connection, and the panel can already fetch the commit for a build ([[Sites and Publishing|Sites-and-Publishing#building-a-site-from-its-source]]). Runs are not built automatically yet ([#115](https://github.com/danielgtmn/ownpanel/issues/115)); until then the answers of the API and MCP say `"publishing_available": false`.
+Pushes are built and published like pushes through a GitHub connection: the panel fetches the commit, builds it with the site's build settings and makes the result live ([[Sites and Publishing|Sites-and-Publishing#build-settings]]). **Build now** and proposing build settings work the same way. On a server without the build environment, runs wait and the answers of the API and MCP say `"publishing_available": false`.
 
 ## Linking a site
 
@@ -41,7 +41,7 @@ If the server shows a different key than the one confirmed for the site, the pan
 
 ## What happens on a push
 
-The Git host calls the notification address. The panel checks the secret in whichever form the host sends it (see [[Security|Security#git-repositories]]), and then a **push to the linked branch** while "publish on push" is on records a **run** of the site, the same list of runs as for GitHub ([[GitHub|GitHub#what-happens-on-a-push]]): the commit, its message (first line), its author and who pushed. A newer push replaces a run that has not started. Tags, other branches, deleted branches and other events (a test notification, merge requests) are accepted and ignored.
+The Git host calls the notification address. The panel checks the secret in whichever form the host sends it and the delivery id (see [[Security|Security#git-repositories]]), answers at once, and then, for a **push to the linked branch** while "publish on push" is on, asks the repository where the branch points now and records a **run** of that commit, in the same list of runs as for GitHub ([[GitHub|GitHub#what-happens-on-a-push]]), with the message (first line), author and pusher from the notification when it names that commit. A newer push replaces a run that has not started; a notification for a commit that already waits, is being built or was published adds nothing. Tags, other branches, deleted branches and other events (a test notification, merge requests) are accepted and ignored. The answer is `{"result": "accepted"}`; the run appears a moment later.
 
 | Host | How it proves the notification |
 |---|---|
@@ -51,9 +51,9 @@ The Git host calls the notification address. The panel checks the secret in whic
 | GitLab | `X-Gitlab-Token`: the secret itself (GitLab signs nothing) |
 | Bitbucket Cloud and Data Center | `X-Hub-Signature` with `sha256=` |
 
-The payload's commit is only used to name the run: when the run is built, the panel fetches the commit the branch points at **then** and fails the run if the branch moved on (a newer push has its own run). So a notification can never make the panel build a commit that is not the branch's current one.
+The commit a notification names is never built: the panel finds the commit itself, and when the run is built it fetches the commit the branch points at **then** and fails the run if the branch moved on (a newer push has its own run). Notifications without a delivery id are refused, so one cannot be sent again unnoticed.
 
-Builds do not depend on notifications: a build fetches the branch from the repository with the deploy key, so building a site by hand ("Build now", [#115](https://github.com/danielgtmn/ownpanel/issues/115)) needs no notification address.
+Builds do not depend on notifications: **Build now** asks the repository for the branch with the deploy key, so it works without a notification address.
 
 ## Who may use it
 
@@ -73,7 +73,7 @@ See [[Security|Security#git-repositories]]: how the address, the server and what
 
 ## Testing locally
 
-Repository addresses must point at public servers, so a Git server in a container on your own machine is refused. For development only, `-git-private-hosts` (accepted only with `-tls internal` or `-tls off`) lets addresses point at loopback and private networks, for example a Gitea or Forgejo container whose SSH server listens on `127.0.0.1:2222`:
+Repository addresses must point at public servers, so a Git server in a container on your own machine is refused. For development only, `-git-private-hosts` (accepted only with `-tls internal`) lets addresses point at loopback and private networks, for example a Gitea or Forgejo container whose SSH server listens on `127.0.0.1:2222`:
 
 ```sh
 bin/ownpaneld … -tls internal -panel-domain panel.localhost -git-private-hosts
