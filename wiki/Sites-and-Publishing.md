@@ -84,7 +84,7 @@ A site whose first version is published this way keeps answering "no content yet
 
 ## Building a site from its source
 
-On a server where builds are set up ([[Installation|Installation#building-sites]]), the panel can also build a site and publish what the build produces: the source goes to the isolated build service, the build command runs there (for example `npm ci && npm run build`), and the output folder (for example `dist`) becomes a new version through the same path as an uploaded archive, with the same limits and checks. Building from a linked repository on every push comes with [#58](https://github.com/danielgtmn/ownpanel/issues/58); for now an administrator can build from an uploaded source archive:
+On a server where builds are set up ([[Installation|Installation#building-sites]]), the panel can also build a site and publish what the build produces: the source goes to the isolated build service, the build command runs there (for example `npm ci && npm run build`), and the output folder (for example `dist`) becomes a new version through the same path as an uploaded archive, with the same limits and checks. A site linked to a repository is built on every push and with **Build now**, with its [build settings](#build-settings) ([below](#building-from-the-linked-repository)); an administrator can also build from an uploaded source archive:
 
 | Way | How |
 |---|---|
@@ -108,6 +108,20 @@ curl --fail-with-body -H "Authorization: Bearer $TOKEN" \
 - **One build per site at a time.** A build requested while another of the same site runs waits; a newer request replaces one that waits (it ends as `skipped`). The build service also limits how many builds run on the server at once; when too many wait there, the request is refused with `429` and can be repeated later.
 - The panel waits for a build at most the longest build time plus half an hour (90 minutes); closing the request cancels the build. Builds that run longer than about an hour may lose their answer: the HTTP request is limited too.
 - When the panel restarts, builds the build service still runs for it are stopped and removed: their requests are gone, so nobody would publish them.
+
+### Building from the linked repository
+
+A site [linked to a repository](#source-repository-and-branch) with **publish on push** on is built on every push to its branch, and whenever someone presses **Build now** in the **Builds** section of the site page. Each is a **run** ([[GitHub|GitHub#what-happens-on-a-push]]):
+
+1. The panel downloads the commit from GitHub with a token that may only read that one repository (at most about 1 GB, within 15 minutes).
+2. It builds it with the site's [build settings](#build-settings). A site without a command is published as it is, still through the build environment, so its files get the same checks.
+3. On success the output becomes a new version and is made live. A failed, cancelled or timed-out build changes nothing.
+
+- **One build per site at a time.** A push while a build runs waits; a newer one replaces it before it starts.
+- **Output:** **Details** of a run shows what the build printed, live while it builds. The panel keeps it with the run (the last 30 runs per site), up to 1 MB; a longer output keeps its beginning and its last 64 KB. Secret values are hidden as `***`.
+- **Cancel** in the Builds section (or in the details) stops a run that waits or builds; the site stays as it is.
+- **Who may:** building, cancelling and changing the build settings need the same rights as changing the site (its owner or an administrator, a `write` token, a token limited to sites only for its sites). Seeing runs, their output and the build settings (never secret values) needs the right to see the site. The build runs isolated from the panel and from other sites ([[Security|Security#builds]]), which is what lets owners who are not administrators choose its commands.
+- Without the build environment on the server, runs wait and the site page says so.
 
 ## Versions
 
@@ -146,7 +160,7 @@ Every kept version, live or not, can be opened on an address of its own once an 
 
 A site can be linked to a **repository and branch** its code comes from, with **publish on push** on or off. On the site page, the **Source** section shows the repository (with a link to it), the branch, whether a push publishes, and who linked it; **Link repository** or **Change** opens a dialog to choose the repository and one of its branches, **Unlink** removes the link.
 
-> **Not yet:** a push to the linked branch is recorded as a run of the site (the Source section shows the latest one, see [[GitHub|GitHub#what-happens-on-a-push]]), but nothing is built or published yet: the run waits until building on the server is available ([#113](https://github.com/danielgtmn/ownpanel/issues/113)). Until then, publish files as before. The answers of the API and MCP say so with `"publishing_available": false`.
+A push to the linked branch is recorded as a run of the site and built with the site's [build settings](#build-settings) ([above](#building-from-the-linked-repository)). On a server without the build environment, runs wait: the answers of the API and MCP say so with `"publishing_available": false`, and you publish files as before.
 
 - **Where repositories come from:** a GitHub account or organisation connected under Settings → GitHub ([[GitHub|GitHub]]). The panel keeps GitHub's numeric id of the repository, so a renamed repository stays linked; the name shown is refreshed whenever the panel sees the repository.
 - **Who may link:** linking (and changing the branch or publish on push, which links anew) needs the same rights as changing the site (its owner or an administrator, a `write` token, a token limited to sites only for its sites) **and** the repository must be usable by that person: only administrators may use the connected repositories. A member therefore cannot link their site to an organisation's repository; to them those repositories do not exist. Members see a link an administrator made on their site and may unlink it.
@@ -157,7 +171,7 @@ A site can be linked to a **repository and branch** its code comes from, with **
 
 ## Recognised kinds of sites
 
-Building sites on the server is being added ([#58](https://github.com/danielgtmn/ownpanel/issues/58)); nothing below runs yet. When a site's source is looked at, the panel recognises how the site is made and proposes a build command, the folder with the finished site and the build environment. The proposal is a starting point you confirm or change.
+**Build settings** on the site page (and `GET /api/sites/{name}/build-settings/proposal`, MCP `propose_site_build_settings`) looks at the newest commit of the linked branch, recognises how the site is made and proposes a build command, the folder with the finished site and the build environment, with notes on what to check. A site without saved settings gets the proposal filled in when the dialog opens. The proposal is a starting point you confirm or change; nothing is saved until you do.
 
 | Kind | Recognised by | Proposed folder | Built on this server |
 |---|---|---|---|
@@ -172,9 +186,13 @@ Building sites on the server is being added ([#58](https://github.com/danielgtmn
 - **Package manager:** taken from the lock file (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`) or the `packageManager` field of `package.json`. npm, pnpm and Yarn are supported; a site that uses Bun is built with npm, with a note. Without a lock file, packages are installed fresh on every build, and the proposal says so.
 - **Node.js version:** taken from `.nvmrc`, `.node-version` or `engines.node` in `package.json`. If the server does not offer that version, the closest newer one (or else the newest) is proposed, with a note.
 - **When several kinds are found** (an Astro site with an Eleventy configuration, say), the proposal follows the more specific one and names the others so you can check.
-- **What is read:** only a few small files at the top of the source, each up to a size limit. Configuration files are read as text, never run, so a setting that is computed in the configuration is not seen; links are ignored.
+- **What is read:** the panel downloads the commit once (at most 256 MB, within 2 minutes) and keeps only the plain files at the top of it (up to 1 MB each) in a temporary folder, which it removes afterwards. Of those, only a few small ones are read, each up to a size limit. Configuration files are read as text, never run, so a setting that is computed in the configuration is not seen; links are ignored.
 
 ### Build settings
+
+Each site has its own build settings, kept apart from its link to a repository (unlinking keeps them). Change them in **Build settings** in the Builds section, with `PUT /api/sites/{name}/build-settings` or MCP `set_site_build_settings`. Until they are saved, runs of the site fail and ask for them.
+
+- **Variables** are stored encrypted as a whole. Values of **secret** variables are never shown again, in the web interface, the API or MCP: only their names. To keep a stored value, save the variable without a value; to change it, enter a new one. Changes appear in the activity log with the variable names only.
 
 | Setting | Rule |
 |---|---|
