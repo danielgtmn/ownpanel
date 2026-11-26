@@ -200,8 +200,16 @@ domains in the background and on request.
   one of their own DNS connections. Site-limited tokens are refused by the
   mail operations themselves (`controlledDomain` alone would let them
   through). A domain used by another person's site or
-  redirect is refused without naming them.
+  redirect is refused without naming them, and so is a domain in which
+  (or below which) another user's sign-in address lies, so their mail,
+  such as a password reset link, cannot reach this member's mailboxes.
 - An **admin** may enable mail for any domain.
+- The other way round, a member cannot use another person's mail domain,
+  nor its `autoconfig.`/`autodiscover.` names, as the domain of a site or
+  redirect (admins may). A setup name that someone other than the mail
+  domain's owner holds anyway (an admin's site, or a claim made before the
+  mail domain) is still answered by the panel: Caddy matches the setup
+  names before redirects and sites.
 
 | Operation | Owner (member) | Admin | Read-only token | Site-limited token | System |
 |---|---|---|---|---|---|
@@ -277,7 +285,9 @@ have no panel account and cannot change their own password yet (*later*).
   the background loop looks every 5 minutes, opening a domain's records
   looks at once, and a change re-syncs Caddy. A failed lookup changes
   nothing; a name that resolves elsewhere or not at all is dropped. So
-  Caddy never asks a CA for a name that does not point here.
+  Caddy never asks a CA for a name that does not point here. A setup name
+  that is a domain of the mail domain owner's own site or redirect is
+  left to it.
 - IMAP (implicit TLS on 993 only, RFC 8314): `INBOX`, `Sent`, `Drafts`,
   `Junk`, `Trash`, `Archive` with special-use flags; IDLE, MOVE, UIDPLUS.
   Envelope and body structure are read from the message file on FETCH

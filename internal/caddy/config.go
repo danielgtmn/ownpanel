@@ -56,7 +56,8 @@ type Options struct {
 	// autodiscover.<domain> that point to this server: the paths where
 	// mail programs look for their settings (MailSetupPaths) are passed to
 	// the panel, everything else answers 404. They get certificates like
-	// sites, so only names known to point here belong in it.
+	// sites, so only names known to point here belong in it. They are
+	// matched before domain redirects and sites.
 	MailSetupHosts []string
 	// MailAutoconfigDomains are the active mail domains: when one of them
 	// is a site's domain, MailAutoconfigWellKnown is passed to the panel
@@ -138,7 +139,9 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 			"terminal": true,
 		})
 	}
-	routes = append(routes, domainRedirects...)
+	// The setup names come before domain redirects and sites: the panel
+	// lists only names that nobody but the mail domain's owner claimed,
+	// so another person's redirect or site must not answer them.
 	if len(opts.MailSetupHosts) > 0 {
 		if opts.PanelUpstream == "" {
 			return nil, fmt.Errorf("names for setting up mail programs need the panel's address")
@@ -154,6 +157,7 @@ func Build(opts Options, sites []Site, redirects ...Redirect) (obj, error) {
 			"terminal": true,
 		})
 	}
+	routes = append(routes, domainRedirects...)
 	mailDomains := map[string]bool{}
 	for _, d := range opts.MailAutoconfigDomains {
 		mailDomains[d] = true

@@ -418,6 +418,9 @@ func (s *Service) CreateRedirect(ctx context.Context, a Actor, in RedirectInput)
 	if err := s.placeRedirect(a, &r, sites, a.UserID); err != nil {
 		return Redirect{}, err
 	}
+	if err := s.othersMailDomainName(ctx, a, []string{r.SourceDomain}, nil); err != nil {
+		return Redirect{}, err
+	}
 	saved, err := s.store.CreateRedirect(ctx, r, MaxRedirectsPerUser)
 	if err != nil {
 		return Redirect{}, s.redirectStoreError(a, err, sites)
@@ -448,6 +451,9 @@ func (s *Service) UpdateRedirect(ctx context.Context, a Actor, id int64, in Redi
 		owner = cur.OwnerID // an admin's change keeps the owner
 	}
 	if err := s.placeRedirect(a, &r, sites, owner); err != nil {
+		return Redirect{}, err
+	}
+	if err := s.othersMailDomainName(ctx, a, []string{r.SourceDomain}, []string{cur.SourceDomain}); err != nil {
 		return Redirect{}, err
 	}
 	r.ID = id

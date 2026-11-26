@@ -334,6 +334,9 @@ func (s *Service) SaveSite(ctx context.Context, a Actor, name string, domains []
 		if err := needWrite(a); err != nil {
 			return Site{}, err
 		}
+		if err := s.othersMailDomainName(ctx, a, clean, existing.Domains); err != nil {
+			return Site{}, err
+		}
 		site, err = s.store.SetDomains(ctx, name, clean)
 	case errors.Is(err, store.ErrNotFound):
 		if err := needWrite(a); err != nil {
@@ -345,14 +348,33 @@ func (s *Service) SaveSite(ctx context.Context, a Actor, name string, domains []
 		if a.Via == ViaSystem {
 			return Site{}, errorf(Forbidden, "sites must be created by a user")
 		}
+		if err := s.othersMailDomainName(ctx, a, clean, nil); err != nil {
+			return Site{}, err
+		}
+		if err := store.ValidateName(name); err != nil {
+			return Site{}, storeError(err)
+		}
 		action = "site.create"
-		site, err = s.store.CreateSite(ctx, name, clean, a.UserID)
+		site, err = s.createSite(ctx, name, clean, a.UserID)
 	}
 	if err != nil {
 		return Site{}, s.domainError(ctx, a, err)
 	}
 	s.record(ctx, a, action, name, strings.Join(site.Domains, ", "))
 	return s.view(site), s.syncSaved(ctx)
+}
+
+// createSite stores a new site. Files left behind by an earlier site of
+// the same name (a removal that failed) are removed first, so they never
+// become the new site's releases. syncMu keeps removeOrphanSites from
+// deciding about the name meanwhile.
+func (s *Service) createSite(ctx context.Context, name string, domains []string, owner int64) (store.Site, error) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	if err := s.deploys.Remove(name); err != nil {
+		return store.Site{}, newError(Internal, err)
+	}
+	return s.store.CreateSite(ctx, name, domains, owner)
 }
 
 // domainError hides the name of a site the actor may not see when a domain
@@ -368,8 +390,9 @@ func (s *Service) domainError(ctx context.Context, a Actor, err error) error {
 }
 
 // DeleteSite stops serving a site, then removes its files. If the web server
-// cannot be updated the files stay, so nothing is served from a half-removed
-// directory.
+// cannot be updated the files stay for now, so nothing is served from a
+// half-removed directory; the next successful sync removes them
+// (removeOrphanSites).
 func (s *Service) DeleteSite(ctx context.Context, a Actor, name string) error {
 	if _, err := s.visibleSite(ctx, a, name); err != nil {
 		return err
@@ -477,14 +500,43 @@ func (s *Service) sync(ctx context.Context) error {
 		return err
 	}
 	opts := s.caddyOptions()
-	if err := s.mailSetupCaddy(ctx, &opts, all, redirects); err != nil {
+	if err := s.mailSetupCaddy(ctx, &opts, all); err != nil {
 		return err
 	}
 	cfg, err := caddy.Build(opts, sites, redirects...)
 	if err != nil {
 		return err
 	}
-	return s.web.Load(ctx, cfg)
+	if err := s.web.Load(ctx, cfg); err != nil {
+		return err
+	}
+	s.removeOrphanSites(ctx)
+	return nil
+}
+
+// removeOrphanSites deletes the files of sites that no longer exist, e.g.
+// after a removal whose web server update failed. It runs only after a
+// successful sync, so the web server no longer serves them, and under
+// syncMu.
+func (s *Service) removeOrphanSites(ctx context.Context) {
+	names, err := s.deploys.Sites()
+	if err != nil {
+		slog.Error("listing site files failed", "err", err)
+		return
+	}
+	for _, name := range names {
+		if store.ValidateName(name) != nil {
+			continue // not a site's directory
+		}
+		if _, err := s.store.Site(ctx, name); !errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err := s.deploys.Remove(name); err != nil {
+			slog.Error("removing the files of a deleted site failed", "site", name, "err", err)
+			continue
+		}
+		slog.Info("removed the files of a deleted site", "site", name)
+	}
 }
 
 // syncSaved syncs after a change that is already saved. On failure the

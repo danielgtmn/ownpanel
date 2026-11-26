@@ -485,3 +485,21 @@ func finishRelease(dir string) error {
 	}
 	return nil
 }
+
+// Sites lists the site names that have files below Base.
+func (m *Manager) Sites() ([]string, error) {
+	entries, err := os.ReadDir(m.Base)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			out = append(out, e.Name())
+		}
+	}
+	return out, nil
+}

@@ -10,7 +10,7 @@ A **site** is a set of static files (HTML, CSS, JavaScript, images) served on on
 | Owner | The user who created the site. Members see and manage only their own sites; admins see all. |
 | Domains | A list, possibly empty. Stored in lowercase, duplicates removed. Each must be a plain host name with at least one dot (no wildcards, no ports, no paths). |
 
-A domain can belong to only one site. The panel's own domain (`-panel-domain`) cannot be used by a site. If a domain is taken by a site you cannot see, the error says only that it is used by another site.
+A domain can belong to only one site. The panel's own domain (`-panel-domain`) cannot be used by a site. If a domain is taken by a site you cannot see, the error says only that it is used by another site. Members also cannot use another person's mail domain or its `autoconfig.`/`autodiscover.` names (where mail programs look for their settings); admins can.
 
 Creating a site and changing its domains is one operation: `PUT /api/sites/{name}` with `{"domains": [...]}` creates the site if the name is free (you become the owner) and replaces the domain list if you may already see it. In MCP these are `create_site` and `set_site_domains`.
 
@@ -82,7 +82,7 @@ Going back with no id fails with a conflict if there is no earlier version. Maki
 
 ## Deleting
 
-`DELETE /api/sites/{name}` (MCP: `delete_site`, which also needs `confirm_name` equal to the name) stops serving the site, then removes all its files and versions. This cannot be undone. Access tokens limited to certain sites cannot delete sites, and the site name is removed from the lists of tokens that named it.
+`DELETE /api/sites/{name}` (MCP: `delete_site`, which also needs `confirm_name` equal to the name) stops serving the site, then removes all its files and versions. This cannot be undone. If the web server cannot be updated at that moment, the files are removed by the next successful update; a new site of the same name always starts empty. Access tokens limited to certain sites cannot delete sites, and the site name is removed from the lists of tokens that named it.
 
 A user who still owns sites cannot be deleted; delete the sites first (there is no way to change a site's owner; see [[Users and Access|Users-and-Access]]).
 
