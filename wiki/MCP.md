@@ -27,6 +27,8 @@ Other clients need the same two things: the address and the header `Authorizatio
 
 Version ids come from `get_site`; a version id starts with a UTC timestamp. Other ids (`id`, `connection_id`, `mailbox_id`, `grantee_id`) and mail import ids (`import_id`) are strings such as `"42"`: pass them on exactly as a list returned them. Errors are returned as tool errors with a readable sentence.
 
+### Sites
+
 | Tool | Arguments | What it does |
 |---|---|---|
 | `list_sites` | none | Lists the sites you can manage, sorted by name. For each: name, domains, owner, id of the live version, all kept versions (newest first, each with `id`, `created_at`, `live`, `never_live` and `preview_url`, the address where the version can be opened, empty without a domain for previews). |
@@ -38,9 +40,19 @@ Version ids come from `get_site`; a version id starts with a UTC timestamp. Othe
 | `create_upload_link` | `site`, `live` (optional, default `true`) | Creates a one-time upload link for a `.zip` or `.tar.gz` of up to 512 MB; with `live: false` the uploaded version is not made live. Returns `url`, `curl_command`, `expires_at`, `max_size_mb`. |
 | `make_version_live` | `site`, `version` (optional) | Switches to a kept version, also one published with `live: false`; without `version`, back to the last version before the live one that was live itself. Safe to repeat. |
 | `check_site_domains` | `site` | For each domain: `domain`, `state` (`points_here`, `points_elsewhere`, `no_record`, `lookup_failed`) and `found` (addresses it points to). Needs `-server-ip` to be configured; see [[DNS|DNS]]. |
+
+### Redirects
+
+| Tool | Arguments | What it does |
+|---|---|---|
 | `list_redirects` | `site` (optional) | Lists the redirects you can see, or only the path redirects of one site. Each with `id`, `owner`, `source_domain`, `source_path`, `target`, `code`, `keep_path`, `keep_query`, `created_at`. Read-only. See [[Redirects|Redirects]]. |
 | `set_redirect` | `id` (optional), `source_domain`, `source_path` (optional), `target`, `code` (optional, default 301), `keep_path`, `keep_query` (optional) | Creates a redirect, or replaces the one with `id`. Without `source_path` the whole domain redirects; with it, one path (`/old`) or a prefix (`/blog/*`) on a domain of one of your sites. Returns the redirect. |
 | `delete_redirect` | `id`, `confirm_source` | Deletes a redirect. `confirm_source` must equal its `source_domain` followed by its `source_path` (like `www.example.com` or `example.com/old`), otherwise nothing happens. |
+
+### Mail service and mail domains
+
+| Tool | Arguments | What it does |
+|---|---|---|
 | `get_mail_status` | none | Whether the mail service runs and is up to date, the mail server's name (`mail_host`) and the ports for mail programs. Read-only. |
 | `get_mail_records` | `domain` | The DNS records the mail domain needs (MX, SPF, DKIM, DMARC, SRV for mail programs) with what its nameservers answer and a status each (`ok`, `missing`, `different`, `conflict`, `unknown`), plus `can_apply`, `connection_id`, `zone` and `apply_note`. Read-only. |
 | `set_up_mail_records` | `domain`, `confirm` (optional) | Writes those records into the domain's zone in your own DNS connection. Other TXT values are kept, an existing DMARC record is never changed, an SPF record that cannot be merged safely is skipped. Without `confirm`, nothing is written when replacing MX records that point elsewhere is needed (mail would move here): show the returned `changes` to the user and call again with `confirm: true` only if they agree. |
@@ -50,6 +62,11 @@ Version ids come from `get_site`; a version id starts with a UTC timestamp. Othe
 | `enable_mail_domain` | `domain` | Enables e-mail for a domain of one of your sites or redirects, or one in a zone of your DNS connections (admins: any). It receives mail once its MX record points to `mail_host`. |
 | `check_mail_domain` | `domain` | Looks at the MX record now and activates the domain if it points to `mail_host`. |
 | `delete_mail_domain` | `domain`, `confirm_domain` | Deletes e-mail for the domain with every mailbox, alias and all stored mail. `confirm_domain` must equal `domain`. |
+
+### Mailboxes and aliases
+
+| Tool | Arguments | What it does |
+|---|---|---|
 | `list_mailboxes` | `domain` (optional) | Lists mailboxes with `id`, `address`, quota, send limits, usage and whether sending is blocked. Read-only. |
 | `set_mailbox_limits` | `id`, `quota_bytes`, `send_per_hour`, `send_per_day` (each optional) | Changes the limits; owners can only lower them. |
 | `unblock_mailbox` | `id` | Lifts a sending block of the mail service (admins only). |
@@ -59,17 +76,37 @@ Version ids come from `get_site`; a version id starts with a UTC timestamp. Othe
 | `delete_mail_alias` | `id`, `confirm_address` | Deletes an alias. `confirm_address` must equal its address. |
 | `list_mail_imports` | `id` (mailbox) | Lists the imports of mail into a mailbox, newest first: `id`, `source` (user and server, or file name), `state`, `error`, counts of messages copied, skipped as already there and failed, `bytes`, `created`, `finished`. Read-only. |
 | `cancel_mail_import` | `id` (mailbox), `import_id` | Stops an import that has not finished (copied mail stays), or removes a finished one from the list. |
+
+### Mailbox settings
+
+| Tool | Arguments | What it does |
+|---|---|---|
 | `set_mailbox_display_name` | `id`, `display_name` | Sets the name shown as the sender and in address books (at most 64 characters, no `<>"`); empty removes it. |
 | `get_mailbox_out_of_office` | `id` | Whether the mailbox has an out-of-office reply, whether it is being sent now, its dates and who set it (not the person's own text). Read-only. |
 | `set_mailbox_out_of_office` | `id`, `text`, `subject`, `start`, `end`, `zone`, `days`, `replace` (all but `id` and `text` optional) | Sets an out-of-office reply for a mailbox of your domains (for someone who left). The activity log records it and the person sees who set it. Fails while the person's filters were written in a mail program unless `replace` is set. |
 | `clear_mailbox_out_of_office` | `id` | Turns the out-of-office reply off. |
+
+### Organisations
+
+| Tool | Arguments | What it does |
+|---|---|---|
 | `list_mail_organisations` | none | Lists the organisations you manage (admins: all) with `id`, `name`, `owner` and `domains` (only the domains you may see). Read-only. |
 | `set_mail_organisation` | `id` (optional), `name` | Creates an organisation, or renames the one with `id`. |
 | `delete_mail_organisation` | `id`, `confirm_name` | Deletes an organisation; its domains stand alone again. `confirm_name` must equal its name. |
 | `set_mail_domain_organisation` | `domain`, `organisation` | Puts a mail domain into one of your organisations, or lets it stand alone (`organisation` empty). Grouping domains of different owners is for admins only. |
+
+### Shared mailboxes
+
+| Tool | Arguments | What it does |
+|---|---|---|
 | `set_mailbox_kind` | `id`, `kind` (optional, only `shared`), `keep_sent_copy` (optional) | Makes a personal mailbox shared: its password and app passwords are removed, everyone signed in to it is signed out, and its access to other mailboxes ends. `keep_sent_copy` (shared mailboxes) keeps mail sent for it in its Sent folder. Making a mailbox personal again needs a password and is done in the web interface. Returns the mailbox. |
 | `set_mailbox_access` | `id` (a shared mailbox), `address`, `rights` | Gives a personal mailbox of the same organisation access to a shared mailbox, or changes its rights: `read`, `write` (includes read), `manage`, `send-as`, `send-on-behalf`. Its folders then appear under `Shared/<address>` in that person's mail program. Returns the shared mailbox. |
 | `remove_mailbox_access` | `id`, `grantee_id` | Takes away a mailbox's access (`mailbox_id` from `shared_with`) to a shared mailbox, or to a personal mailbox its owner shared. Mail programs with one of its folders open are disconnected. |
+
+### DNS domains
+
+| Tool | Arguments | What it does |
+|---|---|---|
 | `list_dns_domains` | `available` (optional) | Lists the domains (zones) in the panel through your own DNS connections: chosen ones and those your own sites, redirects or e-mail use (for administrators also the panel domain). Each with `connection_id`, `connection_name`, `domain`, `read_only`, `nameservers`, `adopted`, `used_by`; connections that fail are in `problems`. With `available: true`, the zones not in the panel yet. Read-only. |
 | `manage_dns_domain` | `connection_id`, `domain` | Manages a zone of your own connection in the panel. Nothing changes at the provider. Safe to repeat. |
 | `stop_managing_dns_domain` | `connection_id`, `domain` | Takes a chosen zone out of the panel; it stays at the provider. Refused while something of yours uses it. |
@@ -78,6 +115,11 @@ Version ids come from `get_site`; a version id starts with a UTC timestamp. Othe
 | `list_domains` | | Lists the domains you added whose DNS is managed elsewhere, each with `domain`, `created_at` and `used_by`. Read-only. |
 | `add_domain` | `domain` | Adds a domain whose DNS is managed elsewhere (a registrable domain like `example.com`), so it shows up in the panel on its own. Nothing changes at any provider. Safe to repeat. |
 | `remove_domain` | `domain` | Removes such a domain from your list; nothing changes at any provider. `still_used_by` says what of yours still keeps it in the panel. |
+
+### DNS records
+
+| Tool | Arguments | What it does |
+|---|---|---|
 | `list_dns_connections` | none | Lists your connections to DNS provider accounts: `id`, `provider`, `name`, `owner`, `created_at`, `last_checked_at`, `last_error`, `can_write`, `domain_count`. Never a token. Administrators also see other people's connections but can only use their own. Read-only. |
 | `list_dns_records` | `connection_id`, `domain` | Lists the record sets of a zone of your own connection as the provider has them now, `@` first: `name`, `type`, `ttl` (`null` is the zone's default), `values`, `locked`. Read-only. |
 | `set_dns_record` | `connection_id`, `domain`, `name`, `type`, `ttl` (optional), `values` | Creates or replaces the record set of one name and type; `values` replace all its values. `name` is relative to the zone (`@`, `www`). TXT values are plain text without quotes. Returns the record set as written. Safe to repeat. |
