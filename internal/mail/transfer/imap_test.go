@@ -104,11 +104,14 @@ func TestIMAPCheckAndImport(t *testing.T) {
 	if fl := e.imap.flagsOf("INBOX"); len(fl[1]) != 0 {
 		t.Fatalf("source flags changed: %v", fl)
 	}
-	if k := e.eventKinds(); !slices.Equal(k, []string{config.EventImportFinished}) {
+	if k := e.waitEvents(1); !slices.Equal(k, []string{config.EventImportFinished}) {
 		t.Fatalf("events %v", k)
 	}
-	if !strings.Contains(e.events[0].Detail, "old@example.com at imap.test") || e.events[0].Address != "alice@example.org" {
-		t.Fatalf("event %+v", e.events[0])
+	e.mu.Lock()
+	ev := e.events[0]
+	e.mu.Unlock()
+	if !strings.Contains(ev.Detail, "old@example.com at imap.test") || ev.Address != "alice@example.org" {
+		t.Fatalf("event %+v", ev)
 	}
 
 	// A repeat fetches nothing old (watermarks) and copies what is new.
@@ -277,7 +280,7 @@ func TestIMAPPausedByDownloadLimit(t *testing.T) {
 	if j.Copied != 2 || !strings.Contains(j.Error, "limits downloads") || !j.Finished.IsZero() {
 		t.Fatalf("paused %+v", j)
 	}
-	if k := e.eventKinds(); !slices.Equal(k, []string{config.EventImportPaused}) {
+	if k := e.waitEvents(1); !slices.Equal(k, []string{config.EventImportPaused}) {
 		t.Fatalf("events %v", k)
 	}
 	// Continuing needs the password.
@@ -358,8 +361,8 @@ func TestIMAPQuota(t *testing.T) {
 	if j.Copied != 3 || !strings.Contains(j.Error, "quota") {
 		t.Fatalf("quota %+v", j)
 	}
-	if !slices.Contains(e.eventKinds(), config.EventImportFailed) {
-		t.Fatal("no event")
+	if k := e.waitEvents(1); !slices.Equal(k, []string{config.EventImportFailed}) {
+		t.Fatalf("events %v", k)
 	}
 }
 

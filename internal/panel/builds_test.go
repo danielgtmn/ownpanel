@@ -11,6 +11,7 @@ import (
 )
 
 type fakeBuilds struct {
+	BuildService
 	st  build.Status
 	err error
 }
