@@ -313,7 +313,7 @@ func TestSiteSourceConnectionRemoved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sites := conns.Apps[0].Installations[0].Sites; len(sites) != 1 || sites[0] != (GitHubLinkedSite{Site: "rootsite", Repository: "acme/site", Branch: "main"}) ||
+	if sites := conns.Apps[0].Installations[0].Sites; len(sites) != 1 || sites[0] != (GitHubLinkedSite{Site: "rootsite", Repository: "acme/site", RepositoryID: g.site, Branch: "main"}) ||
 		len(conns.SitesWithoutConnection) != 0 {
 		t.Fatalf("linked sites: %+v", conns)
 	}

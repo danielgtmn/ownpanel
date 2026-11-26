@@ -144,9 +144,10 @@ type GitHub struct {
 // GitHubLinkedSite is a site linked to a repository, as the settings list
 // it.
 type GitHubLinkedSite struct {
-	Site       string `json:"site"`
-	Repository string `json:"repository"`
-	Branch     string `json:"branch"`
+	Site         string `json:"site"`
+	Repository   string `json:"repository"`
+	RepositoryID int64  `json:"repository_id"`
+	Branch       string `json:"branch"`
 }
 
 // GitHubApp is one connection: an App the panel created. Never its
@@ -513,7 +514,7 @@ func (s *Service) GitHubConnections(ctx context.Context, a Actor) (GitHub, error
 	}
 	byInstallation := map[int64][]GitHubLinkedSite{}
 	for _, src := range sources {
-		linked := GitHubLinkedSite{Site: src.Site, Repository: src.Repository, Branch: src.Branch}
+		linked := GitHubLinkedSite{Site: src.Site, Repository: src.Repository, RepositoryID: src.RepositoryID, Branch: src.Branch}
 		byInstallation[src.InstallationID] = append(byInstallation[src.InstallationID], linked)
 	}
 	known := map[int64]bool{}
@@ -532,7 +533,7 @@ func (s *Service) GitHubConnections(ctx context.Context, a Actor) (GitHub, error
 	for _, src := range sources {
 		if !known[src.InstallationID] {
 			out.SitesWithoutConnection = append(out.SitesWithoutConnection,
-				GitHubLinkedSite{Site: src.Site, Repository: src.Repository, Branch: src.Branch})
+				GitHubLinkedSite{Site: src.Site, Repository: src.Repository, RepositoryID: src.RepositoryID, Branch: src.Branch})
 		}
 	}
 	return out, nil
