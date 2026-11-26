@@ -20,7 +20,7 @@ func TestPanelGrantRemovalWins(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, _ := svc.store.Mailbox(ctx, w.bobBox)
-	annaBox, _ := svc.store.Mailbox(ctx, anna.ID)
+	annaBox, _ := svc.store.Mailbox(ctx, mustStoreID(anna.ID))
 	grants := []config.Grant{{StorageID: annaBox.StorageID, Rights: []string{"read"}}}
 	event := func(id, rev int64, at time.Time) config.Event {
 		return config.Event{ID: id, At: at, Kind: config.EventGrantsChanged, StorageID: info.StorageID,
@@ -31,7 +31,7 @@ func TestPanelGrantRemovalWins(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.now = w.now.Add(time.Minute)
-	if _, err := svc.RemoveMailboxGrant(ctx, bob, w.bobBox, anna.ID); err != nil {
+	if _, err := svc.RemoveMailboxGrant(ctx, bob, idString(w.bobBox), anna.ID); err != nil {
 		t.Fatal(err)
 	}
 	if p := pushedMailbox(t, w.mail.last(), "info@bobsite.example.com"); p.GrantsSetAt != w.now.Unix() {
@@ -42,7 +42,7 @@ func TestPanelGrantRemovalWins(t *testing.T) {
 	if err := svc.recordMailEvents(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := svc.MailboxOf(ctx, bob, w.bobBox); len(v.SharedWith) != 0 {
+	if v, _ := svc.MailboxOf(ctx, bob, idString(w.bobBox)); len(v.SharedWith) != 0 {
 		t.Fatalf("late event undid the removal: %+v", v.SharedWith)
 	}
 	// Made after the removal: taken.
@@ -51,7 +51,7 @@ func TestPanelGrantRemovalWins(t *testing.T) {
 	if err := svc.recordMailEvents(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := svc.MailboxOf(ctx, bob, w.bobBox); len(v.SharedWith) != 1 {
+	if v, _ := svc.MailboxOf(ctx, bob, idString(w.bobBox)); len(v.SharedWith) != 1 {
 		t.Fatalf("newer event not taken: %+v", v.SharedWith)
 	}
 }

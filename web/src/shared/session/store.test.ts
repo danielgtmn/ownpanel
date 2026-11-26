@@ -19,7 +19,7 @@ import {
 } from './store.ts'
 import type { User } from './types.ts'
 
-const anna: User = { id: 1, name: 'anna', email: '', role: 'admin', created_at: '2026-01-01T00:00:00Z' }
+const anna: User = { id: '1', name: 'anna', email: '', role: 'admin', created_at: '2026-01-01T00:00:00Z' }
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })

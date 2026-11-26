@@ -15,20 +15,20 @@ import (
 // away from it.
 
 type setMailboxKindInput struct {
-	ID           int64  `json:"id" jsonschema:"mailbox id from list_mailboxes"`
+	ID           string `json:"id" jsonschema:"mailbox id from list_mailboxes"`
 	Kind         string `json:"kind,omitempty" jsonschema:"shared turns a personal mailbox into a shared one: its password and app passwords are removed and everyone signed in to it is signed out; people then use it with their own mailbox. Leave empty to keep the kind. Making it personal again needs a password and is done in the web interface"`
 	KeepSentCopy *bool  `json:"keep_sent_copy,omitempty" jsonschema:"shared mailboxes only: true keeps a copy of the mail sent for it in its Sent folder; leave out to keep the setting"`
 }
 
 type setMailboxAccessInput struct {
-	ID      int64    `json:"id" jsonschema:"id of a shared mailbox from list_mailboxes"`
+	ID      string   `json:"id" jsonschema:"id of a shared mailbox from list_mailboxes"`
 	Address string   `json:"address" jsonschema:"address of a personal mailbox of the same organisation that gets access"`
 	Rights  []string `json:"rights" jsonschema:"what it may do: read (folders and messages, with its own read state), write (flags, moving, deleting, folders; includes read), manage (filters and out-of-office of the shared mailbox), send-as (send with the shared address as sender), send-on-behalf (send for the shared address, showing who sent it)"`
 }
 
 type removeMailboxAccessInput struct {
-	ID        int64 `json:"id" jsonschema:"id of the mailbox from list_mailboxes"`
-	GranteeID int64 `json:"grantee_id" jsonschema:"mailbox_id of the mailbox losing access, from shared_with"`
+	ID        string `json:"id" jsonschema:"id of the mailbox from list_mailboxes"`
+	GranteeID string `json:"grantee_id" jsonschema:"mailbox_id of the mailbox losing access, from shared_with"`
 }
 
 func addSharingTools(s *sdk.Server, p *panel.Service) {

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getDomainStatuses, getServerAddresses, pointDomain, type DomainStatus } from '../api/index.ts'
 import { foundText, pointedMessage, statusAction, statusText, statusTone } from './status.ts'
 
-const zone = { connection_id: 3, connection_name: 'Main', zone: 'example.com', record_name: '@' }
+const zone = { connection_id: '3', connection_name: 'Main', zone: 'example.com', record_name: '@' }
 
 function status(state: DomainStatus['state'], overrides: Partial<DomainStatus> = {}): DomainStatus {
   return { domain: 'example.com', state, found: [], zone, ...overrides }

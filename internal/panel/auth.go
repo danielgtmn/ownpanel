@@ -50,7 +50,7 @@ var userNameRe = regexp.MustCompile(`^[a-z0-9._-]{3,32}$`)
 
 // User is what callers see of a user. Email is "" when none is set.
 type User struct {
-	ID        int64     `json:"id"`
+	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Email     string    `json:"email"`
 	Role      string    `json:"role"`
@@ -58,7 +58,7 @@ type User struct {
 }
 
 func userView(u store.User, au sesam.User) User {
-	return User{ID: u.ID, Name: u.Name, Email: au.Email, Role: u.Role, CreatedAt: u.CreatedAt}
+	return User{ID: idString(u.ID), Name: u.Name, Email: au.Email, Role: u.Role, CreatedAt: u.CreatedAt}
 }
 
 // Credentials are a sign-in attempt. Name is the user name or the e-mail

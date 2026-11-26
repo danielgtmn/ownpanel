@@ -126,7 +126,7 @@ type MailRecords struct {
 	MailHost     string       `json:"mail_host"`
 	Records      []MailRecord `json:"records"`
 	CanApply     bool         `json:"can_apply"`
-	ConnectionID int64        `json:"connection_id"`
+	ConnectionID string       `json:"connection_id"`
 	Zone         string       `json:"zone"`
 	// ApplyNote says why the records cannot be applied here; empty when
 	// they can.
@@ -646,7 +646,7 @@ func (s *Service) MailRecords(ctx context.Context, a Actor, domain string) (Mail
 		}
 		out.ApplyNote = note
 		if note == "" {
-			out.CanApply, out.ConnectionID, out.Zone = true, m.conn.ID, m.zone.Name
+			out.CanApply, out.ConnectionID, out.Zone = true, idString(m.conn.ID), m.zone.Name
 		}
 	}
 	wg.Wait()
@@ -959,7 +959,7 @@ func (s *Service) SetUpMailHostSPF(ctx context.Context, a Actor) (MailRecordChan
 // connection, a primary zone). Without confirm nothing is written when a
 // change needs confirmation. It returns the kinds written.
 func (s *Service) writeMailRecords(ctx context.Context, a Actor, m zoneMatch, specs []mailRecordSpec, host, domain string, confirm bool, action, target string) (MailRecordChanges, []string, error) {
-	c, z, err := s.writableZone(ctx, a, m.conn.ID, m.zone.Name)
+	c, z, err := s.writableZone(ctx, a, idString(m.conn.ID), m.zone.Name)
 	if err != nil {
 		return MailRecordChanges{}, nil, err
 	}

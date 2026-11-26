@@ -272,7 +272,7 @@ type MailboxSetup struct {
 
 // MailboxSetupOf returns the settings for mail programs of a mailbox
 // (whoever may see the mailbox; no password, nothing secret).
-func (s *Service) MailboxSetupOf(ctx context.Context, a Actor, id int64) (MailboxSetup, error) {
+func (s *Service) MailboxSetupOf(ctx context.Context, a Actor, id string) (MailboxSetup, error) {
 	m, err := s.visibleMailbox(ctx, a, id)
 	if err != nil {
 		return MailboxSetup{}, err

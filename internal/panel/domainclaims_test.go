@@ -129,7 +129,7 @@ func TestMailDomainWithOthersAccountAddress(t *testing.T) {
 	ctx := context.Background()
 	svc := w.svc
 	w.mx.point("company.example", testMailHost)
-	if _, err := svc.UpdateUser(ctx, admin, admin.UserID, UserUpdate{Email: strp("alice@company.example")}); err != nil {
+	if _, err := svc.UpdateUser(ctx, admin, idString(admin.UserID), UserUpdate{Email: strp("alice@company.example")}); err != nil {
 		t.Fatal(err)
 	}
 	if md, err := svc.EnableMailDomain(ctx, admin, "company.example"); err != nil || !md.Active {
@@ -144,16 +144,16 @@ func TestMailDomainWithOthersAccountAddress(t *testing.T) {
 	_, err := svc.EnableMailDomain(ctx, bob, "company.example")
 	wantKind(t, err, Invalid)
 	// An address below the domain counts too.
-	if _, err := svc.UpdateUser(ctx, admin, admin.UserID, UserUpdate{Email: strp("alice@eu.company.example")}); err != nil {
+	if _, err := svc.UpdateUser(ctx, admin, idString(admin.UserID), UserUpdate{Email: strp("alice@eu.company.example")}); err != nil {
 		t.Fatal(err)
 	}
 	_, err = svc.EnableMailDomain(ctx, bob, "company.example")
 	wantKind(t, err, Invalid)
 	// Admins may; and a member's own address is no obstacle.
-	if _, err := svc.UpdateUser(ctx, admin, admin.UserID, UserUpdate{Email: strp("")}); err != nil {
+	if _, err := svc.UpdateUser(ctx, admin, idString(admin.UserID), UserUpdate{Email: strp("")}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.UpdateUser(ctx, admin, bob.UserID, UserUpdate{Email: strp("bob@company.example")}); err != nil {
+	if _, err := svc.UpdateUser(ctx, admin, idString(bob.UserID), UserUpdate{Email: strp("bob@company.example")}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.EnableMailDomain(ctx, bob, "company.example"); err != nil {
@@ -185,7 +185,7 @@ func TestPasswordResetNotIntoOthersMailbox(t *testing.T) {
 
 	// The owner of the mail domain gets theirs; so does anybody whose
 	// address is in an admin's mail domain.
-	if _, err := svc.UpdateUser(ctx, admin, bob.UserID, UserUpdate{Email: strp("info@bobsite.example.com")}); err != nil {
+	if _, err := svc.UpdateUser(ctx, admin, idString(bob.UserID), UserUpdate{Email: strp("info@bobsite.example.com")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.RequestPasswordReset(ctx, "info@bobsite.example.com", "1.2.3.5"); err != nil {

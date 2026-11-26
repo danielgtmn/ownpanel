@@ -35,11 +35,11 @@ func (s *Server) mailTransferRoutes(mux *http.ServeMux) {
 
 // mailboxOfPath resolves {domain} and {local_part}; the panel decides
 // whether the actor may see the mailbox.
-func (s *Server) mailboxOfPath(w http.ResponseWriter, r *http.Request) (int64, bool) {
+func (s *Server) mailboxOfPath(w http.ResponseWriter, r *http.Request) (string, bool) {
 	id, err := s.Panel.MailboxByAddress(r.Context(), actorOf(r), r.PathValue("domain"), r.PathValue("local_part"))
 	if err != nil {
 		writeFailure(w, err)
-		return 0, false
+		return "", false
 	}
 	return id, true
 }

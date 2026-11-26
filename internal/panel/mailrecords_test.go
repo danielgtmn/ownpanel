@@ -268,7 +268,7 @@ func newRecordsWorld(t *testing.T) *recordsWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.bobConn = c.ID
+	w.bobConn = mustStoreID(c.ID)
 	if _, err := svc.CreateDNSConnection(ctx, admin, "hetzner", "root-main", rootToken); err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +307,7 @@ func TestMailRecordStatuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Domain != "bobzone.org" || r.MailHost != testMailHost || !r.CanApply || r.ConnectionID != w.bobConn || r.Zone != "bobzone.org" || r.ApplyNote != "" {
+	if r.Domain != "bobzone.org" || r.MailHost != testMailHost || !r.CanApply || r.ConnectionID != idString(w.bobConn) || r.Zone != "bobzone.org" || r.ApplyNote != "" {
 		t.Fatalf("records %+v", r)
 	}
 	if len(r.Records) != 8 {
@@ -345,7 +345,7 @@ func TestMailRecordStatuses(t *testing.T) {
 	// without a connection of their own for the zone.
 	for _, a := range []Actor{bobRead, admin, rootRead} {
 		r, err := w.svc.MailRecords(ctx, a, "bobzone.org")
-		if err != nil || r.CanApply || r.ConnectionID != 0 || r.Zone != "" || r.ApplyNote == "" {
+		if err != nil || r.CanApply || r.ConnectionID != "" || r.Zone != "" || r.ApplyNote == "" {
 			t.Fatalf("%s: %+v %v", a.Name, r, err)
 		}
 		if d := recordOf(t, r, MailRecordDKIM); !strings.Contains(d.Note, "split") {

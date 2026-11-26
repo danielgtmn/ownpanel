@@ -1,7 +1,7 @@
 export type TokenAccess = 'read' | 'write'
 
 export type Token = {
-  id: number
+  id: string
   name: string
   access: TokenAccess
   sites: string[] | null

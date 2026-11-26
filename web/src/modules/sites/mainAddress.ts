@@ -79,10 +79,10 @@ export function mainWithoutRedirect(state: PairState): string {
 }
 
 export type Step =
-  | { kind: 'delete-redirect'; id: number; domain: string }
+  | { kind: 'delete-redirect'; id: string; domain: string }
   | { kind: 'set-domains'; domains: string[]; added: string[]; removed: string[] }
   | { kind: 'create-redirect'; input: RedirectInput }
-  | { kind: 'update-redirect'; id: number; input: RedirectInput }
+  | { kind: 'update-redirect'; id: string; input: RedirectInput }
 
 export function mainRedirect(from: string, to: string): RedirectInput {
   return {

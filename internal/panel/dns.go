@@ -133,7 +133,7 @@ func (c *dnsCache) dropAllChecks() {
 
 // DNSConnection is what callers see of a connection; never its token.
 type DNSConnection struct {
-	ID            int64      `json:"id"`
+	ID            string     `json:"id"`
 	Provider      string     `json:"provider"`
 	Name          string     `json:"name"`
 	Owner         string     `json:"owner"`
@@ -146,14 +146,14 @@ type DNSConnection struct {
 
 func connectionView(c store.DNSConnection) DNSConnection {
 	return DNSConnection{
-		ID: c.ID, Provider: c.Provider, Name: c.Name, Owner: c.Owner, CreatedAt: c.CreatedAt,
+		ID: idString(c.ID), Provider: c.Provider, Name: c.Name, Owner: c.Owner, CreatedAt: c.CreatedAt,
 		LastCheckedAt: c.LastCheckedAt, LastError: c.LastError, CanWrite: c.CanWrite, ZoneCount: c.ZoneCount,
 	}
 }
 
 // DNSZone is a zone reachable through one of the actor's connections.
 type DNSZone struct {
-	ConnectionID   int64  `json:"connection_id"`
+	ConnectionID   string `json:"connection_id"`
 	ConnectionName string `json:"connection_name"`
 	Name           string `json:"name"`
 	ReadOnly       bool   `json:"read_only"`
@@ -173,12 +173,12 @@ func zoneView(c store.DNSConnection, z dns.Zone) DNSZone {
 	if ns == nil {
 		ns = []string{}
 	}
-	return DNSZone{ConnectionID: c.ID, ConnectionName: c.Name, Name: z.Name, ReadOnly: z.ReadOnly, Nameservers: ns, UsedBy: []string{}}
+	return DNSZone{ConnectionID: idString(c.ID), ConnectionName: c.Name, Name: z.Name, ReadOnly: z.ReadOnly, Nameservers: ns, UsedBy: []string{}}
 }
 
 // DNSProblem says why the zones of a connection could not be listed.
 type DNSProblem struct {
-	ConnectionID   int64  `json:"connection_id"`
+	ConnectionID   string `json:"connection_id"`
 	ConnectionName string `json:"connection_name"`
 	Error          string `json:"error"`
 }
@@ -221,7 +221,7 @@ const (
 
 // DomainZone is where PointDomain would write for a domain.
 type DomainZone struct {
-	ConnectionID   int64  `json:"connection_id"`
+	ConnectionID   string `json:"connection_id"`
 	ConnectionName string `json:"connection_name"`
 	Zone           string `json:"zone"`
 	RecordName     string `json:"record_name"`
@@ -305,7 +305,11 @@ func (s *Service) ownConnections(ctx context.Context, a Actor) ([]store.DNSConne
 }
 
 // usableConnection returns one of the actor's own connections.
-func (s *Service) usableConnection(ctx context.Context, a Actor, id int64) (store.DNSConnection, error) {
+func (s *Service) usableConnection(ctx context.Context, a Actor, connID string) (store.DNSConnection, error) {
+	id, err := storeID(connID, "DNS connection")
+	if err != nil {
+		return store.DNSConnection{}, err
+	}
 	c, err := s.store.DNSConnection(ctx, id)
 	if err != nil {
 		return store.DNSConnection{}, storeError(err)
@@ -391,7 +395,7 @@ func (s *Service) CreateDNSConnection(ctx context.Context, a Actor, provider, na
 
 // CheckDNSConnection lists the connection's zones afresh and returns the
 // connection with the outcome (LastError is empty if the token works).
-func (s *Service) CheckDNSConnection(ctx context.Context, a Actor, id int64) (DNSConnection, error) {
+func (s *Service) CheckDNSConnection(ctx context.Context, a Actor, id string) (DNSConnection, error) {
 	if err := needDNSManage(a); err != nil {
 		return DNSConnection{}, err
 	}
@@ -403,7 +407,7 @@ func (s *Service) CheckDNSConnection(ctx context.Context, a Actor, id int64) (DN
 	if _, err := s.zonesOf(ctx, c); err != nil && KindOf(err) == Internal {
 		return DNSConnection{}, err
 	}
-	c, err = s.store.DNSConnection(ctx, id)
+	c, err = s.store.DNSConnection(ctx, c.ID)
 	if err != nil {
 		return DNSConnection{}, storeError(err)
 	}
@@ -412,8 +416,12 @@ func (s *Service) CheckDNSConnection(ctx context.Context, a Actor, id int64) (DN
 
 // DeleteDNSConnection removes a connection and forgets its token. Admins may
 // remove anyone's.
-func (s *Service) DeleteDNSConnection(ctx context.Context, a Actor, id int64) error {
+func (s *Service) DeleteDNSConnection(ctx context.Context, a Actor, connID string) error {
 	if err := needAuth(a); err != nil {
+		return err
+	}
+	id, err := storeID(connID, "DNS connection")
+	if err != nil {
 		return err
 	}
 	c, err := s.store.DNSConnection(ctx, id)
@@ -627,7 +635,7 @@ func (s *Service) listZones(ctx context.Context, a Actor, inPanel bool) (DNSZone
 				msg = "something went wrong on the server"
 				slog.Error("listing DNS zones failed", "connection", c.ID, "err", err)
 			}
-			out.Problems = append(out.Problems, DNSProblem{ConnectionID: c.ID, ConnectionName: c.Name, Error: msg})
+			out.Problems = append(out.Problems, DNSProblem{ConnectionID: idString(c.ID), ConnectionName: c.Name, Error: msg})
 			continue
 		}
 		for _, z := range zones {
@@ -650,7 +658,7 @@ func (s *Service) listZones(ctx context.Context, a Actor, inPanel bool) (DNSZone
 
 // DNSRecords lists the record sets of a zone of one of the actor's own
 // connections, "@" first, then by name and type.
-func (s *Service) DNSRecords(ctx context.Context, a Actor, connID int64, zone string) ([]RecordSet, error) {
+func (s *Service) DNSRecords(ctx context.Context, a Actor, connID string, zone string) ([]RecordSet, error) {
 	if err := needDNS(a); err != nil {
 		return nil, err
 	}
@@ -690,7 +698,7 @@ func (s *Service) DNSRecords(ctx context.Context, a Actor, connID int64, zone st
 }
 
 // writableZone returns the zone for a change through the connection.
-func (s *Service) writableZone(ctx context.Context, a Actor, connID int64, zone string) (store.DNSConnection, dns.Zone, error) {
+func (s *Service) writableZone(ctx context.Context, a Actor, connID string, zone string) (store.DNSConnection, dns.Zone, error) {
 	if err := needDNS(a); err != nil {
 		return store.DNSConnection{}, dns.Zone{}, err
 	}
@@ -720,7 +728,7 @@ func fqdn(name, zone string) string {
 
 // SetDNSRecord creates or replaces a record set. ttl nil means the zone's
 // default. It returns the record set as written.
-func (s *Service) SetDNSRecord(ctx context.Context, a Actor, connID int64, zone, name, typ string, ttl *int, values []string) (RecordSet, error) {
+func (s *Service) SetDNSRecord(ctx context.Context, a Actor, connID string, zone, name, typ string, ttl *int, values []string) (RecordSet, error) {
 	c, z, err := s.writableZone(ctx, a, connID, zone)
 	if err != nil {
 		return RecordSet{}, err
@@ -748,7 +756,7 @@ func (s *Service) SetDNSRecord(ctx context.Context, a Actor, connID int64, zone,
 
 // DeleteDNSRecord removes a record set; removing one that does not exist is
 // fine. SOA and the zone's own NS records cannot be removed.
-func (s *Service) DeleteDNSRecord(ctx context.Context, a Actor, connID int64, zone, name, typ string) error {
+func (s *Service) DeleteDNSRecord(ctx context.Context, a Actor, connID string, zone, name, typ string) error {
 	c, z, err := s.writableZone(ctx, a, connID, zone)
 	if err != nil {
 		return err
@@ -938,7 +946,7 @@ func (s *Service) domainStatuses(ctx context.Context, a Actor, domains []string)
 	wg.Wait()
 	for i, m := range matches {
 		if len(m) == 1 {
-			out[i].Zone = &DomainZone{ConnectionID: m[0].conn.ID, ConnectionName: m[0].conn.Name, Zone: m[0].zone.Name, RecordName: m[0].name}
+			out[i].Zone = &DomainZone{ConnectionID: idString(m[0].conn.ID), ConnectionName: m[0].conn.Name, Zone: m[0].zone.Name, RecordName: m[0].name}
 		}
 	}
 	return out, nil

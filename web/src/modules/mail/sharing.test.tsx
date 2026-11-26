@@ -9,7 +9,7 @@ import type { Mailbox } from './types.ts'
 const done = async () => undefined
 
 const base: Mailbox = {
-  id: 7,
+  id: '7',
   address: 'info@example.com',
   domain: 'example.com',
   local_part: 'info',
@@ -24,8 +24,8 @@ const base: Mailbox = {
   kind: 'shared',
   keep_sent_copy: true,
   shared_with: [
-    { mailbox_id: 1, address: 'anna@example.com', display_name: 'Anna', rights: ['read', 'write'], active: true },
-    { mailbox_id: 2, address: 'ben@other.org', display_name: '', rights: ['read', 'send-as'], active: false },
+    { mailbox_id: '1', address: 'anna@example.com', display_name: 'Anna', rights: ['read', 'write'], active: true },
+    { mailbox_id: '2', address: 'ben@other.org', display_name: '', rights: ['read', 'send-as'], active: false },
   ],
   access_to: [],
 }
@@ -47,8 +47,8 @@ describe('sharing in the panel', () => {
       ...base,
       address: 'anna@example.com',
       kind: 'personal',
-      shared_with: [{ mailbox_id: 3, address: 'carl@example.com', display_name: '', rights: ['read'], active: true }],
-      access_to: [{ mailbox_id: 7, address: 'info@example.com', kind: 'shared', rights: ['read', 'manage'], active: true }],
+      shared_with: [{ mailbox_id: '3', address: 'carl@example.com', display_name: '', rights: ['read'], active: true }],
+      access_to: [{ mailbox_id: '7', address: 'info@example.com', kind: 'shared', rights: ['read', 'manage'], active: true }],
     }
     const html = renderToStaticMarkup(<PersonalAccessPanel mailbox={personal} onMailboxChanged={done} />)
     expect(html).toContain('Has access to')

@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { User } from '../../shared/session/index.ts'
 import { isSelf, otherRole, roleChangeQuestion, validateNewUser } from './rules.ts'
 
-const anna: User = { id: 1, name: 'anna', email: '', role: 'admin', created_at: '2026-01-01T00:00:00Z' }
-const max: User = { id: 2, name: 'max', email: '', role: 'member', created_at: '2026-01-02T00:00:00Z' }
+const anna: User = { id: '1', name: 'anna', email: '', role: 'admin', created_at: '2026-01-01T00:00:00Z' }
+const max: User = { id: '2', name: 'max', email: '', role: 'member', created_at: '2026-01-02T00:00:00Z' }
 
 describe('users rules', () => {
   it('flips the role', () => {

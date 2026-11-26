@@ -26,7 +26,7 @@ const rules: MailboxRules = {
 }
 
 const mailbox = {
-  id: 7,
+  id: '7',
   address: 'anna@example.com',
   domain: 'example.com',
   local_part: 'anna',
@@ -68,10 +68,10 @@ describe('out-of-office and forwarding in the panel', () => {
     const fetch = vi.fn(async (..._args: unknown[]) => new Response(JSON.stringify(rules), { status: 200 }))
     vi.stubGlobal('fetch', fetch)
     const reply = { enabled: true, subject: 'Away', text: 'Gone.', start: '', end: '', zone: '+0100', days: 7 }
-    await setMailboxOutOfOffice(7, reply, true)
-    await setMailboxForwarding(7, { enabled: false, to: '', keep_copy: false }, false)
+    await setMailboxOutOfOffice('7', reply, true)
+    await setMailboxForwarding('7', { enabled: false, to: '', keep_copy: false }, false)
     vi.stubGlobal('fetch', vi.fn(async (..._args: unknown[]) => new Response(null, { status: 204 })))
-    await setMailboxMayForward(7, false)
+    await setMailboxMayForward('7', false)
     const sent = fetch.mock.calls.map(([url, init]) => [url, JSON.parse((init as RequestInit).body as string)])
     expect(sent).toEqual([
       ['/api/mail/mailboxes/7/out-of-office', { ...reply, replace: true }],

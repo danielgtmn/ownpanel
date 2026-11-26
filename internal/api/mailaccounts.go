@@ -65,10 +65,7 @@ func (s *Server) setMailDomainOrganisation(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) listAppPasswords(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "mailbox")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	v, err := s.Panel.AppPasswords(r.Context(), actorOf(r), id)
 	answer(w, http.StatusOK, v, err)
 }
@@ -76,10 +73,7 @@ func (s *Server) listAppPasswords(w http.ResponseWriter, r *http.Request) {
 // createAppPassword answers the app password with its token, the only
 // time it is shown (no-store, like every JSON answer).
 func (s *Server) createAppPassword(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "mailbox")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	var body struct {
 		Name string `json:"name"`
 	}
@@ -97,10 +91,7 @@ func (s *Server) createAppPassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) revokeAppPassword(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(w, r, "mailbox")
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	if err := s.Panel.RevokeAppPassword(r.Context(), actorOf(r), id, r.PathValue("app")); err != nil {
 		writeFailure(w, err)
 		return

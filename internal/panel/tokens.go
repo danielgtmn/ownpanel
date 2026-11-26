@@ -14,7 +14,7 @@ import (
 // Token is what callers see of an access token; the secret is only shown
 // once, in NewToken.
 type Token struct {
-	ID         int64      `json:"id"`
+	ID         string     `json:"id"`
 	Name       string     `json:"name"`
 	Access     string     `json:"access"`
 	Sites      []string   `json:"sites"`
@@ -36,7 +36,7 @@ type NewToken struct {
 }
 
 func (s *Service) tokenView(t store.Token) Token {
-	return Token{ID: t.ID, Name: t.Name, Access: t.Access, Sites: t.Sites, CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt,
+	return Token{ID: idString(t.ID), Name: t.Name, Access: t.Access, Sites: t.Sites, CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt,
 		ExpiresAt: t.ExpiresAt, Expired: tokenExpired(t, s.now())}
 }
 
@@ -122,7 +122,7 @@ func (s *Service) CreateToken(ctx context.Context, a Actor, name, access string,
 }
 
 // DeleteToken removes one of the actor's own tokens.
-func (s *Service) DeleteToken(ctx context.Context, a Actor, id int64) error {
+func (s *Service) DeleteToken(ctx context.Context, a Actor, id string) error {
 	if err := needSession(a, "managing access tokens"); err != nil {
 		return err
 	}
@@ -130,11 +130,11 @@ func (s *Service) DeleteToken(ctx context.Context, a Actor, id int64) error {
 	if err != nil {
 		return storeError(err)
 	}
-	i := slices.IndexFunc(list, func(t store.Token) bool { return t.ID == id })
+	i := slices.IndexFunc(list, func(t store.Token) bool { return idString(t.ID) == id })
 	if i < 0 {
 		return errorf(NotFound, "access token not found")
 	}
-	if err := s.store.DeleteToken(ctx, a.UserID, id); err != nil {
+	if err := s.store.DeleteToken(ctx, a.UserID, list[i].ID); err != nil {
 		return storeError(err)
 	}
 	s.record(ctx, a, "token.delete", list[i].Name, "")

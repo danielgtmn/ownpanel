@@ -72,24 +72,30 @@ func TestMailRulesPermissions(t *testing.T) {
 		run  func(w *mailWorld, a Actor) error
 		want []Kind
 	}{
-		{"show member's", func(w *mailWorld, a Actor) error { _, err := w.svc.MailboxRulesOf(ctx, a, w.bobBox); return err },
+		{"show member's", func(w *mailWorld, a Actor) error {
+			_, err := w.svc.MailboxRulesOf(ctx, a, idString(w.bobBox))
+			return err
+		},
 			[]Kind{ok, ok, ok, ok, F, ok, F, U}},
-		{"show admin's", func(w *mailWorld, a Actor) error { _, err := w.svc.MailboxRulesOf(ctx, a, w.rootBox); return err },
+		{"show admin's", func(w *mailWorld, a Actor) error {
+			_, err := w.svc.MailboxRulesOf(ctx, a, idString(w.rootBox))
+			return err
+		},
 			[]Kind{ok, ok, N, N, F, ok, F, U}},
 		{"set member's out-of-office", func(w *mailWorld, a Actor) error {
-			_, err := w.svc.SetMailboxOutOfOffice(ctx, a, w.bobBox, OutOfOfficeInput{Enabled: true, Text: "Gone."})
+			_, err := w.svc.SetMailboxOutOfOffice(ctx, a, idString(w.bobBox), OutOfOfficeInput{Enabled: true, Text: "Gone."})
 			return err
 		}, []Kind{ok, ok, ok, F, F, F, F, U}},
 		{"set admin's out-of-office", func(w *mailWorld, a Actor) error {
-			_, err := w.svc.SetMailboxOutOfOffice(ctx, a, w.rootBox, OutOfOfficeInput{Enabled: true, Text: "Gone."})
+			_, err := w.svc.SetMailboxOutOfOffice(ctx, a, idString(w.rootBox), OutOfOfficeInput{Enabled: true, Text: "Gone."})
 			return err
 		}, []Kind{ok, ok, N, N, F, F, F, U}},
 		{"set member's forwarding", func(w *mailWorld, a Actor) error {
-			_, err := w.svc.SetMailboxForwarding(ctx, a, w.bobBox, ForwardingInput{Enabled: true, To: "new@example.net"})
+			_, err := w.svc.SetMailboxForwarding(ctx, a, idString(w.bobBox), ForwardingInput{Enabled: true, To: "new@example.net"})
 			return err
 		}, []Kind{ok, ok, ok, F, F, F, F, U}},
 		{"forbid member's forwarding", func(w *mailWorld, a Actor) error {
-			return w.svc.SetMailboxMayForward(ctx, a, w.bobBox, false)
+			return w.svc.SetMailboxMayForward(ctx, a, idString(w.bobBox), false)
 		}, []Kind{ok, ok, ok, F, F, F, F, U}},
 	}
 	for _, op := range ops {
@@ -112,7 +118,7 @@ func TestMailRules(t *testing.T) {
 	w := newMailWorld(t)
 	sid := w.mailboxStorageID(t, w.bobBox)
 
-	r, err := w.svc.SetMailboxOutOfOffice(ctx, bob, w.bobBox, OutOfOfficeInput{Enabled: true, Subject: "Left", Text: "Please write to sales@.", Start: "2026-11-01"})
+	r, err := w.svc.SetMailboxOutOfOffice(ctx, bob, idString(w.bobBox), OutOfOfficeInput{Enabled: true, Subject: "Left", Text: "Please write to sales@.", Start: "2026-11-01"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,47 +128,47 @@ func TestMailRules(t *testing.T) {
 	if got := fakeRules[w.mail][sid].OutOfOffice.SetBy; got != bob.Name {
 		t.Fatalf("set by %q", got)
 	}
-	if _, err := w.svc.SetMailboxOutOfOffice(ctx, bob, w.bobBox, OutOfOfficeInput{Enabled: true, Text: ""}); KindOf(err) != Invalid {
+	if _, err := w.svc.SetMailboxOutOfOffice(ctx, bob, idString(w.bobBox), OutOfOfficeInput{Enabled: true, Text: ""}); KindOf(err) != Invalid {
 		t.Fatalf("empty text: %v", err)
 	}
 	// Set by the person: the panel shows that it is on, not the text.
 	w.mail.set(func(f *fakeMail) {
 		f.rules(sid).OutOfOffice = config.OutOfOffice{Enabled: true, Subject: "Private", Text: "Private text", Days: 7}
 	})
-	r, err = w.svc.MailboxRulesOf(ctx, bob, w.bobBox)
+	r, err = w.svc.MailboxRulesOf(ctx, bob, idString(w.bobBox))
 	if err != nil || !r.OutOfOffice.On || r.OutOfOffice.Text != "" || r.OutOfOffice.Subject != "" {
 		t.Fatalf("person's own: %+v %v", r.OutOfOffice, err)
 	}
 	// Hand-written filters are replaced only when asked.
 	w.mail.set(func(f *fakeMail) { f.rules(sid).Managed = false })
-	_, err = w.svc.SetMailboxOutOfOffice(ctx, bob, w.bobBox, OutOfOfficeInput{Enabled: false})
+	_, err = w.svc.SetMailboxOutOfOffice(ctx, bob, idString(w.bobBox), OutOfOfficeInput{Enabled: false})
 	var pe *Error
 	if !errors.As(err, &pe) || pe.Kind != Conflict || CodeOf(err) != CodeHandWrittenFilters {
 		t.Fatalf("hand written: %v", err)
 	}
-	if _, err := w.svc.SetMailboxOutOfOffice(ctx, bob, w.bobBox, OutOfOfficeInput{Enabled: false, Replace: true}); err != nil {
+	if _, err := w.svc.SetMailboxOutOfOffice(ctx, bob, idString(w.bobBox), OutOfOfficeInput{Enabled: false, Replace: true}); err != nil {
 		t.Fatal(err)
 	}
 
 	// Forwarding: allowed by default, can be turned off; then it cannot
 	// be set, and the configuration says so.
-	if _, err := w.svc.SetMailboxForwarding(ctx, bob, w.bobBox, ForwardingInput{Enabled: true, To: "info@bobsite.example.com"}); KindOf(err) != Invalid {
+	if _, err := w.svc.SetMailboxForwarding(ctx, bob, idString(w.bobBox), ForwardingInput{Enabled: true, To: "info@bobsite.example.com"}); KindOf(err) != Invalid {
 		t.Fatalf("to itself: %v", err)
 	}
-	r, err = w.svc.SetMailboxForwarding(ctx, bob, w.bobBox, ForwardingInput{Enabled: true, To: "New@Example.net", KeepCopy: true})
+	r, err = w.svc.SetMailboxForwarding(ctx, bob, idString(w.bobBox), ForwardingInput{Enabled: true, To: "New@Example.net", KeepCopy: true})
 	if err != nil || r.Forwarding.To != "new@example.net" || !r.Forwarding.KeepCopy || !r.MayForward {
 		t.Fatalf("forwarding: %+v %v", r, err)
 	}
-	if err := w.svc.SetMailboxMayForward(ctx, bob, w.bobBox, false); err != nil {
+	if err := w.svc.SetMailboxMayForward(ctx, bob, idString(w.bobBox), false); err != nil {
 		t.Fatal(err)
 	}
 	if !w.lastMailbox(t, sid).NoForwarding {
 		t.Fatal("not pushed")
 	}
-	if _, err := w.svc.SetMailboxForwarding(ctx, bob, w.bobBox, ForwardingInput{Enabled: true, To: "x@example.net"}); KindOf(err) != Conflict {
+	if _, err := w.svc.SetMailboxForwarding(ctx, bob, idString(w.bobBox), ForwardingInput{Enabled: true, To: "x@example.net"}); KindOf(err) != Conflict {
 		t.Fatalf("not allowed: %v", err)
 	}
-	if err := w.svc.SetMailboxMayForward(ctx, bob, w.bobBox, true); err != nil {
+	if err := w.svc.SetMailboxMayForward(ctx, bob, idString(w.bobBox), true); err != nil {
 		t.Fatal(err)
 	}
 	if w.lastMailbox(t, sid).NoForwarding {
