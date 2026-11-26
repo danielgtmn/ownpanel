@@ -356,12 +356,15 @@ func (src *fileSource) eachIn(ctx context.Context, e *fileEntry, fn func(fileMes
 	if e.kind == kindEML {
 		return fn(fileMessage{entry: e, body: br})
 	}
-	mr, err := newMboxReader(br, e.rd)
+	mr, err := newMboxReader(ctx, br, e.rd)
 	if errors.Is(err, errNotMbox) {
 		src.skipped++
 		return nil
 	}
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return badFile("the file cannot be read")
 	}
 	for {
@@ -370,6 +373,9 @@ func (src *fileSource) eachIn(ctx context.Context, e *fileEntry, fn func(fileMes
 		}
 		msg, err := mr.nextMessage()
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return badFile("the file cannot be read")
 		}
 		if msg == nil {
@@ -477,10 +483,23 @@ func roleAttrs(r role) []string {
 
 // scan reads an upload once and records what it holds (state ready).
 func (m *Manager) scan(ctx context.Context, a *active, j config.ImportJob) {
+	// Counted before reading, so a file that takes the service down is
+	// not scanned again forever (see maxScans).
+	j.Scans++
+	if err := m.opts.Store.SaveImport(context.Background(), &j); err != nil {
+		if errors.Is(err, storage.ErrNoImport) {
+			return
+		}
+		m.log.Error("mail: import scan", "job", j.ID, "err", err)
+	}
 	check, err := m.scanFile(ctx, j)
 	if m.reason(a) != stopNone {
 		if m.reason(a) == stopShutdown {
-			return // scanned again after the next start
+			// Scanned again after the next start; this one ended
+			// normally, so it does not count.
+			j.Scans--
+			m.opts.Store.SaveImport(context.Background(), &j)
+			return
 		}
 		j.State, j.Finished = config.ImportCancelled, m.now()
 		os.Remove(m.spoolPath(j.ID))

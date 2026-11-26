@@ -32,7 +32,7 @@ Both are served by the web server: a domain redirect's domain gets a certificate
 ## Rules
 
 - Domains are normalized (lower case, no trailing dot). IP addresses are not accepted.
-- A domain redirect's domain must not be a domain of any site, the panel's own domain, or already redirect. A site cannot take a domain that redirects, and the panel domain cannot be set to one; remove the redirect first.
+- A domain redirect's domain must not be a domain of any site, the panel's own domain, or already redirect. Members also cannot redirect another person's mail domain or its `autoconfig.`/`autodiscover.` names; admins can. A site cannot take a domain that redirects, and the panel domain cannot be set to one; remove the redirect first.
 - To send a site's own domain elsewhere entirely, use a path redirect for `/*` on that site.
 - A path redirect's domain must belong to a site you may change. Paths start with `/`; `*` is only allowed as `/*` at the end. Paths are matched exactly as written, including upper and lower case (like the site's files). Spaces, `?`, `#`, `%`, braces, `//` and `.`/`..` segments are not allowed in paths; enter non-ASCII characters as they are, not percent-encoded.
 - An exact path is checked before prefixes, and longer prefixes before shorter ones.

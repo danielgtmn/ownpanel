@@ -210,7 +210,9 @@ func (s *Service) MailDomainOf(ctx context.Context, a Actor, domain string) (Mai
 }
 
 // mayUseMailDomain checks that a member may enable mail for d: it is a
-// domain they control and nobody else's. Admins may use any domain.
+// domain they control and nobody else's, and no other user signs in with
+// an address in it (their mail, such as a reset link, would reach this
+// member). Admins may use any domain.
 func (s *Service) mayUseMailDomain(ctx context.Context, a Actor, d string) error {
 	if a.Admin {
 		return nil
@@ -232,6 +234,11 @@ func (s *Service) mayUseMailDomain(ctx context.Context, a Actor, d string) error
 		if r.SourcePath == "" && r.SourceDomain == d && !a.canSeeRedirect(r, nil) {
 			return errorf(Invalid, "the domain %s is already used by another person", d)
 		}
+	}
+	if others, err := s.othersAccountAddressIn(ctx, a.UserID, d); err != nil {
+		return err
+	} else if others {
+		return errorf(Invalid, "the domain %s is already used by another person", d)
 	}
 	if _, err := s.controlledDomain(ctx, a, d); err == nil {
 		return nil

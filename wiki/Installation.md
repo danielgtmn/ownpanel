@@ -86,7 +86,7 @@ Values given as installer options (`--panel-domain`, `--server-ip`, `--acme-emai
 
 | Item | Details |
 |---|---|
-| User `caddy` | system user, home `/var/lib/ownpanel/caddy-home`, shell `/usr/sbin/nologin`; added to the group `ownpanel-mail-web` |
+| User `caddy` | system user, home `/var/lib/ownpanel-caddy/home`, shell `/usr/sbin/nologin`; added to the group `ownpanel-mail-web` |
 | User `ownpanel` | system user, home `/var/lib/ownpanel`, shell `/usr/sbin/nologin`; added to the groups `caddy` and `ownpanel-mail` |
 | User `ownpanel-mail` | system user with its own group, home `/var/lib/ownpanel-mail`, shell `/usr/sbin/nologin` |
 | Group `ownpanel-mail-web` | system group of the mail service's web socket; `caddy` is a member (and `ownpanel-mail.service` through `SupplementaryGroups=`) |
@@ -95,15 +95,18 @@ Values given as installer options (`--panel-domain`, `--server-ip`, `--acme-emai
 | `/etc/systemd/system/ownpanel-caddy.service` | Caddy, runs as `caddy` |
 | `/etc/systemd/system/ownpanel-mail.service` | the mail service, runs as `ownpanel-mail` |
 | `/var/lib/ownpanel-mail` | the mail service's data (created by systemd), owned by `ownpanel-mail`, mode 0700 |
-| `/var/lib/ownpanel` | data directory, owned by `ownpanel` (0755) |
-| `/var/lib/ownpanel/caddy`, `/var/lib/ownpanel/caddy-home` | Caddy's certificate storage and home, owned by `caddy`, mode 0700 |
+| `/var/lib/ownpanel` | data directory, owned by `ownpanel` (0755). Root never creates or changes anything in it during an install or update (see [[Security\|Security#updates]]) |
+| `/var/lib/ownpanel-caddy` | Caddy's own directory, owned by `caddy`, mode 0700: certificate storage in `storage`, its home in `home` |
 | `/etc/ownpanel/caddy-bootstrap.json` | Caddy's start configuration (only the admin socket) |
 | `/etc/ownpanel/ownpaneld.env` | the daemon's flags, see below |
 | `/etc/ownpanel/release` | installed version and channel |
 | `/usr/local/lib/ownpanel/` | `update.sh`, a copy of `install.sh` (update.sh uses its functions) and `ownpanel-update`, the root-side worker for updates from the panel |
 | `/etc/systemd/system/ownpanel-update.{path,service,timer}` | updates from the panel and automatic updates, see [Updating](#updating) |
-| `/var/lib/ownpanel/update` | `root:ownpanel`, mode 1770: update requests from the panel and the update status |
-| `/var/lib/ownpanel/backups` | root only: the backups made before each update (the last three) |
+| `/var/lib/ownpanel-update` | the updater's directory, owned by root (0755) |
+| `/var/lib/ownpanel-update/requests` | `root:ownpanel`, mode 1770: update requests from the panel and the update status |
+| `/var/lib/ownpanel-update/backups` | root only: the backups made before each update (the last three) |
+
+Versions before this layout kept Caddy's directories, the update requests and the backups inside `/var/lib/ownpanel`. The first update or install of a version with this layout moves them to the places above and leaves links at the old names, so a rollback to the previous version still finds them; nothing run as root uses those links.
 
 The services are enabled and started. The installer waits until the panel answers on `127.0.0.1:8600`; if it does not within 60 seconds, it shows the daemon's log and fails.
 
@@ -212,7 +215,7 @@ It refuses to run where ownpanel is not installed and never asks setup questions
 
 1. Look up the release through GitHub's API (`/releases/latest` for stable, `/releases/tags/nightly` or `/releases/tags/vX.Y.Z`) and print the version it holds. Nothing to do if that is the installed version.
 2. Download `checksums.txt` and the archive for this machine **by asset id** from that same answer, and check the archive against `checksums.txt` and its `VERSION` against what GitHub reported. Two builds are never mixed. The nightly is replaced in place by every new build: if its files disappear during the download, the nightly is looked up again and the build it holds now is downloaded instead (for a few minutes at most, then "try again in a few minutes"). With `--version nightly-…` the update fails instead and says that this build is no longer available. A connection that does not open within 15 seconds, or a download slower than 1 KB/s for 30 seconds, is given up after two retries instead of hanging.
-3. `ownpaneld backup` into `/var/lib/ownpanel/backups/` (root only; the last three are kept).
+3. `ownpaneld backup` into `/var/lib/ownpanel-update/backups/` (root only; the last three are kept). The database is copied by a process running as `ownpanel`, so root never opens it.
 4. Keep the current binaries, unit files, `caddy-bootstrap.json`, `ownpaneld.env` and `release` as `*.previous`.
 5. Run the **new release's** `install.sh --from-dir <unpacked> --yes`, so the file layout is only ever defined by `install.sh`.
 6. Check that `ownpaneld version` prints the new version and the panel answers on its address within 60 seconds.
@@ -222,7 +225,7 @@ The database is not restored on a rollback: a new version may have migrated it. 
 
 ### How updates from the panel work
 
-The panel runs as the unprivileged user `ownpanel` and never gets root. It only writes a small request into `/var/lib/ownpanel/update/request.json`. `ownpanel-update.path` notices it and starts `ownpanel-update.service` (root), which runs `/usr/local/lib/ownpanel/ownpanel-update`: it moves the request out of the panel's reach, accepts exactly `{"id": <32 hex digits>, "channel": "stable"|"nightly"}` or `{"id", "version": "vX.Y.Z"}` and nothing else, and runs `update.sh --yes --status-file /var/lib/ownpanel/update/status.json` with those values. `ownpanel-update.timer` starts the same service every 15 minutes for automatic updates, which reads `auto.json` (written by the panel) through the same strict checks. See [[Security|Security#updates]].
+The panel runs as the unprivileged user `ownpanel` and never gets root. It only writes a small request into `/var/lib/ownpanel-update/requests/request.json`. `ownpanel-update.path` notices it and starts `ownpanel-update.service` (root), which runs `/usr/local/lib/ownpanel/ownpanel-update`: it moves the request out of the panel's reach, accepts exactly `{"id": <32 hex digits>, "channel": "stable"|"nightly"}` or `{"id", "version": "vX.Y.Z"}` and nothing else, and runs `update.sh --yes --status-file /var/lib/ownpanel-update/requests/status.json` with those values. `ownpanel-update.timer` starts the same service every 15 minutes for automatic updates, which reads `auto.json` (written by the panel) through the same strict checks. See [[Security|Security#updates]].
 
 On the server, `journalctl -u ownpanel-update` shows what the updater did.
 

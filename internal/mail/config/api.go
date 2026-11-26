@@ -305,6 +305,9 @@ type ImportJob struct {
 
 	// Position is internal to the service (how far a file job got).
 	Position int64 `json:"-"`
+	// Scans is internal to the service: how often the scan of an upload
+	// started without coming to an end.
+	Scans int `json:"-"`
 }
 
 // OutgoingMail is a message the panel itself sends (password reset links

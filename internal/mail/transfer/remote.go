@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/emersion/go-imap/v2"
@@ -41,7 +42,81 @@ const (
 	lookupTimeout = 30 * time.Second
 	dialTimeout   = 30 * time.Second
 	maxCredential = 1024
+
+	// bodySlack is added to the message size limit for the response
+	// around a body.
+	bodySlack = 1 << 20
 )
+
+// controlBytes is what the other server may send for one step that is
+// not a message body (greeting, sign-in, LIST, STATUS, SELECT): far more
+// than real servers need, and a bound for a single huge response, which
+// the IMAP library would hold in memory whole (tests shorten it).
+var controlBytes int64 = 16 << 20
+
+// imapIdleTimeout ends a connection on which nothing could be read or
+// written for so long (tests shorten it).
+var imapIdleTimeout = 5 * time.Minute
+
+// errTooMuch: the other server sent more than a step allows.
+var errTooMuch = errors.New("the other server sent more data than expected")
+
+// limitConn is the connection to another IMAP server: every read and
+// write gets an idle deadline, and reads stop with errTooMuch once the
+// budget of the current step (allow) is used up.
+type limitConn struct {
+	net.Conn
+	idle time.Duration
+
+	mu       sync.Mutex
+	left     int64 // bytes the server may still send; < 0: no limit
+	exceeded bool
+}
+
+// allow starts a step in which the server may send n more bytes (n < 0:
+// no limit).
+func (c *limitConn) allow(n int64) {
+	c.mu.Lock()
+	c.left = n
+	c.mu.Unlock()
+}
+
+func (c *limitConn) tooMuch() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.exceeded
+}
+
+func (c *limitConn) Read(b []byte) (int, error) {
+	c.mu.Lock()
+	left := c.left
+	if left == 0 {
+		c.exceeded = true
+		c.mu.Unlock()
+		return 0, errTooMuch
+	}
+	c.mu.Unlock()
+	if left > 0 && int64(len(b)) > left {
+		b = b[:left]
+	}
+	if err := c.Conn.SetReadDeadline(time.Now().Add(c.idle)); err != nil {
+		return 0, err
+	}
+	n, err := c.Conn.Read(b)
+	c.mu.Lock()
+	if c.left > 0 {
+		c.left = max(c.left-int64(n), 0)
+	}
+	c.mu.Unlock()
+	return n, err
+}
+
+func (c *limitConn) Write(b []byte) (int, error) {
+	if err := c.Conn.SetWriteDeadline(time.Now().Add(c.idle)); err != nil {
+		return 0, err
+	}
+	return c.Conn.Write(b)
+}
 
 // validateSource checks an IMAP source and returns it with the host name
 // in lower case.
@@ -88,6 +163,7 @@ func validHost(h string) bool {
 // session is a signed-in connection to another IMAP server.
 type session struct {
 	c        *imapclient.Client
+	lc       *limitConn
 	stop     func() bool
 	host     string
 	password string
@@ -101,6 +177,9 @@ func (s *session) close() {
 // clean turns an error of the other server into one line of at most 200
 // characters without the password.
 func (s *session) clean(err error) string {
+	if s.lc != nil && s.lc.tooMuch() {
+		return errTooMuch.Error()
+	}
 	return cleanText(err.Error(), s.password)
 }
 
@@ -141,6 +220,8 @@ func (m *Manager) connect(ctx context.Context, src config.ImportSource) (*sessio
 		}
 		return nil, remoteErr("could not connect to %s:%d", src.Host, src.Port)
 	}
+	lc := &limitConn{Conn: conn, idle: imapIdleTimeout, left: controlBytes}
+	conn = lc
 	tlsConf := &tls.Config{ServerName: src.Host, RootCAs: m.opts.RootCAs, MinVersion: tls.VersionTLS12}
 	// The library's debug output is never set: it would log LOGIN.
 	opts := &imapclient.Options{}
@@ -166,7 +247,7 @@ func (m *Manager) connect(ctx context.Context, src config.ImportSource) (*sessio
 			return nil, m.tlsFailure(ctx, src, err)
 		}
 	}
-	s := &session{c: c, host: src.Host, password: src.Password}
+	s := &session{c: c, lc: lc, host: src.Host, password: src.Password}
 	s.stop = context.AfterFunc(ctx, func() { c.Close() })
 	stopConn()
 	if err := c.WaitGreeting(); err != nil {
