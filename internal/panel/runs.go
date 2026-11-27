@@ -131,11 +131,12 @@ func runView(r store.Run) Run {
 	return v
 }
 
-// runViewFor is runView with the commit's page on GitHub.
+// runViewFor is runView with the commit's page on GitHub (runs of a
+// GitHub source only; a Git source's address names no web page).
 func (s *Service) runViewFor(r store.Run) Run {
 	v := runView(r)
 	owner, name, ok := strings.Cut(r.Repository, "/")
-	if ok && owner != "" && name != "" && !strings.Contains(name, "/") && v.Commit != "" {
+	if ok && r.SourceKind == store.SourceGitHub && owner != "" && name != "" && !strings.Contains(name, "/") && v.Commit != "" {
 		v.CommitURL = s.github.WebURL() + "/" + url.PathEscape(owner) + "/" + url.PathEscape(name) + "/commit/" + url.PathEscape(v.Commit)
 	}
 	return v

@@ -31,6 +31,7 @@ var deliverySlots = make(chan struct{}, maxDeliveriesAtOnce)
 // webhookRoutes registers the routes that are not authenticated.
 func (s *Server) webhookRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+panel.GitHubWebhookPath, s.githubDelivery)
+	mux.HandleFunc("POST "+panel.GitNotifyPath+"{id}", s.gitNotification)
 }
 
 // rejectDelivery is the one answer to a delivery that is not accepted, so

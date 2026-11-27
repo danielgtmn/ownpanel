@@ -10,20 +10,29 @@ import (
 )
 
 // A site's source: the repository and branch its code comes from. These
-// tools ask GitHub, so they are marked as reaching outside the panel.
+// tools ask GitHub or the Git server, so they are marked as reaching
+// outside the panel.
 
 type sourceInfo struct {
-	Kind           string `json:"kind" jsonschema:"github: a repository of a connected GitHub account"`
-	Repository     string `json:"repository" jsonschema:"owner/name on GitHub (its current name; repositories can be renamed)"`
+	Kind           string `json:"kind" jsonschema:"github: a repository of a connected GitHub account; git: any Git repository by address"`
+	Repository     string `json:"repository" jsonschema:"owner/name on GitHub (its current name; repositories can be renamed), or the address of a Git repository"`
 	RepositoryID   int64  `json:"repository_id,omitempty" jsonschema:"GitHub's id of the repository"`
 	InstallationID int64  `json:"installation_id,omitempty" jsonschema:"installation the repository is reached through; 0 if its GitHub connection was removed"`
 	Account        string `json:"account,omitempty" jsonschema:"GitHub account the repository is reached through"`
 	URL            string `json:"url,omitempty" jsonschema:"the repository on GitHub"`
 	Branch         string `json:"branch"`
 	PublishOnPush  bool   `json:"publish_on_push" jsonschema:"a push to the branch should publish the site (see publishing_available)"`
-	Status         string `json:"status" jsonschema:"linked; connection_missing (the GitHub connection was removed: link again or unlink); suspended (on GitHub); repository_missing (the connection no longer sees the repository); unchecked (GitHub could not be asked, see problem)"`
+	Status         string `json:"status" jsonschema:"linked; connection_missing (the GitHub connection was removed: link again or unlink); suspended (on GitHub); repository_missing (the connection no longer sees the repository); unchecked (GitHub could not be asked, see problem); for git: not_checked (not reached since linking: add the deploy key, then check_git_site_source), host_key_changed (the server shows new_host_key instead of host_key; a person must check and accept it in the web interface), access_failed (see problem)"`
 	Problem        string `json:"problem,omitempty"`
 	LinkedBy       string `json:"linked_by"`
+	Server         string `json:"server,omitempty" jsonschema:"git: the Git server"`
+	Transport      string `json:"transport,omitempty" jsonschema:"git: ssh or https"`
+	DeployKey      string `json:"deploy_key,omitempty" jsonschema:"git over ssh: the public deploy key to add to the repository at the Git host, with read access only"`
+	HostKey        string `json:"host_key,omitempty" jsonschema:"git over ssh: fingerprint of the server key confirmed for the site"`
+	NewHostKey     string `json:"new_host_key,omitempty" jsonschema:"git over ssh: fingerprint of a different key the server shows now"`
+	NotifyURL      string `json:"notify_url,omitempty" jsonschema:"git: the address the Git host should call on a push (its secret is only shown in the web interface)"`
+	NotifyProblem  string `json:"notify_problem,omitempty"`
+	CheckedAt      string `json:"checked_at,omitempty" jsonschema:"git: when the panel last reached the repository"`
 }
 
 type siteSourceOutput struct {
@@ -84,10 +93,35 @@ func sourceOutput(st panel.SiteSourceState) siteSourceOutput {
 		out.Source = &sourceInfo{
 			Kind: s.Kind, Repository: s.Repository, RepositoryID: s.RepositoryID, InstallationID: s.InstallationID,
 			Account: s.Account, URL: s.URL, Branch: s.Branch, PublishOnPush: s.PublishOnPush, Status: s.Status,
-			Problem: s.Problem, LinkedBy: s.LinkedBy,
+			Problem: s.Problem, LinkedBy: s.LinkedBy, Server: s.Server, Transport: s.Transport, DeployKey: s.DeployKey,
+			HostKey: s.HostKey, NewHostKey: s.NewHostKey, NotifyURL: s.NotifyURL, NotifyProblem: s.NotifyProblem,
+		}
+		if s.CheckedAt != nil {
+			out.Source.CheckedAt = s.CheckedAt.UTC().Format(time.RFC3339)
 		}
 	}
 	return out
+}
+
+type gitRepositoryInput struct {
+	Site       string `json:"site" jsonschema:"site name as shown by list_sites"`
+	Repository string `json:"repository" jsonschema:"SSH address like git@codeberg.org:owner/site.git or ssh://git@host:2222/owner/site.git, or HTTPS address of a public repository like https://codeberg.org/owner/site.git"`
+}
+
+type linkGitSourceInput struct {
+	Site          string `json:"site" jsonschema:"site name as shown by list_sites"`
+	Repository    string `json:"repository" jsonschema:"the address, as for inspect_git_repository"`
+	Branch        string `json:"branch"`
+	PublishOnPush bool   `json:"publish_on_push" jsonschema:"whether a push to the branch should publish the site"`
+	HostKey       string `json:"host_key,omitempty" jsonschema:"for SSH: the fingerprint inspect_git_repository returned, after the person confirmed it matches what the Git host publishes"`
+}
+
+type gitCheckOutput struct {
+	siteSourceOutput
+	OK            bool     `json:"ok" jsonschema:"the repository was reached (with the deploy key over SSH)"`
+	Branches      []string `json:"branches"`
+	DefaultBranch string   `json:"default_branch,omitempty"`
+	BranchFound   bool     `json:"branch_found" jsonschema:"the linked branch exists"`
 }
 
 type linkableRepositoryInfo struct {
@@ -187,6 +221,50 @@ func addSourceTools(s *sdk.Server, p *panel.Service) {
 			InstallationID: in.InstallationID, RepositoryID: in.RepositoryID, Branch: in.Branch, PublishOnPush: in.PublishOnPush,
 		})
 		return sourceOutput(st), err
+	})
+
+	add(s, &sdk.Tool{
+		Name:  "inspect_git_repository",
+		Title: "Check the address of a Git repository",
+		Description: "Check a Git repository's address before linking a site to it with link_git_site_source. For SSH " +
+			"addresses it returns the fingerprint of the server's key: show it to the person and have them confirm it " +
+			"matches what their Git host publishes before linking. For HTTPS (public repositories only) it lists the " +
+			"branches. Only public servers are reached.",
+		Annotations: reachesGitHub(annotations("Check the address of a Git repository", true, false, true)),
+	}, func(ctx context.Context, c call, in gitRepositoryInput) (panel.GitRepositoryCheck, error) {
+		return p.InspectGitRepository(ctx, c.actor, in.Site, in.Repository)
+	})
+
+	add(s, &sdk.Tool{
+		Name:  "link_git_site_source",
+		Title: "Link a site to a Git repository by address",
+		Description: "Link a site to any Git repository (GitLab, Gitea, Forgejo, Codeberg, Bitbucket, …) by its address " +
+			"and branch, replacing the link it had; also used to change the branch or publish_on_push. For SSH, pass the " +
+			"confirmed host_key fingerprint from inspect_git_repository; the panel makes a deploy key for the site, " +
+			"whose public half (deploy_key) the person adds to the repository with read access. Pushes are reported to " +
+			"notify_url; its secret is only shown in the web interface, where the person makes one with \"New secret\". " +
+			"Linking alone publishes nothing: see publishing_available.",
+		Annotations: reachesGitHub(annotations("Link a site to a Git repository by address", false, true, true)),
+	}, func(ctx context.Context, c call, in linkGitSourceInput) (siteSourceOutput, error) {
+		st, err := p.SetGitSiteSource(ctx, c.actor, in.Site, panel.GitSourceInput{
+			Repository: in.Repository, Branch: in.Branch, PublishOnPush: in.PublishOnPush, HostKey: in.HostKey,
+		})
+		return sourceOutput(st), err
+	})
+
+	add(s, &sdk.Tool{
+		Name:  "check_git_site_source",
+		Title: "Check access to a site's Git repository",
+		Description: "Connect to the Git repository a site is linked to by address (with its deploy key over SSH) and list " +
+			"its branches, to see whether the deploy key was added and the branch exists.",
+		Annotations: reachesGitHub(annotations("Check access to a site's Git repository", false, false, true)),
+	}, func(ctx context.Context, c call, in siteInput) (gitCheckOutput, error) {
+		chk, err := p.CheckGitSiteSource(ctx, c.actor, in.Site)
+		if err != nil {
+			return gitCheckOutput{}, err
+		}
+		return gitCheckOutput{siteSourceOutput: sourceOutput(chk.SiteSourceState), OK: chk.OK, Branches: chk.Branches,
+			DefaultBranch: chk.DefaultBranch, BranchFound: chk.BranchFound}, nil
 	})
 
 	add(s, &sdk.Tool{

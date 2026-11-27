@@ -308,6 +308,9 @@ func (s *Service) DetectBuildSettings(ctx context.Context, a Actor, site string)
 	if err := needWrite(a); err != nil {
 		return BuildSettingsProposal{}, err
 	}
+	if cur, err := s.store.SiteSource(ctx, st.Name); err == nil && cur.Kind == store.SourceGit {
+		return s.detectGitBuildSettings(ctx, a, cur)
+	}
 	src, v, err := s.linkedGitHubSource(ctx, st.Name)
 	if err != nil {
 		return BuildSettingsProposal{}, err
@@ -405,4 +408,39 @@ func topFiles(r io.Reader, root *os.Root, strip int) error {
 		}
 		n++
 	}
+}
+
+// detectGitBuildSettings is DetectBuildSettings for a Git source: the
+// newest commit of the branch is fetched like for a build (with its limits
+// and slots) and its top files looked at.
+func (s *Service) detectGitBuildSettings(ctx context.Context, a Actor, src store.SiteSource) (BuildSettingsProposal, error) {
+	tip, err := s.gitBranchTip(ctx, a, src)
+	if err != nil {
+		return BuildSettingsProposal{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, detectTime)
+	defer cancel()
+	rc, _, err := s.FetchGitSource(ctx, src.Site, tip)
+	if err != nil {
+		return BuildSettingsProposal{}, err
+	}
+	defer rc.Close()
+	dir, err := os.MkdirTemp(s.gitTempDir, "ownpanel-detect-")
+	if err != nil {
+		return BuildSettingsProposal{}, newError(Internal, err)
+	}
+	defer os.RemoveAll(dir)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return BuildSettingsProposal{}, newError(Internal, err)
+	}
+	defer root.Close()
+	if err := topFiles(rc, root, 0); err != nil {
+		return BuildSettingsProposal{}, errorf(Unavailable, "the repository's files could not be read")
+	}
+	res, err := presets.Detect(root.FS(), build.Images)
+	if err != nil {
+		return BuildSettingsProposal{}, newError(Internal, err)
+	}
+	return BuildSettingsProposal{Site: src.Site, Branch: src.Branch, Commit: tip, Result: res}, nil
 }

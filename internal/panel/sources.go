@@ -71,6 +71,29 @@ type SiteSource struct {
 	Problem  string    `json:"problem,omitempty"`
 	LinkedBy string    `json:"linked_by"`
 	LinkedAt time.Time `json:"linked_at"`
+
+	// Kind git (#111); none of it is secret. Statuses besides linked:
+	// "not_checked" (not reached since linking or a new deploy key),
+	// "host_key_changed" (the server shows NewHostKey instead of HostKey),
+	// "access_failed" (Problem says why).
+	// Server is the host (with the port if not the default), Transport
+	// "ssh" or "https".
+	Server    string `json:"server,omitempty"`
+	Transport string `json:"transport,omitempty"`
+	// DeployKey is the public half of the site's deploy key, to add at
+	// the Git host with read access (SSH only).
+	DeployKey string `json:"deploy_key,omitempty"`
+	// HostKey is the fingerprint of the server key confirmed for the
+	// site, HostKeyType its type; NewHostKey the fingerprint of the
+	// different key the server shows now.
+	HostKey     string `json:"host_key,omitempty"`
+	HostKeyType string `json:"host_key_type,omitempty"`
+	NewHostKey  string `json:"new_host_key,omitempty"`
+	// NotifyURL is the address the Git host calls on a push ("" while the
+	// panel has no domain with HTTPS; NotifyProblem says so).
+	NotifyURL     string     `json:"notify_url,omitempty"`
+	NotifyProblem string     `json:"notify_problem,omitempty"`
+	CheckedAt     *time.Time `json:"checked_at,omitempty"`
 }
 
 // SiteSourceState is a site's source (nil: none) and whether publishing on
@@ -82,6 +105,9 @@ type SiteSourceState struct {
 	// LastRun is the site's newest run, nil if it has none (it may
 	// outlive the source).
 	LastRun *Run `json:"last_run"`
+	// NotifySecret is the secret of a Git source's notification address,
+	// only in the answer that made it (linking or a new secret).
+	NotifySecret string `json:"notify_secret,omitempty"`
 }
 
 // SiteSourceInput links a site to a repository of a GitHub installation.
@@ -160,7 +186,12 @@ func (s *Service) GetSiteSource(ctx context.Context, a Actor, site string) (Site
 	if err != nil {
 		return SiteSourceState{}, storeError(err)
 	}
-	v := s.checkSource(ctx, src, mayUseGitHub(a))
+	var v SiteSource
+	if src.Kind == store.SourceGit {
+		v = s.gitSourceView(src)
+	} else {
+		v = s.checkSource(ctx, src, mayUseGitHub(a))
+	}
 	out.Source = &v
 	return out, nil
 }

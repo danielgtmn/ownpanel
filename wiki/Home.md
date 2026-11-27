@@ -34,6 +34,7 @@ Using it:
 - [[Users and Access|Users-and-Access]]: roles, sign-in, access tokens, activity log
 - [[DNS|DNS]]: connect Hetzner, manage domains and records, point domains at the server
 - [[GitHub|GitHub]]: connect GitHub accounts and organisations
+- [[Git repositories|Git-Repositories]]: link a site to any Git repository with a deploy key
 - [[Redirects|Redirects]]: main address with or without www, path and domain redirects
 - [[E-Mail|E-Mail]]: mailboxes, forwarding, mail programs, DNS records, limits
 - [[MCP|MCP]]: connect AI agents

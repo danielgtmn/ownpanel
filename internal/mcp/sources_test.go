@@ -8,4 +8,7 @@ var _ = expectTools(map[string]toolWant{
 	"link_site_source":              {destructive: true, idempotent: true},
 	"unlink_site_source":            {destructive: true},
 	"list_site_runs":                {readOnly: true, idempotent: true},
+	"inspect_git_repository":        {readOnly: true, idempotent: true},
+	"link_git_site_source":          {destructive: true, idempotent: true},
+	"check_git_site_source":         {idempotent: true},
 })

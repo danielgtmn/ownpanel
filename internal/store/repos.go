@@ -273,9 +273,16 @@ type githubInstallationRow struct {
 // the site shows "connection missing" with the repository it was linked
 // to, until someone links it again or unlinks it.
 //
-// Kind git: any Git host, fetched with a deploy key (#111). Repository
-// holds the clone address; DeployKey and NotifySecret are sealed by the
-// panel and stay empty until #111 fills them in.
+// Kind git: any Git host (#111). Repository holds the checked clone
+// address (SSH or HTTPS). For SSH, DeployKey is the sealed private key of
+// the site's deploy key and DeployPublicKey its public half (an
+// authorized_keys line); HostKey is the SSH server's key the person
+// confirmed (authorized_keys format), and HostKeyNew the different key the
+// server showed since, until someone accepts it or it shows the confirmed
+// one again. NotifySecret is the sealed secret of the notification address
+// and NotifyID the random id in that address (unique; nil for GitHub).
+// CheckedAt and CheckError are the result of the last time the panel
+// reached the repository (empty error: it worked).
 type siteSourceRow struct {
 	ID             string
 	SiteName       string `db:",ref=sites,cascade,unique"`
@@ -290,6 +297,13 @@ type siteSourceRow struct {
 	CreatedBy      *string `db:",ref=users,setnull,index"`
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	// Kind git (#111).
+	DeployPublicKey string
+	HostKey         string
+	HostKeyNew      string
+	NotifyID        *string `db:",unique"`
+	CheckedAt       *time.Time
+	CheckError      string
 }
 
 // siteRunRow is one run of a site: one entry per push (later also "Build
@@ -379,6 +393,15 @@ type githubRepositoryGoneRow struct {
 	Since          time.Time
 }
 
+// gitDeliveryRow is a notification from a Git host already handled for a
+// source (kind git), so one that arrives again is ignored. The id is
+// "<source row id>/<the host's delivery id>". Kept for a bounded time.
+type gitDeliveryRow struct {
+	ID         string
+	SourceID   string    `db:",ref=site_sources,cascade,index"`
+	ReceivedAt time.Time `db:",index"`
+}
+
 // formatRow marks the storage format: a row with id formatAblage means the
 // database is kept by ablage (legacy.go).
 type formatRow struct {
@@ -416,6 +439,7 @@ type repos struct {
 	buildSets    *ablage.Repository[siteBuildSettingsRow]
 	deliveries   *ablage.Repository[githubDeliveryRow]
 	reposGone    *ablage.Repository[githubRepositoryGoneRow]
+	gitDelivs    *ablage.Repository[gitDeliveryRow]
 	format       *ablage.Repository[formatRow]
 }
 
@@ -484,6 +508,8 @@ func newRepos(st ablage.Store) (repos, error) {
 	add(err)
 	r.reposGone, err = ablage.NewRepository[githubRepositoryGoneRow](st, "github_repositories_gone")
 	add(err)
+	r.gitDelivs, err = ablage.NewRepository[gitDeliveryRow](st, "git_deliveries")
+	add(err)
 	r.format, err = ablage.NewRepository[formatRow](st, "store_format")
 	add(err)
 	return r, errors.Join(errs...)
@@ -520,6 +546,7 @@ func (r repos) with(tx ablage.Store) repos {
 		buildSets:    r.buildSets.With(tx),
 		deliveries:   r.deliveries.With(tx),
 		reposGone:    r.reposGone.With(tx),
+		gitDelivs:    r.gitDelivs.With(tx),
 		format:       r.format.With(tx),
 	}
 }

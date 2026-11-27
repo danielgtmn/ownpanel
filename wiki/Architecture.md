@@ -58,6 +58,7 @@ If a change is saved but the sync fails, the API answers `502` with "saved, but 
 | `internal/caddy` | Caddy config builder and admin API client |
 | `internal/deploy` | Versions ("releases"): unpacking archives, activation, going back, pruning |
 | `internal/github` | Small GitHub client: creating an App from a manifest, signing in as the App (JWT), installations, short-lived tokens, repositories; `githubtest` is a stand-in for tests and development |
+| `internal/gitsource` | Fetching one commit of any Git repository (SSH with a pinned server key and a deploy key, or HTTPS) by speaking Git's fetch protocol itself, never running `git`; checks addresses, keeps to public servers, limits the download and writes the commit's files as a tar.gz for builds; `gitsourcetest` runs Git servers for tests |
 | `internal/dns` | Provider interface, zone lookup, "does this domain point here?", lookups at authoritative nameservers; `dns/hetzner` is the Hetzner Cloud client |
 | `internal/api` | HTTP API: authentication, then a thin adapter over `internal/panel` |
 | `internal/mcp` | MCP server at `/mcp`: the same operations as tools |
