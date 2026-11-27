@@ -121,7 +121,7 @@ A fork whose repository was deleted still counts as a fork. Whether a pull reque
 - **Administrators** connect and remove accounts, see them and their repositories, and link sites to their repositories.
 - **Members** do not see the connections, and cannot list or use their repositories. To them a repository of a connection looks like one that does not exist. The repositories belong to the administrators' accounts and organisations, and a member could otherwise publish (and so expose) any of them on a domain of their own.
 
-Members who want to publish from their own repositories use the [[GitHub Action|GitHub-Action]] or, later, deploy keys ([#111](https://github.com/danielgtmn/ownpanel/issues/111)).
+Members who want to publish from their own repositories use the [[GitHub Action|GitHub-Action]] or link the repository by its address with a deploy key ([[Git repositories|Git-Repositories]]), which also works for GitHub repositories.
 
 ## Removing a connection
 

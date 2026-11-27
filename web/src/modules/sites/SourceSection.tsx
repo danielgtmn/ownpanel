@@ -7,6 +7,7 @@ import { formatDate, isoTimestamp } from '../../shared/format/index.ts'
 import { useResource } from '../../shared/hooks/index.ts'
 import { useSession } from '../../shared/session/index.ts'
 import { ErrorState, ExternalIcon, LoadingState, Section } from '../../shared/ui/index.ts'
+import { GitSourceDetails, NotifySecretDialog, type ShownSecret } from './GitSourceDetails.tsx'
 import { PreviewsDialog } from './PreviewsDialog.tsx'
 import {
   getSiteSource,
@@ -20,7 +21,15 @@ import { SourceDialog } from './SourceDialog.tsx'
 
 const description = "Where this site's code comes from."
 
-function SourceRow({ source, publishingAvailable }: { source: SiteSource; publishingAvailable: boolean }) {
+type RowProps = {
+  site: string
+  source: SiteSource
+  publishingAvailable: boolean
+  onChange: () => Promise<void>
+  onSecret: (secret: ShownSecret) => void
+}
+
+function SourceRow({ site, source, publishingAvailable, onChange, onSecret }: RowProps) {
   const problem = sourceProblem(source)
   return (
     <ul className="record-list" aria-label="Source">
@@ -37,6 +46,7 @@ function SourceRow({ source, publishingAvailable }: { source: SiteSource; publis
             )}
           </h3>
           <ul className="record-facts">
+            {source.kind === 'git' && source.server ? <li>On {source.server}</li> : null}
             <li>
               Branch <span className="source-branch">{source.branch}</span>
             </li>
@@ -52,6 +62,7 @@ function SourceRow({ source, publishingAvailable }: { source: SiteSource; publis
               {problem}
             </p>
           ) : null}
+          {source.kind === 'git' ? <GitSourceDetails site={site} source={source} onChange={onChange} onSecret={onSecret} /> : null}
           {source.publish_on_push && !publishingAvailable ? (
             <p className="notice">
               Publishing on push starts once building on the server is available. Until then, publish files as before.
@@ -67,6 +78,8 @@ export function SourceSection({ site }: { site: string }) {
   const { isAdmin } = useSession()
   const state = useResource(() => getSiteSource(site), `source:${site}`)
   const [editing, setEditing] = useState(false)
+  // A notification secret just made: shown once, dropped when its dialog closes.
+  const [secret, setSecret] = useState<ShownSecret | null>(null)
   const [previews, setPreviews] = useState(false)
 
   async function previewsSaved() {
@@ -78,6 +91,9 @@ export function SourceSection({ site }: { site: string }) {
   async function linked(next: SiteSourceState) {
     setEditing(false)
     if (next.source) toast.success(`${site} is linked to ${next.source.repository}, branch ${next.source.branch}.`)
+    if (next.source && next.notify_secret) {
+      setSecret({ secret: next.notify_secret, url: next.source.notify_url ?? '', server: next.source.server })
+    }
     await state.reload()
   }
 
@@ -115,17 +131,15 @@ export function SourceSection({ site }: { site: string }) {
   const { source, publishing_available: publishingAvailable } = state.data
   const actions = (
     <>
-      {isAdmin ? (
-        <Button data-variant={source ? undefined : 'solid'} onClick={() => setEditing(true)}>
-          {source ? (
-            <>
-              Change<span className="visually-hidden"> the source</span>
-            </>
-          ) : (
-            'Link repository'
-          )}
-        </Button>
-      ) : null}
+      <Button data-variant={source ? undefined : 'solid'} onClick={() => setEditing(true)}>
+        {source ? (
+          <>
+            Change<span className="visually-hidden"> the source</span>
+          </>
+        ) : (
+          'Link repository'
+        )}
+      </Button>
       {source?.kind === 'github' ? (
         <Button onClick={() => setPreviews(true)}>
           Pull requests<span className="visually-hidden">: choose which get previews</span>
@@ -142,12 +156,17 @@ export function SourceSection({ site }: { site: string }) {
   return (
     <Section title="Source" description={description} actions={actions}>
       {source ? (
-        <SourceRow source={source} publishingAvailable={publishingAvailable} />
+        <SourceRow
+          site={site}
+          source={source}
+          publishingAvailable={publishingAvailable}
+          onChange={state.reload}
+          onSecret={setSecret}
+        />
       ) : (
         <p className="muted">
-          {isAdmin
-            ? 'Not linked to a repository. Link one to choose the branch this site is published from, once building on the server is available.'
-            : 'Not linked to a repository. An administrator can link it to one of the connected repositories.'}
+          Not linked to a repository. Link one to choose the branch this site is published from, once building on the
+          server is available.
         </p>
       )}
       {source?.kind === 'github' ? (
@@ -159,16 +178,16 @@ export function SourceSection({ site }: { site: string }) {
           onSaved={previewsSaved}
         />
       ) : null}
-      {isAdmin ? (
-        <SourceDialog
-          open={editing}
-          onOpenChange={setEditing}
-          site={site}
-          current={source}
-          publishingAvailable={publishingAvailable}
-          onLinked={linked}
-        />
-      ) : null}
+      <SourceDialog
+        open={editing}
+        onOpenChange={setEditing}
+        site={site}
+        current={source}
+        publishingAvailable={publishingAvailable}
+        onLinked={linked}
+        canUseGitHub={isAdmin}
+      />
+      <NotifySecretDialog shown={secret} onClose={() => setSecret(null)} />
     </Section>
   )
 }

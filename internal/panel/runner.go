@@ -360,6 +360,9 @@ func (s *Service) StartSiteBuild(ctx context.Context, a Actor, site string) (Run
 	} else if !ok {
 		return Run{}, errorf(Conflict, "%s", runNoSettings)
 	}
+	if cur, err := s.store.SiteSource(ctx, st.Name); err == nil && cur.Kind == store.SourceGit {
+		return s.startGitBuild(ctx, a, cur)
+	}
 	src, v, err := s.linkedGitHubSource(ctx, st.Name)
 	if err != nil {
 		return Run{}, err

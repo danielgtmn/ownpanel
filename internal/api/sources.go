@@ -16,6 +16,83 @@ func (s *Server) sourceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sites/{name}/source/branches", s.sourceBranches)
 	mux.HandleFunc("PUT /api/sites/{name}/source/previews", s.putSitePreviews)
 	mux.HandleFunc("GET /api/sites/{name}/runs", s.siteRuns)
+	// Kind git: any Git repository by address (#111).
+	mux.HandleFunc("POST /api/sites/{name}/source/git/inspect", s.inspectGitRepository)
+	mux.HandleFunc("PUT /api/sites/{name}/source/git", s.putGitSource)
+	mux.HandleFunc("POST /api/sites/{name}/source/git/check", s.checkGitSource)
+	mux.HandleFunc("POST /api/sites/{name}/source/git/host-key", s.acceptGitHostKey)
+	mux.HandleFunc("POST /api/sites/{name}/source/git/deploy-key", s.replaceGitDeployKey)
+	mux.HandleFunc("POST /api/sites/{name}/source/git/notify-secret", s.replaceGitNotifySecret)
+}
+
+func (s *Server) inspectGitRepository(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Repository string `json:"repository"`
+	}
+	if !decodeJSON(w, r, &body, `{"repository": "git@codeberg.org:owner/site.git"}`) {
+		return
+	}
+	out, err := s.Panel.InspectGitRepository(r.Context(), actorOf(r), r.PathValue("name"), body.Repository)
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) putGitSource(w http.ResponseWriter, r *http.Request) {
+	var body panel.GitSourceInput
+	if !decodeJSON(w, r, &body, `{"repository": "git@codeberg.org:owner/site.git", "branch": "main", "publish_on_push": true, "host_key": "SHA256:…"}`) {
+		return
+	}
+	out, err := s.Panel.SetGitSiteSource(r.Context(), actorOf(r), r.PathValue("name"), body)
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) checkGitSource(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Panel.CheckGitSiteSource(r.Context(), actorOf(r), r.PathValue("name"))
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) acceptGitHostKey(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		HostKey string `json:"host_key"`
+	}
+	if !decodeJSON(w, r, &body, `{"host_key": "SHA256:…"}`) {
+		return
+	}
+	out, err := s.Panel.AcceptGitHostKey(r.Context(), actorOf(r), r.PathValue("name"), body.HostKey)
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) replaceGitDeployKey(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Panel.ReplaceGitDeployKey(r.Context(), actorOf(r), r.PathValue("name"))
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) replaceGitNotifySecret(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Panel.ReplaceGitNotifySecret(r.Context(), actorOf(r), r.PathValue("name"))
+	if err != nil {
+		writeFailure(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) siteRuns(w http.ResponseWriter, r *http.Request) {

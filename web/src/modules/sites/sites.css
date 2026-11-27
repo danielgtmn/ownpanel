@@ -489,3 +489,65 @@
   flex: none;
   margin-top: 0.125rem;
 }
+
+.git-source {
+  display: grid;
+  gap: 1rem;
+  margin-top: 0.75rem;
+  min-width: 0;
+}
+
+.git-source-part {
+  display: grid;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.git-source-part p {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.git-source-title {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.git-source-value,
+.git-fingerprint code,
+.git-check-address {
+  display: block;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  background: var(--ui-muted);
+  font-family: var(--ui-font-mono, ui-monospace, monospace);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.git-source-checked {
+  align-self: center;
+  font-size: 0.875rem;
+}
+
+.git-check {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.git-check p {
+  margin: 0;
+}
+
+.git-fingerprint {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.git-secret {
+  font-family: var(--ui-font-mono, ui-monospace, monospace);
+}

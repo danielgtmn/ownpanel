@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   branchChoices,
+  gitHostSteps,
   initialBranch,
   previewsSummary,
   repositoryKey,
@@ -86,6 +87,26 @@ describe('runs', () => {
     expect(runAuthor(run({}))).toBe('Ann Author (ann)')
     expect(runAuthor(run({ author_name: 'ann' }))).toBe('ann')
     expect(runAuthor(run({ author_name: '', author_login: undefined, pusher: 'bob' }))).toBe('bob')
+  })
+})
+
+describe('sources linked by address', () => {
+  it('explains what to do next', () => {
+    expect(sourceProblem(source({ kind: 'git', transport: 'ssh', status: 'not_checked' }))).toMatch(/Add the deploy key/)
+    expect(sourceProblem(source({ kind: 'git', transport: 'https', status: 'not_checked' }))).toMatch(/Check access/)
+    expect(
+      sourceProblem(source({ kind: 'git', server: 'codeberg.org', status: 'host_key_changed', new_host_key: 'SHA256:x' })),
+    ).toMatch(/^codeberg.org now shows a different server key/)
+    expect(sourceProblem(source({ kind: 'git', status: 'access_failed', problem: 'codeberg.org did not answer in time' }))).toBe(
+      "Couldn't reach the repository: codeberg.org did not answer in time",
+    )
+  })
+  it('names where to add the key at common hosts', () => {
+    expect(gitHostSteps('github.com').key).toMatch(/Deploy keys/)
+    expect(gitHostSteps('gitlab.example.org').notify).toMatch(/Secret token/)
+    expect(gitHostSteps('bitbucket.org').key).toMatch(/Access keys/)
+    expect(gitHostSteps('codeberg.org').notify).toMatch(/application\/json/)
+    expect(gitHostSteps(undefined).key).toMatch(/Deploy keys/)
   })
 })
 

@@ -229,6 +229,17 @@ func (s *Store) ClaimNextRun(ctx context.Context, site, supersededDetail string)
 	return s.Run(ctx, id)
 }
 
+// NewestRun returns the newest run of a site with the preview tag preview
+// ("" for the runs that make a version live); ErrNotFound if there is none.
+func (s *Store) NewestRun(ctx context.Context, site, preview string) (Run, error) {
+	row, err := s.r.runs.First(ctx, ablage.Query{Where: ablage.And(ablage.Eq("site_name", site), ablage.Eq("preview", preview)),
+		OrderBy: newestFirst})
+	if err != nil {
+		return Run{}, missing(err, errRunNotFound)
+	}
+	return runOf(row), nil
+}
+
 // PreviewRuns lists the queued and running runs with a preview tag, of
 // every site, oldest first.
 func (s *Store) PreviewRuns(ctx context.Context, preview string) ([]Run, error) {
