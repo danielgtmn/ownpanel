@@ -130,7 +130,9 @@ func (s *Server) tarball(w http.ResponseWriter, r *http.Request) {
 	}
 	sha := r.PathValue("ref")
 	c, ok := s.commits[sha]
-	if !ok || c.repoID != rp.ID {
+	// The commits of a pull request (also from a fork) can be fetched
+	// from the repository it was opened against, as on GitHub.
+	if !ok || c.repoID != rp.ID && s.pullSHAs[sha] != rp.ID {
 		message(w, http.StatusNotFound, "Not Found")
 		return
 	}

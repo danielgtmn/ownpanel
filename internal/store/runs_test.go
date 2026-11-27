@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -271,6 +272,83 @@ func TestGitHubRowsGoWithTheirParents(t *testing.T) {
 		}
 		if ok, err := s.ClaimDelivery(ctx, "d1", app.ID); !ok || err != nil {
 			t.Fatalf("the id outlived its App: %v %v", ok, err)
+		}
+	})
+}
+
+// Runs of a pull request only replace queued runs of the same pull
+// request; the runner takes the runs that make a version live first.
+func TestRunsOfPullRequests(t *testing.T) {
+	eachStore(t, func(t *testing.T, s *Store) {
+		if _, err := s.CreateSite(ctx, "a", []string{"a.example.com"}, ""); err != nil {
+			t.Fatal(err)
+		}
+		pr := func(n int, c byte) Run {
+			r := testRun("a", sha(c))
+			r.Trigger, r.PullRequest, r.Preview = "pull_request", n, fmt.Sprintf("pr-7-%d", n)
+			return r
+		}
+		bad := testRun("a", sha('0'))
+		bad.Preview = "pr-7-1"
+		if _, err := s.AddRun(ctx, bad, "replaced", 30); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("a preview without a pull request: %v", err)
+		}
+		p1, _ := s.AddRun(ctx, pr(1, '1'), "replaced", 30)
+		push, _ := s.AddRun(ctx, testRun("a", sha('2')), "replaced", 30)
+		p2, _ := s.AddRun(ctx, pr(2, '3'), "replaced", 30)
+		p1b, _ := s.AddRun(ctx, pr(1, '4'), "replaced", 30)
+		for id, want := range map[string]string{p1.ID: RunSkipped, push.ID: RunQueued, p2.ID: RunQueued, p1b.ID: RunQueued} {
+			if got, _ := s.Run(ctx, id); got.Status != want {
+				t.Errorf("%s: %s, want %s", id, got.Status, want)
+			}
+		}
+		if got, _ := s.Run(ctx, p1b.ID); got.PullRequest != 1 || got.Preview != "pr-7-1" {
+			t.Errorf("run: %+v", got)
+		}
+		if l, _ := s.PreviewRuns(ctx, "pr-7-1"); len(l) != 1 || l[0].ID != p1b.ID {
+			t.Errorf("preview runs: %+v", l)
+		}
+		var order []string
+		for {
+			c, err := s.ClaimNextRun(ctx, "a", "replaced")
+			if err != nil {
+				break
+			}
+			order = append(order, c.ID)
+			if _, err := s.FinishRun(ctx, c.ID, RunSucceeded, ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if strings.Join(order, ",") != strings.Join([]string{push.ID, p2.ID, p1b.ID}, ",") {
+			t.Errorf("order %v, want push, then pull requests oldest first", order)
+		}
+	})
+}
+
+// The settings for pull requests survive linking anew; a source linked
+// before they existed has previews of pull requests on.
+func TestSourcePreviewSettings(t *testing.T) {
+	eachStore(t, func(t *testing.T, s *Store) {
+		if _, err := s.CreateSite(ctx, "a", []string{"a.example.com"}, ""); err != nil {
+			t.Fatal(err)
+		}
+		src := SiteSource{Site: "a", Kind: SourceGitHub, RepositoryID: 7, Repository: "acme/a", Branch: "main"}
+		got, err := s.PutSiteSource(ctx, src, "")
+		if err != nil || !got.PullRequestPreviews || got.ForkPreviews {
+			t.Fatalf("new link: %+v %v", got, err)
+		}
+		if got, err = s.SetSourcePreviews(ctx, "a", true, true); err != nil || !got.ForkPreviews {
+			t.Fatalf("set: %+v %v", got, err)
+		}
+		src.Branch = "dev"
+		if got, err = s.PutSiteSource(ctx, src, ""); err != nil || !got.PullRequestPreviews || !got.ForkPreviews || got.Branch != "dev" {
+			t.Fatalf("linked anew: %+v %v", got, err)
+		}
+		if got, err = s.SetSourcePreviews(ctx, "a", false, false); err != nil || got.PullRequestPreviews || got.ForkPreviews {
+			t.Fatalf("off: %+v %v", got, err)
+		}
+		if _, err := s.SetSourcePreviews(ctx, "nope", true, false); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("no source: %v", err)
 		}
 	})
 }

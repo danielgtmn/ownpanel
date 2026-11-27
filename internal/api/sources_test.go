@@ -98,8 +98,23 @@ func TestSiteSourceOverHTTP(t *testing.T) {
 		t.Fatalf("shown: %d %s", rec.Code, rec.Body)
 	}
 
+	if !st.Source.PullRequestPreviews || st.Source.ForkPreviews {
+		t.Fatalf("previews by default: %s", bodies)
+	}
+	// Which pull requests are built as previews.
+	rec = e.as("PUT", "/api/sites/blog/source/previews", `{"pull_requests":true,"forks":true}`)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"pull_request_previews":true,"fork_previews":true`) {
+		t.Fatalf("previews: %d %s", rec.Code, rec.Body)
+	}
+	if rec := e.as("PUT", "/api/sites/blog/source/previews", `{"pull_requests":false,"forks":true}`); rec.Code != 400 {
+		t.Fatalf("forks without pull requests: %d %s", rec.Code, rec.Body)
+	}
+
 	// A read-only token sees it but cannot change it.
 	_, read := e.createToken("read", "null")
+	if rec := e.do(req{method: "PUT", path: "/api/sites/blog/source/previews", body: `{"pull_requests":false}`, token: read}); rec.Code != 403 {
+		t.Fatalf("read token changes previews: %d", rec.Code)
+	}
 	if rec := e.do(req{method: "GET", path: "/api/sites/blog/source", token: read}); rec.Code != 200 {
 		t.Fatalf("read token: %d", rec.Code)
 	}
@@ -115,6 +130,7 @@ func TestSiteSourceOverHTTP(t *testing.T) {
 		{method: "GET", path: "/api/sites/blog/source", token: limited},
 		{method: "PUT", path: "/api/sites/blog/source", body: link + `,"branch":"main"}`, token: limited},
 		{method: "DELETE", path: "/api/sites/blog/source", token: limited},
+		{method: "PUT", path: "/api/sites/blog/source/previews", body: `{"pull_requests":false}`, token: limited},
 	} {
 		if rec := e.do(r); rec.Code != 404 {
 			t.Fatalf("limited token %s: %d %s", r.method, rec.Code, rec.Body)

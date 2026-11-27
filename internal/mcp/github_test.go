@@ -145,6 +145,16 @@ func TestGitHubTools(t *testing.T) {
 	refused(t, call_(t, wcs, "link_site_source", with(link, "branch", "-x")), "not a valid branch name")
 	refused(t, call_(t, wcs, "link_site_source", with(link, "branch", "gone")), "has no branch")
 	refused(t, call_(t, cs, "link_site_source", link), "can only read")
+	if !src.Source.PullRequestPreviews || src.Source.ForkPreviews {
+		t.Fatalf("previews by default: %+v", src.Source)
+	}
+	ok(t, call_(t, wcs, "set_site_pull_request_previews", map[string]any{"site": "blog", "pull_requests": true, "forks": true}), &src)
+	if !src.Source.PullRequestPreviews || !src.Source.ForkPreviews {
+		t.Fatalf("previews: %+v", src.Source)
+	}
+	refused(t, call_(t, wcs, "set_site_pull_request_previews", map[string]any{"site": "blog", "pull_requests": false, "forks": true}), "only built when pull requests are")
+	refused(t, call_(t, cs, "set_site_pull_request_previews", map[string]any{"site": "blog", "pull_requests": false, "forks": false}), "can only read")
+	ok(t, call_(t, wcs, "set_site_pull_request_previews", map[string]any{"site": "blog", "pull_requests": true}), &src)
 	ok(t, call_(t, cs, "get_site_source", map[string]any{"site": "blog"}), &src)
 	if src.Source == nil || src.Source.Branch != "main" || src.LastRun != nil {
 		t.Fatalf("read token sees: %+v", src)

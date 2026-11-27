@@ -144,6 +144,11 @@ type Server struct {
 	downloads    map[string]string           // one-time download code -> commit
 	statuses     []Status
 	tarballDelay time.Duration
+
+	// pulls.go
+	pulls    map[int64]map[int]*Pull // base repository -> number -> pull request
+	pullSHAs map[string]int64        // head commit -> base repository that serves it
+	comments []*Comment
 }
 
 // New starts a fake on a random local port. Close it when done
@@ -406,6 +411,12 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /api/v3/repos/{owner}/{repo}/tarball/{ref}", s.tarball)
 	mux.HandleFunc("POST /api/v3/repos/{owner}/{repo}/statuses/{sha}", s.postStatus)
 	mux.HandleFunc("GET /_codeload/{file}", s.codeload)
+	mux.HandleFunc("GET /api/v3/repos/{owner}/{repo}/pulls/{number}", s.getPull)
+	mux.HandleFunc("GET /api/v3/repos/{owner}/{repo}/issues/{number}/comments", s.listComments)
+	mux.HandleFunc("POST /api/v3/repos/{owner}/{repo}/issues/{number}/comments", s.createComment)
+	mux.HandleFunc("PATCH /api/v3/repos/{owner}/{repo}/issues/comments/{id}", s.updateComment)
+	mux.HandleFunc("GET /_dev/pull_request", s.dev(s.devPull))
+	mux.HandleFunc("GET /_dev/comments", s.dev(s.devComments))
 	mux.HandleFunc("POST /_dev/commit", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		dev := s.Dev
@@ -801,6 +812,12 @@ func (s *Server) listRepos(w http.ResponseWriter, r *http.Request) {
 // token may read its contents, as GitHub does (a repository the token may
 // not see is "Not Found").
 func (s *Server) repoOfToken(w http.ResponseWriter, r *http.Request) *Repo {
+	return s.repoOfTokenFor(w, r, "contents", 1)
+}
+
+// repoOfTokenFor is repoOfToken for another permission and level (1 read,
+// 2 write).
+func (s *Server) repoOfTokenFor(w http.ResponseWriter, r *http.Request, perm string, level int) *Repo {
 	raw, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	t, ok := s.tokens[raw]
 	if !ok || !s.Now().Before(t.ExpiresAt) {
@@ -819,7 +836,7 @@ func (s *Server) repoOfToken(w http.ResponseWriter, r *http.Request) *Repo {
 		if t.RepositoryIDs != nil && !slices.Contains(t.RepositoryIDs, rp.ID) {
 			break
 		}
-		if levels[t.Permissions["contents"]] < 1 {
+		if levels[t.Permissions[perm]] < level {
 			message(w, http.StatusForbidden, "Resource not accessible by integration")
 			return nil
 		}

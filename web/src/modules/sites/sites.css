@@ -262,6 +262,10 @@
   overflow-wrap: anywhere;
 }
 
+.run-preview {
+  white-space: nowrap;
+}
+
 .run-side {
   display: flex;
   flex-wrap: wrap;
@@ -435,13 +439,13 @@
 @media (max-width: 480px) {
   .run-side {
     width: 100%;
-    flex-wrap: nowrap;
-    justify-content: space-between;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 
   .run-side .status-badge {
     min-width: 0;
-    white-space: normal;
+    margin-inline-end: auto;
   }
 
   .run-fact {

@@ -36,7 +36,7 @@ func manifest() githubtest.Manifest {
 	m.Name = "ownpanel test"
 	m.URL = "https://panel.example.com/"
 	m.HookAttributes.URL = "https://panel.example.com/api/github/webhook"
-	m.DefaultPermissions = map[string]string{"contents": "read", "metadata": "read", "statuses": "write"}
+	m.DefaultPermissions = map[string]string{"contents": "read", "metadata": "read", "statuses": "write", "pull_requests": "write"}
 	return m
 }
 

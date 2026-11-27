@@ -174,7 +174,13 @@ func TestDeliveryPushesThatCreateNoRun(t *testing.T) {
 	}
 	// Other events are accepted and ignored.
 	h.mustReceive(h.delivery("ping", []byte(`{"zen":"Keep it logically awesome.","hook_id":1}`)), DeliveryIgnored, 0)
-	h.mustReceive(h.delivery("pull_request", []byte(`{"action":"opened","number":1,"pull_request":{}}`)), DeliveryIgnored, 0)
+	n := h.gh.OpenPull(h.site, "main", "feature", 0, strings.Repeat("ab", 20), "Change", "ann")
+	h.mustReceive(h.delivery("pull_request", h.gh.PullPayload("labeled", h.site, n, h.inst)), DeliveryIgnored, 0)
+	// A pull request without what GitHub always sends is refused like any
+	// malformed delivery.
+	if _, err := h.receive(h.delivery("pull_request", []byte(`{"action":"opened","number":1,"pull_request":{}}`))); err != ErrDeliveryRejected {
+		t.Errorf("malformed pull request: %v", err)
+	}
 }
 
 func TestDeliveryRejected(t *testing.T) {

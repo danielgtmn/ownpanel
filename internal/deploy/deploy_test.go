@@ -218,6 +218,92 @@ func TestPruneKeepsLiveAndPreviousDespitePendingReleases(t *testing.T) {
 	}
 }
 
+// Previews of pull requests (tagged releases) never count against the
+// normal releases: however many there are, the live release, the one to
+// go back to and the newest normal ones stay. Of each tag only the newest
+// stays, and at most KeepTagged tags.
+func TestTaggedReleases(t *testing.T) {
+	m := &Manager{Base: t.TempDir()}
+	add := func(body string) string {
+		id, err := m.Deploy(t.Context(), "a", archive(t, entry{name: "index.html", body: body}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	v1, v2 := add("v1"), add("v2")
+	pending, err := m.Add(t.Context(), "a", archive(t, entry{name: "index.html", body: "p"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var newest []string
+	for i := range KeepTagged + 5 {
+		var id string
+		for range 2 { // two builds per pull request
+			if id, err = m.AddTagged(t.Context(), "a", archive(t, entry{name: "index.html", body: "pr"}), fmt.Sprintf("pr-7-%d", i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		newest = append(newest, id)
+	}
+	if m.Current("a") != v2 {
+		t.Fatal("live release changed")
+	}
+	rel := m.Releases("a")
+	for _, id := range []string{v1, v2, pending} {
+		if !m.HasRelease("a", id) {
+			t.Fatalf("%s was removed by previews: %v", id, rel)
+		}
+	}
+	want := append([]string{v1, v2, pending}, newest[len(newest)-KeepTagged:]...)
+	if strings.Join(rel, " ") != strings.Join(want, " ") {
+		t.Fatalf("kept %v\nwant %v", rel, want)
+	}
+	if tags := m.Tags("a"); len(tags) != KeepTagged {
+		t.Fatalf("tags %v", tags)
+	}
+	if id, err := m.Rollback("a", ""); err != nil || id != v1 {
+		t.Fatalf("going back: %q %v", id, err)
+	}
+	if _, err := m.Rollback("a", v2); err != nil {
+		t.Fatal(err)
+	}
+
+	// Made live, a preview is a normal release: removing its tag leaves it.
+	last := newest[len(newest)-1]
+	tag := m.Tag("a", last)
+	if _, err := m.Rollback("a", last); err != nil {
+		t.Fatal(err)
+	}
+	if m.Tag("a", last) != "" {
+		t.Fatal("a live release kept its tag")
+	}
+	if removed, err := m.RemoveTagged("a", tag); err != nil || len(removed) != 0 || !m.HasRelease("a", last) {
+		t.Fatalf("removing the tag of a live release: %v %v", removed, err)
+	}
+	other := newest[len(newest)-2]
+	otherTag := m.Tag("a", other)
+	if removed, err := m.RemoveTagged("a", otherTag); err != nil || len(removed) != 1 || m.HasRelease("a", other) {
+		t.Fatalf("removing a preview: %v %v", removed, err)
+	}
+	if _, err := os.Lstat(filepath.Join(m.Base, "a", "tags", other)); err == nil {
+		t.Fatal("the tag of a removed release was kept")
+	}
+	for _, bad := range []string{"", "PR-1", "../x", "a/b", strings.Repeat("x", 64)} {
+		if _, err := m.AddTagged(t.Context(), "a", archive(t, entry{name: "index.html", body: "x"}), bad); err == nil {
+			t.Errorf("tag %q accepted", bad)
+		}
+		if _, err := m.RemoveTagged("a", bad); err == nil {
+			t.Errorf("removing tag %q accepted", bad)
+		}
+	}
+	for _, bad := range []string{"", ".", "..", "../a", "x/y"} {
+		if m.HasRelease("a", bad) {
+			t.Errorf("HasRelease(%q)", bad)
+		}
+	}
+}
+
 func TestAddFailureLeavesNoMarker(t *testing.T) {
 	m := &Manager{Base: t.TempDir()}
 	if _, err := m.Add(t.Context(), "a", archive(t, entry{name: "../x", body: "x"})); err == nil {

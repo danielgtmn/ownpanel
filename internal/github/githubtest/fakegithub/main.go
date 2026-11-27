@@ -22,6 +22,12 @@
 // are what a build of the commit gets) and answers the commit's id:
 //
 //	tar -czf - -C my-site . | curl --data-binary @- 'http://127.0.0.1:9101/_dev/commit?repo=acme/website'
+//
+// GET /_dev/pull_request?repo=acme/website&action=opened&base=main&head=dev
+// opens a pull request (fork=stranger/website for one from a fork) and
+// answers with its signed delivery like /_dev/push; action=synchronize,
+// closed or reopened with number=N change it (scripts/github-pull.sh).
+// GET /_dev/comments?repo=acme/website&number=N lists its comments.
 package main
 
 import (
@@ -52,6 +58,9 @@ func main() {
 		{"octo-admin", "blog", false, []string{"drafts"}}, {"octo-admin", "notes", true, nil},
 		{"acme", "website", true, []string{"release/2.0", "dev"}}, {"acme", "docs", false, nil},
 		{"acme", "landing-page", true, nil},
+		// A fork of acme/website by someone else, for pull requests from
+		// forks; no installation sees it.
+		{"stranger", "website", false, []string{"feature"}},
 	} {
 		id := srv.AddRepo(r.owner, r.name, r.private)
 		for _, b := range r.branches {

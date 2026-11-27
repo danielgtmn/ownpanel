@@ -54,6 +54,8 @@ describe('versions', () => {
   it('names the state of a version', () => {
     expect(versionState({ id: 'a', live: true, pending: false, preview_url: '' })).toEqual({ text: 'Live', tone: 'positive' })
     expect(versionState({ id: 'a', live: false, pending: true, preview_url: '' }).text).toBe('Not live yet')
+    const preview = { id: 'a', live: false, pending: true, preview_url: '', pull_request: 7 }
+    expect(versionState(preview).text).toBe('Preview of pull request #7')
     expect(versionState({ id: 'a', live: false, pending: false, preview_url: '' }).text).toBe('Not live')
   })
 })

@@ -6,6 +6,8 @@
 //	<base>/<site>/current                  symlink to the active release
 //	<base>/<site>/pending/<release-id>     empty marker: published without
 //	                                       ever having been made live
+//	<base>/<site>/tags/<release-id>        a tag (e.g. the preview of a pull
+//	                                       request), while it is not live
 //
 // The web server serves "current". Switching releases is one atomic rename of
 // a symlink, so a deployment or rollback never exposes a half-written site
@@ -29,6 +31,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -40,6 +43,13 @@ import (
 // The live release and the one Rollback would go back to are kept besides,
 // so a burst of releases that are not made live cannot push them out.
 const KeepReleases = 5
+
+// KeepTagged is how many tagged releases a site keeps besides, at most one
+// per tag (the newest). Tagged releases are previews that are not live,
+// such as the preview of a pull request: they never count against
+// KeepReleases, so many of them cannot push out normal releases, and
+// their own cap keeps them from filling the disk.
+const KeepTagged = 10
 
 // Limits for one release. Variables so tests can lower them.
 var (
@@ -105,6 +115,7 @@ type Manager struct {
 func (m *Manager) siteDir(site string) string     { return filepath.Join(m.Base, site) }
 func (m *Manager) releasesDir(site string) string { return filepath.Join(m.Base, site, "releases") }
 func (m *Manager) pendingDir(site string) string  { return filepath.Join(m.Base, site, "pending") }
+func (m *Manager) tagsDir(site string) string     { return filepath.Join(m.Base, site, "tags") }
 
 // Root is the path the web server serves for a site.
 func (m *Manager) Root(site string) string { return filepath.Join(m.Base, site, "current") }
@@ -142,17 +153,100 @@ func (m *Manager) Releases(site string) []string {
 // Unpacking stops when ctx is done (reading the upload already fails when
 // the request goes away).
 func (m *Manager) Deploy(ctx context.Context, site string, archive io.Reader) (string, error) {
-	return m.add(ctx, site, archive, true)
+	return m.add(ctx, site, archive, true, "")
 }
 
 // Add extracts an archive as a new release like Deploy, but leaves the live
 // release as it is. The new release is marked as pending until it is made
 // live with Rollback.
 func (m *Manager) Add(ctx context.Context, site string, archive io.Reader) (string, error) {
-	return m.add(ctx, site, archive, false)
+	return m.add(ctx, site, archive, false, "")
 }
 
-func (m *Manager) add(ctx context.Context, site string, archive io.Reader, live bool) (string, error) {
+// AddTagged is Add for a release with a tag (ValidTag). Of the releases
+// with the same tag only the newest is kept, and tagged releases have
+// their own cap (KeepTagged). The tag goes when the release is made live:
+// it is a normal release from then on.
+func (m *Manager) AddTagged(ctx context.Context, site string, archive io.Reader, tag string) (string, error) {
+	if !ValidTag(tag) {
+		return "", fmt.Errorf("%q is not a valid tag", tag)
+	}
+	return m.add(ctx, site, archive, false, tag)
+}
+
+var tagRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+
+// ValidTag reports whether t can tag a release: lowercase letters, digits
+// and hyphens, at most 63 characters.
+func ValidTag(t string) bool { return tagRe.MatchString(t) }
+
+// Tag returns the tag of a release, "" if it has none.
+func (m *Manager) Tag(site, id string) string {
+	b, err := os.ReadFile(filepath.Join(m.tagsDir(site), id))
+	if err != nil || !ValidTag(string(b)) {
+		return ""
+	}
+	return string(b)
+}
+
+// Tags lists the tags of a site's releases, each once, sorted.
+func (m *Manager) Tags(site string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, r := range m.Releases(site) {
+		if t := m.Tag(site, r); t != "" && !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Tagged lists the releases with tag, oldest first.
+func (m *Manager) Tagged(site, tag string) []string {
+	var out []string
+	for _, r := range m.Releases(site) {
+		if m.Tag(site, r) == tag {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// HasRelease reports whether a release of the site exists.
+func (m *Manager) HasRelease(site, id string) bool {
+	if id == "" || strings.ContainsAny(id, `/\`) || strings.HasPrefix(id, ".") {
+		return false
+	}
+	info, err := os.Lstat(m.ReleaseDir(site, id))
+	return err == nil && info.IsDir()
+}
+
+// RemoveTagged removes the releases with tag and returns them. The live
+// release is never removed (it has no tag any more anyway).
+func (m *Manager) RemoveTagged(site, tag string) ([]string, error) {
+	if !ValidTag(tag) {
+		return nil, fmt.Errorf("%q is not a valid tag", tag)
+	}
+	cur := m.Current(site)
+	var removed []string
+	var errs []error
+	for _, r := range m.Tagged(site, tag) {
+		if r == cur {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(m.releasesDir(site), r)); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		removed = append(removed, r)
+	}
+	m.removeStaleMarkers(site)
+	return removed, errors.Join(errs...)
+}
+
+func (m *Manager) add(ctx context.Context, site string, archive io.Reader, live bool, tag string) (string, error) {
 	relDir := m.releasesDir(site)
 	if err := os.MkdirAll(relDir, 0o755); err != nil {
 		return "", err
@@ -188,9 +282,16 @@ func (m *Manager) add(ctx context.Context, site string, archive io.Reader, live 
 		if err := m.markPending(site, id); err != nil {
 			return "", err
 		}
+		if tag != "" {
+			if err := m.markTag(site, id, tag); err != nil {
+				_ = os.Remove(filepath.Join(m.pendingDir(site), id))
+				return "", err
+			}
+		}
 	}
 	if err := os.Rename(tmp, filepath.Join(relDir, id)); err != nil {
 		_ = os.Remove(filepath.Join(m.pendingDir(site), id))
+		_ = os.Remove(filepath.Join(m.tagsDir(site), id))
 		return "", err
 	}
 	if live {
@@ -211,6 +312,13 @@ func (m *Manager) markPending(site, id string) error {
 		return err
 	}
 	return f.Close()
+}
+
+func (m *Manager) markTag(site, id, tag string) error {
+	if err := os.MkdirAll(m.tagsDir(site), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(m.tagsDir(site), id), []byte(tag), 0o644)
 }
 
 // Pending reports whether a release was published without being made live
@@ -273,29 +381,61 @@ func (m *Manager) activate(site, id string) error {
 	if err := os.Rename(tmp, link); err != nil {
 		return err
 	}
-	// Once live, a release is no longer pending: going back may return to it.
-	if err := os.Remove(filepath.Join(m.pendingDir(site), id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
+	// Once live, a release is no longer pending: going back may return to
+	// it. It loses its tag too: it is a normal release now, which closing
+	// a pull request does not remove.
+	for _, dir := range []string{m.pendingDir(site), m.tagsDir(site)} {
+		if err := os.Remove(filepath.Join(dir, id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
 	}
 	return nil
 }
 
 // prune removes the oldest releases beyond KeepReleases. It never removes
 // the live release nor the one Rollback would go back to, however many
-// releases were added after them without being made live. Markers of
-// releases that no longer exist are removed too.
+// releases were added after them without being made live. Tagged releases
+// do not count: of them, the newest of each tag is kept, up to KeepTagged
+// tags (the tags with the newest releases). Markers of releases that no
+// longer exist are removed too.
 func (m *Manager) prune(site string) {
 	releases := m.Releases(site)
-	keep := map[string]bool{m.Current(site): true, m.previous(site, releases): true}
-	for i := 0; i < len(releases)-KeepReleases; i++ {
-		if !keep[releases[i]] {
-			_ = os.RemoveAll(filepath.Join(m.releasesDir(site), releases[i]))
+	cur := m.Current(site)
+	keep := map[string]bool{cur: true, m.previous(site, releases): true}
+	var normal, tagged []string
+	for _, r := range releases {
+		if r != cur && m.Tag(site, r) != "" {
+			tagged = append(tagged, r)
+		} else {
+			normal = append(normal, r)
 		}
 	}
-	markers, _ := os.ReadDir(m.pendingDir(site))
-	for _, e := range markers {
-		if _, err := os.Lstat(filepath.Join(m.releasesDir(site), e.Name())); errors.Is(err, fs.ErrNotExist) {
-			_ = os.Remove(filepath.Join(m.pendingDir(site), e.Name()))
+	for i := 0; i < len(normal)-KeepReleases; i++ {
+		if !keep[normal[i]] {
+			_ = os.RemoveAll(filepath.Join(m.releasesDir(site), normal[i]))
+		}
+	}
+	seen := map[string]bool{}
+	for _, r := range slices.Backward(tagged) {
+		tag := m.Tag(site, r)
+		if seen[tag] || len(seen) >= KeepTagged {
+			_ = os.RemoveAll(filepath.Join(m.releasesDir(site), r))
+			continue
+		}
+		seen[tag] = true
+	}
+	m.removeStaleMarkers(site)
+}
+
+// removeStaleMarkers removes pending markers and tags of releases that no
+// longer exist.
+func (m *Manager) removeStaleMarkers(site string) {
+	for _, dir := range []string{m.pendingDir(site), m.tagsDir(site)} {
+		markers, _ := os.ReadDir(dir)
+		for _, e := range markers {
+			if _, err := os.Lstat(filepath.Join(m.releasesDir(site), e.Name())); errors.Is(err, fs.ErrNotExist) {
+				_ = os.Remove(filepath.Join(dir, e.Name()))
+			}
 		}
 	}
 }

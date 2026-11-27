@@ -421,6 +421,43 @@ func TestCachesPerSiteAndEviction(t *testing.T) {
 	}
 }
 
+// An untrusted build (a pull request from a fork) never gets the site's
+// cache: it gets an empty one in its slot, which goes with the slot.
+func TestUntrustedBuildCache(t *testing.T) {
+	e := newEnv(t, 1)
+	var caches []string
+	e.rt.run = func(_ context.Context, r Run) (Result, error) {
+		caches = append(caches, r.Cache)
+		entries, _ := os.ReadDir(r.Cache)
+		if len(entries) != 0 {
+			t.Errorf("the cache of %s is not empty: %v", r.Cache, entries)
+		}
+		os.WriteFile(filepath.Join(r.Cache, "poison"), []byte("x"), 0o644)
+		return Result{}, nil
+	}
+	trusted := spec("a")
+	e.start(t, trusted)
+	e.wait(t, trusted.ID)
+	os.Remove(filepath.Join(e.w.path(dirCaches, "a"), "poison"))
+	for range 2 {
+		s := spec("a")
+		s.Untrusted = true
+		e.start(t, s)
+		if b := e.wait(t, s.ID); b.State != build.StateSucceeded {
+			t.Fatalf("untrusted build: %s %s", b.State, b.Message)
+		}
+	}
+	if caches[1] == caches[0] || filepath.Dir(caches[1]) != e.w.slotDir(0) {
+		t.Errorf("untrusted build got cache %s (site's %s)", caches[1], caches[0])
+	}
+	if _, err := os.Stat(filepath.Join(e.w.path(dirCaches, "a"), "poison")); err == nil {
+		t.Errorf("an untrusted build wrote to the site's cache")
+	}
+	if entries, _ := os.ReadDir(e.w.slotDir(0)); len(entries) != 0 {
+		t.Errorf("slot not emptied: %v", entries)
+	}
+}
+
 func TestRejectsBadRequests(t *testing.T) {
 	e := newEnv(t, 1)
 	bad := []build.Spec{

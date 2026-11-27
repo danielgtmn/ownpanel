@@ -47,6 +47,12 @@ type SiteSource struct {
 	CreatedBy  string // user name, "" if the user was removed
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+	// PullRequestPreviews: pull requests from the same repository against
+	// Branch are built as previews (on by default). ForkPreviews: those
+	// from forks too (off by default). PutSiteSource keeps both of the
+	// link it replaces; SetSourcePreviews changes them.
+	PullRequestPreviews bool
+	ForkPreviews        bool
 }
 
 var errNoSource = notFoundf("the site has no source")
@@ -100,7 +106,8 @@ func sourcesOf(ctx context.Context, r repos, rows []siteSourceRow) ([]SiteSource
 			Repository: row.Repository, Branch: row.Branch, PublishOnPush: row.PublishOnPush, DeployKey: row.DeployKey,
 			NotifySecret: row.NotifySecret, CreatedBy: names[deref(row.CreatedBy)], CreatedAt: row.CreatedAt,
 			UpdatedAt: row.UpdatedAt, DeployPublicKey: row.DeployPublicKey, HostKey: row.HostKey, HostKeyNew: row.HostKeyNew,
-			NotifyID: deref(row.NotifyID), CheckedAt: row.CheckedAt, CheckError: row.CheckError}
+			NotifyID: deref(row.NotifyID), CheckedAt: row.CheckedAt, CheckError: row.CheckError,
+			PullRequestPreviews: row.PullRequestPreviews == nil || *row.PullRequestPreviews, ForkPreviews: row.ForkPreviews}
 	}
 	return out, nil
 }
@@ -179,7 +186,9 @@ func (s *Store) PutSiteSource(ctx context.Context, src SiteSource, by string) (S
 		case err != nil:
 			return err
 		default:
+			// Linking anew keeps the settings for pull requests.
 			row.ID, row.CreatedAt = have.ID, have.CreatedAt
+			row.PullRequestPreviews, row.ForkPreviews = have.PullRequestPreviews, have.ForkPreviews
 			err = r.sources.Replace(ctx, &row)
 		}
 		if errors.Is(err, ablage.ErrReference) {
@@ -195,6 +204,21 @@ func (s *Store) PutSiteSource(ctx context.Context, src SiteSource, by string) (S
 		return SiteSource{}, err
 	}
 	return s.SiteSource(ctx, src.Site)
+}
+
+// SetSourcePreviews changes whether pull requests are built as previews:
+// those from the same repository (pullRequests) and those from forks
+// (forks). ErrNotFound if the site has no source.
+func (s *Store) SetSourcePreviews(ctx context.Context, site string, pullRequests, forks bool) (SiteSource, error) {
+	n, err := s.r.sources.UpdateWhere(ctx, ablage.Eq("site_name", site),
+		ablage.Row{"pull_request_previews": pullRequests, "fork_previews": forks})
+	if err != nil {
+		return SiteSource{}, err
+	}
+	if n == 0 {
+		return SiteSource{}, errNoSource
+	}
+	return s.SiteSource(ctx, site)
 }
 
 // RenameSourceRepository stores the name a GitHub repository has now.

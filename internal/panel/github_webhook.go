@@ -335,6 +335,12 @@ func (s *Service) handleDelivery(ctx context.Context, app store.GitHubApp, d Git
 			return GitHubDeliveryResult{}, err
 		}
 		return s.handleInstallationRepositories(ctx, app, p)
+	case "pull_request":
+		var p hookPullRequest
+		if err := decodeStrict(d.Body, &p); err != nil {
+			return GitHubDeliveryResult{}, err
+		}
+		return s.handlePullRequest(ctx, app, p)
 	case "repository":
 		var p hookCommon
 		if err := decodeStrict(d.Body, &p); err != nil {
@@ -342,7 +348,7 @@ func (s *Service) handleDelivery(ctx context.Context, app store.GitHubApp, d Git
 		}
 		return s.handleRepository(ctx, app, p)
 	}
-	// ping, pull_request (#116) and anything else: accepted, nothing to do.
+	// ping and anything else: accepted, nothing to do.
 	var obj map[string]json.RawMessage
 	if err := decodeStrict(d.Body, &obj); err != nil {
 		return GitHubDeliveryResult{}, err
@@ -523,6 +529,14 @@ func (s *Service) handleRepository(ctx context.Context, app store.GitHubApp, p h
 		err = s.store.RenameSourceRepository(ctx, p.Repository.ID, p.Repository.FullName)
 	case "deleted":
 		err = s.store.SetRepositoryGone(ctx, inst.ID, p.Repository.ID, true)
+	case "publicized":
+		// Preview links posted on its pull requests while it was private
+		// carry their keys: they must stop working.
+		err = s.removeRepositoryPreviews(ctx, p.Repository.ID)
+		if err == nil {
+			return GitHubDeliveryResult{Result: DeliveryHandled}, nil
+		}
+		return GitHubDeliveryResult{}, err
 	default:
 		return ignored, nil
 	}

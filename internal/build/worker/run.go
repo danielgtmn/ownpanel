@@ -159,15 +159,23 @@ func (w *Worker) execute(ctx context.Context, j *job, logf *logFile) outcome {
 	if err := w.makeRoom(ctx, w.roomNeeded(j.slot), spec.Site); err != nil {
 		return failed(build.ReasonDisk, "the build was not run: the build disk is full")
 	}
-	cache, err := w.cacheFor(ctx, spec.Site)
-	if err != nil {
-		w.log.Error("build cache", "build", spec.ID, "err", err)
-		return failed(build.ReasonInternal, "the build cache could not be prepared")
-	}
-
 	slot := w.slotDir(j.slot)
 	ws, ctl := filepath.Join(slot, "workspace"), filepath.Join(slot, "control")
-	for _, d := range []string{ws, ctl} {
+	dirs := []string{ws, ctl}
+	var cache string
+	if spec.Untrusted {
+		// A cache of its own in the slot (the slot's quota, emptied with
+		// it), never the site's.
+		cache = filepath.Join(slot, "cache")
+		dirs = append(dirs, cache)
+	} else {
+		cache, err = w.cacheFor(ctx, spec.Site)
+		if err != nil {
+			w.log.Error("build cache", "build", spec.ID, "err", err)
+			return failed(build.ReasonInternal, "the build cache could not be prepared")
+		}
+	}
+	for _, d := range dirs {
 		if err := os.Mkdir(d, 0o700); err != nil {
 			w.log.Error("build folders", "build", spec.ID, "err", err)
 			return failed(build.ReasonInternal, "the build folder could not be prepared")

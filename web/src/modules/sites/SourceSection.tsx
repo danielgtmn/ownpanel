@@ -8,8 +8,10 @@ import { useResource } from '../../shared/hooks/index.ts'
 import { useSession } from '../../shared/session/index.ts'
 import { ErrorState, ExternalIcon, LoadingState, Section } from '../../shared/ui/index.ts'
 import { GitSourceDetails, NotifySecretDialog, type ShownSecret } from './GitSourceDetails.tsx'
+import { PreviewsDialog } from './PreviewsDialog.tsx'
 import {
   getSiteSource,
+  previewsSummary,
   removeSiteSource,
   sourceProblem,
   type SiteSource,
@@ -49,6 +51,7 @@ function SourceRow({ site, source, publishingAvailable, onChange, onSecret }: Ro
               Branch <span className="source-branch">{source.branch}</span>
             </li>
             <li>{source.publish_on_push ? 'Publish on push: on' : 'Publish on push: off'}</li>
+            {source.kind === 'github' ? <li>{previewsSummary(source)}</li> : null}
             <li>
               Linked <time dateTime={isoTimestamp(source.linked_at)}>{formatDate(source.linked_at)}</time>
               {source.linked_by ? ` by ${source.linked_by}` : ''}
@@ -77,6 +80,13 @@ export function SourceSection({ site }: { site: string }) {
   const [editing, setEditing] = useState(false)
   // A notification secret just made: shown once, dropped when its dialog closes.
   const [secret, setSecret] = useState<ShownSecret | null>(null)
+  const [previews, setPreviews] = useState(false)
+
+  async function previewsSaved() {
+    setPreviews(false)
+    toast.success(`Saved which pull requests are built as previews of ${site}.`)
+    await state.reload()
+  }
 
   async function linked(next: SiteSourceState) {
     setEditing(false)
@@ -130,6 +140,11 @@ export function SourceSection({ site }: { site: string }) {
           'Link repository'
         )}
       </Button>
+      {source?.kind === 'github' ? (
+        <Button onClick={() => setPreviews(true)}>
+          Pull requests<span className="visually-hidden">: choose which get previews</span>
+        </Button>
+      ) : null}
       {source ? (
         <Button pendingAnnouncement="Unlinking" onClick={() => unlink(source)}>
           Unlink<span className="visually-hidden"> the repository</span>
@@ -154,6 +169,15 @@ export function SourceSection({ site }: { site: string }) {
           server is available.
         </p>
       )}
+      {source?.kind === 'github' ? (
+        <PreviewsDialog
+          open={previews}
+          onOpenChange={setPreviews}
+          site={site}
+          source={source}
+          onSaved={previewsSaved}
+        />
+      ) : null}
       <SourceDialog
         open={editing}
         onOpenChange={setEditing}

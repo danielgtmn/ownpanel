@@ -879,3 +879,59 @@ func TestGitSlots(t *testing.T) {
 	x()
 	y()
 }
+
+// Where #137 and #116 meet: a Git site's push is recorded and built first
+// even when a run of a pull request (left from a GitHub link the site had
+// before) waits with the same commit, and that run never replaces the push
+// nor builds once the site is linked by address.
+func TestGitPushAndPullRequestRuns(t *testing.T) {
+	g := newGitWorld(t)
+	ctx := context.Background()
+	st := g.link(bob, "bobsite")
+	tip := g.repo.Commit("newer", map[string]string{"index.html": "newer"})
+	stale, err := g.svc.store.AddRun(ctx, store.Run{Site: "bobsite", Trigger: RunTriggerPullRequest, SourceKind: store.SourceGitHub,
+		RepositoryID: 7, Repository: "acme/site", Ref: "refs/pull/3/head", CommitSHA: tip, PullRequest: 3,
+		Preview: previewTag(7, 3)}, runSupersededDetail, RunsKept)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.TrimPrefix(st.Source.NotifyURL, "https://panel.example.com:8443"+GitNotifyPath)
+	body := pushBody("refs/heads/main", tip)
+	if res, err := g.svc.ReceiveGitNotification(ctx, GitNotification{ID: id, Header: githubHeaders(st.NotifySecret, body, "pr-1"), Body: body}); err != nil || res.Result != DeliveryAccepted {
+		t.Fatalf("%+v %v", res, err)
+	}
+	g.svc.gitTips.wg.Wait()
+	runs, _ := g.svc.ListSiteRuns(ctx, bob, "bobsite")
+	if len(runs.Runs) != 2 || runs.Runs[0].Trigger != RunTriggerPush || runs.Runs[0].Commit != tip || runs.Runs[0].Status != "queued" ||
+		runs.Runs[1].ID != stale.ID || runs.Runs[1].Status != "queued" {
+		t.Fatalf("runs: %+v", runs.Runs)
+	}
+	// The same notification again (new id): still one push run.
+	if _, err := g.svc.ReceiveGitNotification(ctx, GitNotification{ID: id, Header: githubHeaders(st.NotifySecret, body, "pr-2"), Body: body}); err != nil {
+		t.Fatal(err)
+	}
+	g.svc.gitTips.wg.Wait()
+	if runs, _ := g.svc.ListSiteRuns(ctx, bob, "bobsite"); len(runs.Runs) != 2 {
+		t.Fatalf("replayed: %+v", runs.Runs)
+	}
+	// The worker takes the push first, then the pull request, which may
+	// not build: the site is linked by address now.
+	first, err := g.svc.store.ClaimNextRun(ctx, "bobsite", runSupersededDetail)
+	if err != nil || first.Trigger != RunTriggerPush || first.SourceKind != store.SourceGit {
+		t.Fatalf("first: %+v %v", first, err)
+	}
+	if _, err := g.svc.store.FinishRun(ctx, first.ID, store.RunSucceeded, ""); err != nil {
+		t.Fatal(err)
+	}
+	second, err := g.svc.store.ClaimNextRun(ctx, "bobsite", runSupersededDetail)
+	if err != nil || second.ID != stale.ID {
+		t.Fatalf("second: %+v %v", second, err)
+	}
+	if err := g.svc.previewRunAllowed(ctx, second); KindOf(err) != Conflict {
+		t.Fatalf("a preview of a pull request for a site linked by address: %v", err)
+	}
+	// Previews of pull requests are GitHub's only.
+	if _, err := g.svc.SetSitePreviews(ctx, bob, "bobsite", SitePreviewsInput{PullRequests: true}); KindOf(err) != Conflict {
+		t.Fatalf("previews for a Git source: %v", err)
+	}
+}

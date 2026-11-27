@@ -463,8 +463,8 @@ func (s *Service) queueTipCheck(src store.SiteSource, hint pushHint) {
 }
 
 // recordTipRun asks the repository where the linked branch points and
-// records a run of that commit, unless the site's newest run already is
-// one of it that is waiting, building or published (a notification sent
+// records a run of that commit, unless the site's newest run that makes a
+// version live already is one of it that is waiting, building or published (a notification sent
 // again, or several for one push).
 func (s *Service) recordTipRun(site, sourceID string, hint pushHint) {
 	ctx, cancel := context.WithTimeout(context.Background(), tipCheckTimeout)
@@ -491,8 +491,11 @@ func (s *Service) recordTipRun(site, sourceID string, hint pushHint) {
 	if !validCommit(tip) {
 		return // SHA-256 repositories are not supported yet
 	}
-	if last, err := s.store.SiteRuns(ctx, site, 1); err == nil && len(last) == 1 && last[0].CommitSHA == tip &&
-		(last[0].Status == store.RunQueued || last[0].Status == store.RunRunning || last[0].Status == store.RunSucceeded) {
+	// Only runs that make a version live count: a preview of a pull
+	// request of the same commit (a GitHub link the site had before) is
+	// not the push.
+	if last, err := s.store.NewestRun(ctx, site, ""); err == nil && last.CommitSHA == tip &&
+		(last.Status == store.RunQueued || last.Status == store.RunRunning || last.Status == store.RunSucceeded) {
 		return
 	}
 	run := store.Run{Site: site, Trigger: RunTriggerPush, SourceKind: store.SourceGit, Repository: src.Repository,

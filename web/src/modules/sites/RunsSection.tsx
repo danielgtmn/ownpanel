@@ -19,12 +19,22 @@ import {
   type BuildSettings,
 } from './builds.ts'
 import { BuildSettingsDialog } from './BuildSettingsDialog.tsx'
-import { commitLink, getSiteRuns, runActive, runDuration, runNote, RUNS_REFRESH_MS, runTrigger } from './runs.ts'
+import {
+  commitLink,
+  getSiteRuns,
+  previewLink,
+  pullRequestLink,
+  runActive,
+  runDuration,
+  runNote,
+  RUNS_REFRESH_MS,
+  runTrigger,
+} from './runs.ts'
 import { runAuthor, runStatus, type Run } from './source.ts'
 
 const title = 'Builds'
 const description =
-  'Every push to the linked branch, and every “Build now”, builds the site and publishes it. A failed build leaves the site as it is. The newest come first.'
+  'Every push to the linked branch, and every “Build now”, builds the site and publishes it. Pull requests get a preview that is not live. A failed build leaves the site as it is. The newest come first.'
 const descriptionWaiting =
   'Every push to the linked branch is listed here. Once building on the server is available, each one is built and published.'
 
@@ -46,6 +56,34 @@ export function CommitId({ run }: { run: Run }) {
   )
 }
 
+/** What started a run; for a pull request, a link to it on GitHub. */
+function Trigger({ run }: { run: Run }) {
+  const href = pullRequestLink(run)
+  if (!href) return <>{runTrigger(run)}</>
+  return (
+    <a className="inline-link" href={href} target="_blank" rel="noreferrer noopener">
+      {runTrigger(run)}
+      <span className="visually-hidden"> (open it on GitHub)</span>
+      <ExternalIcon />
+    </a>
+  )
+}
+
+/** "Open preview" for a run of a pull request whose preview still exists. */
+function PreviewLink({ run }: { run: Run }) {
+  const href = previewLink(run)
+  if (!href) return null
+  return (
+    <a className="inline-link run-preview" href={href} target="_blank" rel="noreferrer noopener">
+      Open preview<span className="visually-hidden"> of {runTrigger(run).toLowerCase()} (opens in a new tab)</span>
+      <ExternalIcon />
+    </a>
+  )
+}
+
+const fallbackMessage = (run: Run) =>
+  run.trigger === 'manual' ? 'Newest commit of the branch' : run.trigger === 'pull_request' ? 'No title' : 'No message'
+
 /** Time of a run as a <time> element. */
 function When({ value }: { value: string }) {
   return <time dateTime={isoTimestamp(value)}>{formatDateTime(value)}</time>
@@ -56,11 +94,11 @@ type RowProps = { run: Run; onOpen: (run: Run) => void; onCancel?: (run: Run) =>
 /** One run. Message, author and pusher come from the repository: React shows them as text. */
 export function RunRow({ run, onOpen, onCancel }: RowProps) {
   const status = runStatus(run)
-  const author = run.trigger === 'push' ? runAuthor(run) : ''
-  const fallback = run.trigger === 'manual' ? 'Newest commit of the branch' : 'No message'
+  const author = run.trigger === 'push' || run.trigger === 'pull_request' ? runAuthor(run) : ''
+  const fallback = fallbackMessage(run)
   const note = runNote(run)
   return (
-    <li className="record-row run-row">
+    <li className="record-row run-row" data-preview={run.trigger === 'pull_request' ? '' : undefined}>
       <div className="record-main">
         <p className="run-message">{run.message || <span className="muted">{fallback}</span>}</p>
         <ul className="record-facts">
@@ -68,7 +106,9 @@ export function RunRow({ run, onOpen, onCancel }: RowProps) {
             <CommitId run={run} />
           </li>
           {author ? <li>{author}</li> : null}
-          <li>{runTrigger(run)}</li>
+          <li>
+            <Trigger run={run} />
+          </li>
           <li>
             <When value={run.created_at} />
           </li>
@@ -77,6 +117,7 @@ export function RunRow({ run, onOpen, onCancel }: RowProps) {
       </div>
       <div className="run-side">
         <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+        <PreviewLink run={run} />
         <Button onClick={() => onOpen(run)}>
           Details<span className="visually-hidden"> of the build of {run.short_commit}</span>
         </Button>
@@ -182,8 +223,9 @@ function RunLog({ site, run, publishingAvailable }: { site: string; run: Run; pu
 export function RunDetails({ site, run, publishingAvailable }: { site: string; run: Run; publishingAvailable: boolean }) {
   const status = runStatus(run)
   const note = runNote(run)
-  const author = run.trigger === 'push' ? runAuthor(run) : ''
+  const author = run.trigger === 'push' || run.trigger === 'pull_request' ? runAuthor(run) : ''
   const duration = runDuration(run)
+  const preview = previewLink(run)
   return (
     <div className="run-details">
       <div className="run-details-status">
@@ -194,22 +236,28 @@ export function RunDetails({ site, run, publishingAvailable }: { site: string; r
         <Fact label="Commit">
           <CommitId run={run} />
         </Fact>
-        <Fact label="Message">
-          {run.message || (
-            <span className="muted">{run.trigger === 'manual' ? 'Newest commit of the branch' : 'No message'}</span>
-          )}
+        <Fact label={run.trigger === 'pull_request' ? 'Title' : 'Message'}>
+          {run.message || <span className="muted">{fallbackMessage(run)}</span>}
         </Fact>
         {author ? <Fact label="Author">{author}</Fact> : null}
         {run.trigger === 'push' && run.pusher && run.pusher !== run.author_login ? (
           <Fact label="Pushed by">{run.pusher}</Fact>
         ) : null}
         <Fact label="Repository">{run.repository}</Fact>
+        {run.fork ? (
+          <Fact label="Comes from">
+            {run.head_repository ? `The fork ${run.head_repository}` : 'A fork that no longer exists'}. Built without
+            the site's variables.
+          </Fact>
+        ) : null}
         {run.branch ? (
           <Fact label="Branch">
             <span className="source-branch">{run.branch}</span>
           </Fact>
         ) : null}
-        <Fact label="Started by">{runTrigger(run)}</Fact>
+        <Fact label="Started by">
+          <Trigger run={run} />
+        </Fact>
         <Fact label="Received">
           <When value={run.created_at} />
         </Fact>
@@ -226,7 +274,20 @@ export function RunDetails({ site, run, publishingAvailable }: { site: string; r
         ) : null}
         {run.release ? (
           <Fact label="Published as">
-            version <code>{run.release}</code>
+            {run.trigger === 'pull_request' ? 'preview, not live, ' : ''}version <code>{run.release}</code>
+          </Fact>
+        ) : null}
+        {preview ? (
+          <Fact label="Preview">
+            <a className="inline-link" href={preview} target="_blank" rel="noreferrer noopener">
+              Open preview<span className="visually-hidden"> (opens in a new tab)</span>
+              <ExternalIcon />
+            </a>{' '}
+            <span className="muted">Anyone with this link can open it until the pull request is closed.</span>
+          </Fact>
+        ) : run.preview_gone ? (
+          <Fact label="Preview">
+            <span className="muted">Removed, or replaced by a newer one.</span>
           </Fact>
         ) : null}
       </dl>
@@ -236,6 +297,7 @@ export function RunDetails({ site, run, publishingAvailable }: { site: string; r
 }
 
 function runDescription(run: Run): string {
+  if (run.trigger === 'pull_request') return `${runTrigger(run)} to ${run.repository}, built as a preview that is not live`
   const where = `${run.branch || run.ref} of ${run.repository}`
   return run.trigger === 'manual' ? `${runTrigger(run)}: the newest commit of ${where}` : `${runTrigger(run)} to ${where}`
 }
@@ -410,7 +472,7 @@ export function RunsSection({ site }: { site: string }) {
       {list.length === 0 ? (
         <p className="muted">
           No builds yet. Once the site is linked to a repository with publishing on push turned on, every push to its
-          branch appears here, and so does every “Build now”.
+          branch appears here, and so does every “Build now” and every pull request against the branch.
         </p>
       ) : (
         <ol className="record-list run-list" aria-label={`Builds of ${site}`}>

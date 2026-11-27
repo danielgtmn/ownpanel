@@ -71,6 +71,12 @@ type SiteSource struct {
 	Problem  string    `json:"problem,omitempty"`
 	LinkedBy string    `json:"linked_by"`
 	LinkedAt time.Time `json:"linked_at"`
+	// PullRequestPreviews: pull requests against Branch from the same
+	// repository are built as previews (on by default). ForkPreviews:
+	// those from forks too, without the site's variables (off by
+	// default). Changed with SetSitePreviews; linking anew keeps them.
+	PullRequestPreviews bool `json:"pull_request_previews"`
+	ForkPreviews        bool `json:"fork_previews"`
 
 	// Kind git (#111); none of it is secret. Statuses besides linked:
 	// "not_checked" (not reached since linking or a new deploy key),
@@ -200,7 +206,7 @@ func sourceView(src store.SiteSource) SiteSource {
 	return SiteSource{
 		Kind: src.Kind, Repository: src.Repository, RepositoryID: src.RepositoryID, InstallationID: src.InstallationID,
 		Branch: src.Branch, PublishOnPush: src.PublishOnPush, Status: SourceLinked,
-		LinkedBy: src.CreatedBy, LinkedAt: src.UpdatedAt,
+		LinkedBy: src.CreatedBy, LinkedAt: src.UpdatedAt, PullRequestPreviews: src.PullRequestPreviews, ForkPreviews: src.ForkPreviews,
 	}
 }
 
