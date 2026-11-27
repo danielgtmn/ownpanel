@@ -371,7 +371,11 @@ func (p *Podman) Images(ctx context.Context, list []build.Image) ([]build.ImageS
 			p.Log.Info("fetching a build image", "image", img.Name, "ref", img.Ref)
 			if _, err := p.podman(ctx, 30*time.Minute, "pull", "--quiet", img.Ref); err != nil {
 				if firstErr == nil {
-					firstErr = fmt.Errorf("fetching %s: %v", img.Name, err)
+					if unreachable(err.Error()) {
+						firstErr = unavailable(build.UnavailableOffline, "fetching %s: %v", img.Name, err)
+					} else {
+						firstErr = fmt.Errorf("fetching %s: %v", img.Name, err)
+					}
 				}
 				continue
 			}

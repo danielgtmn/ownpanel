@@ -1,0 +1,10 @@
+[Unit]
+Description=Hand changed name servers to ownpanel builds
+Documentation=https://github.com/danielgtmn/ownpanel/wiki/Security#builds
+
+# Started by ownpanel-build-resolvers.path. Reloading ownpanel-build-setup
+# sets the packet filter for builds again and rewrites the name servers of
+# the build service; nothing happens while it is not running.
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl try-reload-or-restart ownpanel-build-setup.service

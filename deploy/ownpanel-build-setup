@@ -32,7 +32,14 @@
 #      - outgoing mail (port 25), so a build cannot send mail as this server.
 #    The only exception: DNS (port 53) to the resolvers this server itself
 #    uses, when they are not loopback addresses; they are written to
-#    $RUN/resolvers for the build service to hand to its containers.
+#    $RUN/resolvers for the build service to hand to its containers, and to
+#    $RUN/resolv.conf, which the build service sees as /etc/resolv.conf
+#    (BindReadOnlyPaths=): it fetches the build images itself, and a local
+#    stub such as systemd-resolved's 127.0.0.53 is refused to it like any
+#    other address of this server. When the server only names a resolver on
+#    itself, both use public ones (as the build service does for builds).
+#    ownpanel-build-resolvers.path runs "firewall" again when the server's
+#    resolvers change.
 #    The table is ownpanel's own (inet ownpanel_build): it does not touch
 #    ufw, firewalld or other rules, and those cannot open what it refuses. A
 #    command that flushes the whole ruleset removes it; the build service
@@ -53,6 +60,9 @@ TABLE=ownpanel_build
 # Root's own runtime directory (the unit's RuntimeDirectory).
 RUN=${OWNPANEL_BUILD_SETUP_RUN:-/run/ownpanel-build-setup}
 MAX_RESOLVERS=3
+# When the server names no resolver builds may reach; the same as the build
+# service's (internal/build/worker).
+FALLBACK_RESOLVERS=(9.9.9.9 1.1.1.1)
 MAX_SLOTS=16
 MAX_CACHES=1000
 # Free space the server keeps besides the build disk when it is made.
@@ -247,10 +257,33 @@ resolvers() {
     printf '%s\n' "$addr"
     n=$((n + 1))
     [ "$n" -lt "$MAX_RESOLVERS" ] || break
-  done < <(awk '$1 == "nameserver" { print $2 }' "$f")
+  done < <(awk '$1 == "nameserver" && !seen[$2]++ { print $2 }' "$f")
 }
 
 join() { paste -sd, - | sed 's/,/, /g'; }
+
+# write_resolv_conf <file of resolvers>: $RUN/resolv.conf for the build
+# service. Written in place, not renamed: the running service has this
+# file, not the name, bound to its /etc/resolv.conf, so a new file would
+# not reach it.
+write_resolv_conf() {
+  local addr out=$RUN/resolv.conf new=$RUN/.resolv.conf.new list
+  list=$(cat "$1")
+  [ -n "$list" ] || list=$(printf '%s\n' "${FALLBACK_RESOLVERS[@]}")
+  {
+    echo "# Written by ownpanel-build-setup: the name servers the build service may reach."
+    while read -r addr; do printf 'nameserver %s\n' "$addr"; done <<<"$list"
+    echo "options edns0"
+  } >"$new"
+  if [ -f "$out" ] && [ ! -L "$out" ]; then
+    cmp -s "$new" "$out" || cat "$new" >"$out"
+    rm -f "$new"
+  else
+    rm -f "$out"
+    mv -f "$new" "$out"
+  fi
+  chmod 0644 "$out"
+}
 
 firewall() {
   command -v nft >/dev/null || die "the nft command is missing (apt-get install nftables)"
@@ -303,6 +336,7 @@ EOF
   # One transaction: the old table goes and the new one comes at the same
   # moment, so there is never a time without it.
   printf '%s\n' "$rules" | nft -f - || die "the packet filter refused the rules (is nftables supported by this kernel?)"
+  write_resolv_conf "$RUN/.resolvers.new"
   chmod 0644 "$RUN/.resolvers.new"
   mv -f "$RUN/.resolvers.new" "$RUN/resolvers"
   log "network limits for builds are in place (user ids: $ids; resolvers: ${dns4:-none}${dns6:+, $dns6})"
@@ -325,7 +359,7 @@ start() {
 
 stop() {
   if command -v nft >/dev/null; then nft delete table inet "$TABLE" 2>/dev/null || true; fi
-  rm -f "$RUN/resolvers"
+  rm -f "$RUN/resolvers" "$RUN/resolv.conf"
   if mountpoint -q -- "$WORK" 2>/dev/null; then
     umount -- "$WORK" || log "the build disk is still in use and stays mounted"
   fi

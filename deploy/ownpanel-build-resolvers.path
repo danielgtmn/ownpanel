@@ -1,0 +1,16 @@
+[Unit]
+Description=Watch the name servers of this server for ownpanel builds
+Documentation=https://github.com/danielgtmn/ownpanel/wiki/Security#builds
+
+[Path]
+# The packet filter for builds lets DNS through only to the name servers the
+# server used when it was set, and the build service uses those too. When
+# they change (e.g. by DHCP), ownpanel-build-resolvers.service sets them
+# again. systemd-resolved keeps the real ones in its own file;
+# /etc/resolv.conf for servers without it.
+PathChanged=/run/systemd/resolve/resolv.conf
+PathChanged=/etc/resolv.conf
+Unit=ownpanel-build-resolvers.service
+
+[Install]
+WantedBy=paths.target

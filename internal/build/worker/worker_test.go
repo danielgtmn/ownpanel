@@ -31,6 +31,8 @@ type fakeRuntime struct {
 	running atomic.Int32
 	maxSeen atomic.Int32
 	cleaned int
+	// imagesErr is what Images returns (nil: every image is there).
+	imagesErr error
 }
 
 func (f *fakeRuntime) Check(context.Context) (RuntimeInfo, error) {
@@ -43,6 +45,12 @@ func (f *fakeRuntime) Cleanup(context.Context) error {
 	return nil
 }
 func (f *fakeRuntime) Images(_ context.Context, list []build.Image) ([]build.ImageStatus, error) {
+	f.mu.Lock()
+	err := f.imagesErr
+	f.mu.Unlock()
+	if err != nil {
+		return make([]build.ImageStatus, len(list)), err
+	}
 	var out []build.ImageStatus
 	for _, img := range list {
 		out = append(out, build.ImageStatus{Image: img, Present: true})
@@ -670,3 +678,76 @@ type httpServer struct {
 }
 
 func (s *httpServer) serve() { _ = http.Serve(s.ln, s.h) }
+
+// An image that cannot be fetched because the registry cannot be reached
+// says so (offline); any other failure is an image problem.
+func TestImagesUnavailable(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{unavailable(build.UnavailableOffline, "fetching node-24: podman pull: no route"), build.UnavailableOffline},
+		{errors.New("fetching node-24: podman pull: manifest unknown"), build.UnavailableImages},
+	} {
+		dir := t.TempDir()
+		work := filepath.Join(dir, "work")
+		os.Mkdir(work, 0o700)
+		res := filepath.Join(dir, "resolvers")
+		os.WriteFile(res, []byte("192.0.2.53\n"), 0o644)
+		rt := &fakeRuntime{imagesErr: tc.err}
+		w, err := New(Config{
+			Work: work, Resolvers: res, Slots: 1, WorkspaceBytes: 1 << 30, CacheBytes: 256 << 20, Caches: 3,
+			Runtime: rt, Disk: &fakeDisk{projects: map[string]uint32{}, ws: 1 << 30, free: 50 << 30}, Guard: &fakeGuard{},
+			Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { w.Run(ctx); close(done) }()
+		waitFor(t, func() bool { return w.Status().Reason == tc.want })
+		if st := w.Status(); st.Available || !strings.Contains(st.Detail, "node-24") {
+			t.Errorf("%v: status %+v", tc.err, st)
+		}
+		cancel()
+		<-done
+	}
+}
+
+func TestUnreachable(t *testing.T) {
+	for msg, want := range map[string]bool{
+		// Seen on Ubuntu 24.04 with systemd-resolved before the build service
+		// had name servers of its own.
+		`podman pull: Error: initializing source docker://node@sha256:00: pinging container registry registry-1.docker.io: Get "https://registry-1.docker.io/v2/": dial tcp: lookup registry-1.docker.io on 127.0.0.53:53: write udp 127.0.0.1:35584->127.0.0.53:53: write: operation not permitted`: true,
+		`podman pull: Error: pinging container registry registry-1.docker.io: Get "https://registry-1.docker.io/v2/": dial tcp 192.0.2.1:443: connect: network is unreachable`:                                                                                                                       true,
+		`podman pull: Error: pinging container registry ghcr.io: Get "https://ghcr.io/v2/": dial tcp: lookup ghcr.io: no such host`:                                                                                                                                                                  true,
+		`podman pull: Error: reading manifest sha256:00 in docker.io/library/node: manifest unknown`:                                                                                                                                                                                                 false,
+		`podman pull: Error: writing blob: storing blob to file "/x": write /x: disk quota exceeded`:                                                                                                                                                                                                 false,
+	} {
+		if got := unreachable(msg); got != want {
+			t.Errorf("unreachable(%q) = %v, want %v", msg, got, want)
+		}
+	}
+}
+
+// The setup writes an empty file when the server only names a resolver on
+// itself; builds then use public ones.
+func TestResolversFallback(t *testing.T) {
+	e := newEnv(t, 1)
+	if err := os.WriteFile(e.cfg.Resolvers, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.w.resolvers()
+	if err != nil || len(got) != 2 || got[0].String() != "9.9.9.9" || got[1].String() != "1.1.1.1" {
+		t.Errorf("resolvers() = %v, %v", got, err)
+	}
+	os.WriteFile(e.cfg.Resolvers, []byte("127.0.0.53\n192.0.2.53\n"), 0o644)
+	if got, err := e.w.resolvers(); err != nil || len(got) != 1 || got[0].String() != "192.0.2.53" {
+		t.Errorf("resolvers() = %v, %v", got, err)
+	}
+	os.Remove(e.cfg.Resolvers)
+	if _, err := e.w.resolvers(); err == nil {
+		t.Error("a missing file is not an error")
+	}
+}

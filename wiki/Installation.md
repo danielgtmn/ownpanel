@@ -112,6 +112,7 @@ Values given as installer options (`--panel-domain`, `--server-ip`, `--acme-emai
 | User `ownpanel-build` | system user with its own group and 65536 subordinate user and group ids (`/etc/subuid`, `/etc/subgid`), home `/var/lib/ownpanel-build/home`; `ownpanel` is in its group. Only when builds are set up |
 | `/var/lib/ownpanel-build` | root (0755): `home` (the build user's, 0700), `disk.img` (the build disk, root 0600) and `work` (its mount point) |
 | `/etc/systemd/system/ownpanel-build-setup.service`, `ownpanel-build.service` | the root unit that mounts the build disk and sets the packet filter for builds, and the build service (runs as `ownpanel-build`), see [Building sites](#building-sites) |
+| `/etc/systemd/system/ownpanel-build-resolvers.{path,service}` | sets the packet filter and the name servers for builds again when the server's name servers change |
 | `/etc/systemd/system/nftables.service.d/ownpanel-build.conf` | puts the packet filter for builds back when nftables restarts |
 | `/etc/ownpanel/build.env` | the build settings ([[Configuration\|Configuration#builds]]) |
 | `/etc/ownpanel/builds` | whether builds were set up, and why not; the panel reads it |
@@ -143,7 +144,7 @@ Sites will be built on the server from their source ([#58](https://github.com/da
 - It needs control groups version 2, user namespaces and loop devices. A server that is itself a container usually has no loop devices; builds are then unavailable.
 - It creates the user `ownpanel-build` with a range of subordinate ids, and `/etc/ownpanel/build.env` with settings chosen from the server's disk and memory: one or two builds at a time, 4 GB of disk space per build (2 GB on small disks).
 - `ownpanel-build-setup.service` (root) makes the **build disk**: a file of the chosen size in `/var/lib/ownpanel-build`, **reserved in full**, formatted and mounted with quotas. That space is taken from the server's disk at once, whether builds run or not. It also puts the packet filter for builds in place.
-- `ownpanel-build.service` (user `ownpanel-build`) then fetches the build images in the background (a few hundred MB); the panel shows "Getting ready to build sites" until they are there.
+- `ownpanel-build.service` (user `ownpanel-build`) then fetches the build images in the background (a few hundred MB); the panel shows "Getting ready to build sites" until they are there. It looks up the registry's name through the server's real name servers (behind systemd-resolved's local stub, which builds may not reach); when the registry cannot be reached at all, the panel says so and the journal (`journalctl -u ownpanel-build`) has the cause.
 
 Nothing here can stop the install: if a step fails, the panel is installed and the reason is written to `/etc/ownpanel/builds` and shown in the panel's settings, under **Building sites**. Run the installer again after fixing it.
 

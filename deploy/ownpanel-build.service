@@ -53,6 +53,12 @@ ProtectSystem=strict
 ReadWritePaths=/var/lib/ownpanel-build/home /var/lib/ownpanel-build/work
 ProtectHome=true
 PrivateTmp=true
+# The service fetches the build images itself, and the packet filter
+# refuses every address of this server to it, a local name server such as
+# systemd-resolved's 127.0.0.53 included. Its /etc/resolv.conf is the one
+# ownpanel-build-setup writes, with the server's real name servers (the
+# ones the packet filter lets through).
+BindReadOnlyPaths=/run/ownpanel-build-setup/resolv.conf:/etc/resolv.conf
 InaccessiblePaths=-/var/lib/ownpanel -/var/lib/ownpanel-mail -/var/lib/ownpanel-caddy -/var/lib/ownpanel-update -/etc/ownpanel -/run/ownpanel -/run/ownpanel-mail -/run/ownpanel-mail-web -/var/lib/ownpanel-build/disk.img -/var/backups
 # Devices: the usual pseudo devices, plus what the user-space network
 # (tun) and the terminal of a container need.

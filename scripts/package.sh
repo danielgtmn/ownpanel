@@ -96,6 +96,7 @@ for arch in "${arches[@]}"; do
   cp deploy/ownpaneld.service deploy/ownpanel-caddy.service deploy/ownpanel-mail.service deploy/caddy-bootstrap.json \
     deploy/ownpanel-update deploy/ownpanel-update.service deploy/ownpanel-update.path deploy/ownpanel-update.timer \
     deploy/ownpanel-build-setup deploy/ownpanel-build-setup.service deploy/ownpanel-build.service \
+    deploy/ownpanel-build-resolvers.service deploy/ownpanel-build-resolvers.path \
     deploy/nftables-ownpanel-build.conf \
     "$stage/deploy/"
   cp install.sh update.sh LICENSE README.md "$stage/"

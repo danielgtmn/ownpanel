@@ -110,7 +110,7 @@ func (s *Service) BuildAvailability(ctx context.Context, a Actor) (BuildAvailabi
 var buildReasons = map[string]bool{
 	build.UnavailableOff: true, build.UnavailableSystem: true, build.UnavailableRuntime: true,
 	build.UnavailableInstall: true, build.UnavailableLimits: true, build.UnavailableDisk: true,
-	build.UnavailableNetwork: true, build.UnavailableImages: true, build.UnavailablePreparing: true,
+	build.UnavailableNetwork: true, build.UnavailableImages: true, build.UnavailableOffline: true, build.UnavailablePreparing: true,
 	build.UnavailableWorker: true, build.UnavailableNotConfigured: true,
 }
 

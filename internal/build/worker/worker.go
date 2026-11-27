@@ -24,6 +24,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/netip"
 	"os"
@@ -288,7 +289,7 @@ func retryAfter(reason string) time.Duration {
 	case build.UnavailableNetwork:
 		// Cheap to check, and builds wait for it.
 		return 15 * time.Second
-	case build.UnavailableImages:
+	case build.UnavailableImages, build.UnavailableOffline:
 		return 2 * time.Minute
 	default:
 		return 10 * time.Minute
@@ -366,6 +367,11 @@ func (w *Worker) prepare(ctx context.Context) error {
 	w.images = images
 	w.mu.Unlock()
 	if err != nil {
+		// The runtime says when the registry could not be reached at all.
+		var u *Unavailable
+		if errors.As(err, &u) {
+			return u
+		}
 		return unavailable(build.UnavailableImages, "%v", err)
 	}
 	w.setDown(nil)
@@ -577,7 +583,9 @@ func readSmall(path string, limit int64) ([]byte, error) {
 	defer f.Close()
 	buf := make([]byte, limit)
 	n, err := f.Read(buf)
-	if err != nil && n == 0 {
+	// An empty file is no error: the setup writes no resolver when the
+	// server only names one on itself.
+	if err != nil && n == 0 && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
 	return buf[:n], nil
