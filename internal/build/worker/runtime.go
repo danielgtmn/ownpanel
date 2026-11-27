@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"strings"
 
 	"github.com/danielgtmn/ownpanel/internal/build"
 )
@@ -21,7 +22,9 @@ type Runtime interface {
 	// run of the worker. Called before the first build.
 	Cleanup(ctx context.Context) error
 	// Images makes sure exactly the images of the list are in the local
-	// store: it fetches what is missing and removes everything else.
+	// store: it fetches what is missing and removes everything else. When
+	// the registry of an image could not be reached at all, the error is
+	// an *Unavailable with build.UnavailableOffline.
 	Images(ctx context.Context, list []build.Image) ([]build.ImageStatus, error)
 	// Run runs one build and returns when nothing of it is left: no
 	// process, no container. When ctx ends first, everything is killed at
@@ -53,6 +56,23 @@ func (u *Unavailable) Error() string { return u.Reason + ": " + u.Detail }
 
 func unavailable(reason, format string, args ...any) *Unavailable {
 	return &Unavailable{Reason: reason, Detail: fmt.Sprintf(format, args...)}
+}
+
+// unreachable tells whether an error of the runtime (its first line of
+// output) says that a registry could not be reached at all: its name could
+// not be resolved or no connection could be made. Such a failure is the
+// server's network, not the image; the administrator can act on it.
+func unreachable(msg string) bool {
+	for _, s := range []string{
+		"dial tcp", "dial udp", "lookup ", "no such host", "server misbehaving",
+		"name resolution", "network is unreachable", "no route to host",
+		"connection refused", "i/o timeout", "TLS handshake timeout",
+	} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // Run is one build for the runtime. Every path is the worker's own: made

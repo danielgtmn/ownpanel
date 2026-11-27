@@ -262,8 +262,9 @@ rollback() {
   fi
   # Nor a version from before builds a build service.
   if [ ! -f "$UNITS/ownpanel-build.service.previous" ] && [ -f "$UNITS/ownpanel-build.service" ]; then
-    systemctl disable --now ownpanel-build ownpanel-build-setup 2>/dev/null || true
-    rm -f -- "${UNITS:?}/ownpanel-build.service" "${UNITS:?}/ownpanel-build-setup.service" "${UNITS:?}/nftables.service.d/ownpanel-build.conf"
+    systemctl disable --now ownpanel-build-resolvers.path ownpanel-build ownpanel-build-setup 2>/dev/null || true
+    rm -f -- "${UNITS:?}/ownpanel-build.service" "${UNITS:?}/ownpanel-build-setup.service" "${UNITS:?}/nftables.service.d/ownpanel-build.conf" \
+      "${UNITS:?}/ownpanel-build-resolvers.path" "${UNITS:?}/ownpanel-build-resolvers.service"
   fi
   systemctl daemon-reload
   systemctl start ownpanel-caddy ownpaneld || true

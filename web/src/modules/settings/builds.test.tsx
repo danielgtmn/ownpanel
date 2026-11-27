@@ -28,7 +28,7 @@ describe('build availability', () => {
   })
 
   it('says why not, in words for people', () => {
-    for (const reason of ['off', 'system', 'runtime', 'install', 'limits', 'disk', 'network', 'images', 'worker', 'not_configured', 'something-new']) {
+    for (const reason of ['off', 'system', 'runtime', 'install', 'limits', 'disk', 'network', 'images', 'offline', 'worker', 'not_configured', 'something-new']) {
       const summary = buildSummary({ ...ready, available: false, reason, detail: 'podman 3.4.4 nft cgroup' })
       expect(summary.tone).toBe('warning')
       expect(summary.title).toBe("This server can't build sites")

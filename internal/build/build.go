@@ -131,6 +131,10 @@ const (
 	UnavailableNetwork = "network"
 	// UnavailableImages: a build image is missing and could not be fetched.
 	UnavailableImages = "images"
+	// UnavailableOffline: a build image is missing and the server could not
+	// reach the registry to fetch it (its name could not be resolved, or no
+	// connection could be made).
+	UnavailableOffline = "offline"
 	// UnavailablePreparing: the worker is still starting (fetching images).
 	UnavailablePreparing = "preparing"
 	// UnavailableWorker: the build service does not answer.

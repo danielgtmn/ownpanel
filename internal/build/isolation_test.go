@@ -66,7 +66,7 @@ func client(t *testing.T) *build.Client {
 		if st.Available {
 			return c
 		}
-		if st.Reason != build.UnavailablePreparing && st.Reason != build.UnavailableImages {
+		if st.Reason != build.UnavailablePreparing && st.Reason != build.UnavailableImages && st.Reason != build.UnavailableOffline {
 			t.Fatalf("builds are unavailable: %s: %s", st.Reason, st.Detail)
 		}
 		select {
@@ -409,7 +409,9 @@ func TestBuildNetwork(t *testing.T) {
 	blocked := append(targets,
 		panel, "10.0.2.2:"+panelPort,
 		"169.254.169.254:80", "10.0.0.1:80", "172.16.0.1:80", "192.168.0.1:80", "100.64.0.1:80",
-		"1.1.1.1:25", "[::1]:"+panelPort, "[fd00::1]:80", "[fe80::1]:80")
+		"1.1.1.1:25", "[::1]:"+panelPort, "[fd00::1]:80", "[fe80::1]:80",
+		// systemd-resolved's local stub.
+		"127.0.0.53:53")
 	allowed := []string{"1.1.1.1:443", "registry.npmjs.org:443"}
 	probe := `
 const net = require('net');

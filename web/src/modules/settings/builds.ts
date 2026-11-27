@@ -40,6 +40,8 @@ const REASONS: Record<string, string> = {
   network:
     "Builds are paused: the protection that keeps them away from this server's own services and network isn't active. They resume on their own once it is back.",
   images: "The environments builds run in couldn't be downloaded yet. The server tries again every few minutes.",
+  offline:
+    "The environments builds run in couldn't be downloaded: this server couldn't reach the place they come from. Check that it can reach the Internet; it tries again every few minutes.",
   worker: "The service that runs builds isn't running.",
   not_configured: 'This panel was started without the service that runs builds.',
 }

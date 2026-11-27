@@ -67,7 +67,9 @@ BUILD_BASE=/var/lib/ownpanel-build
 BUILD_HOME=$BUILD_BASE/home
 BUILD_ENV=$ETC/build.env
 BUILD_STATE=$ETC/builds
-BUILD_UNITS=(ownpanel-build-setup.service ownpanel-build.service)
+BUILD_UNITS=(ownpanel-build-setup.service ownpanel-build.service ownpanel-build-resolvers.service ownpanel-build-resolvers.path)
+# Those of them that are enabled (the other is started by the path unit).
+BUILD_ENABLE=(ownpanel-build-setup.service ownpanel-build.service ownpanel-build-resolvers.path)
 NFT_DROPIN_DIR=$UNITS/nftables.service.d
 NFT_DROPIN=$NFT_DROPIN_DIR/ownpanel-build.conf
 BUILD_PACKAGES=(podman uidmap slirp4netns nftables quota e2fsprogs util-linux)
@@ -78,7 +80,7 @@ RELEASE_FILES=(ownpaneld caddy VERSION install.sh update.sh
   deploy/ownpaneld.service deploy/ownpanel-caddy.service deploy/ownpanel-mail.service deploy/caddy-bootstrap.json
   deploy/ownpanel-update deploy/ownpanel-update.service deploy/ownpanel-update.path deploy/ownpanel-update.timer
   deploy/ownpanel-build-setup deploy/ownpanel-build-setup.service deploy/ownpanel-build.service
-  deploy/nftables-ownpanel-build.conf)
+  deploy/ownpanel-build-resolvers.service deploy/ownpanel-build-resolvers.path deploy/nftables-ownpanel-build.conf)
 
 usage() {
   cat <<'EOF'
@@ -1132,9 +1134,12 @@ setup_builds() {
       printf '%s\n' "# Building sites is turned off (install.sh --builds turns it on)." "OWNPANEL_BUILDS=off" >"$BUILD_ENV"
     fi
     builds_unavailable "$builds_reason" "$builds_detail"
-    if [ -f "$UNITS/ownpanel-build-setup.service" ]; then
-      systemctl disable --now ownpanel-build-setup.service 2>&1 | grep -v '^Removed' || true
-    fi
+    local s
+    for s in ownpanel-build-resolvers.path ownpanel-build-setup.service; do
+      if [ -f "$UNITS/$s" ]; then
+        systemctl disable --now "$s" 2>&1 | grep -v '^Removed' || true
+      fi
+    done
     return 0
   fi
   step "Setting up builds"
@@ -1171,7 +1176,7 @@ setup_builds() {
   install -d -m 0755 "$NFT_DROPIN_DIR"
   install -m 0644 "$src/deploy/nftables-ownpanel-build.conf" "$NFT_DROPIN"
   systemctl daemon-reload
-  systemctl enable "${BUILD_UNITS[@]}" 2>&1 | grep -v '^Created symlink' || true
+  systemctl enable "${BUILD_ENABLE[@]}" 2>&1 | grep -v '^Created symlink' || true
   # Restarting the setup stops the build service (it is bound to it); both
   # start again with the new binary and settings.
   if ! systemctl restart ownpanel-build-setup.service; then
@@ -1187,6 +1192,7 @@ setup_builds() {
     builds_unavailable install "the build service did not start (journalctl -u ownpanel-build)"
     return 0
   fi
+  systemctl restart ownpanel-build-resolvers.path || warn "ownpanel-build-resolvers.path did not start: changed name servers of this server reach builds only after a restart of ownpanel-build-setup"
   write_build_state ready
   say "Builds: up to $(sed -n 's/^OWNPANEL_BUILD_SLOTS=//p' "$BUILD_ENV") at a time, $(sed -n 's/^OWNPANEL_BUILD_DISK_SIZE=//p' "$BUILD_ENV") of disk reserved (Podman $podman_version)."
   say "The build images are fetched in the background; the panel shows when builds are ready."
@@ -1196,7 +1202,7 @@ setup_builds() {
 # holds caches and images). The user and the settings go with --purge.
 remove_builds() {
   local s
-  for s in ownpanel-build.service ownpanel-build-setup.service; do
+  for s in ownpanel-build-resolvers.path ownpanel-build-resolvers.service ownpanel-build.service ownpanel-build-setup.service; do
     if [ -f "$UNITS/$s" ]; then
       systemctl disable --now "$s" 2>&1 | grep -v '^Removed' || true
       rm -f -- "${UNITS:?}/${s:?}"
@@ -1234,7 +1240,7 @@ do_install() {
     step "ownpanel $new_version is already installed with these settings; nothing to change"
     systemctl enable --now "${SERVICES[@]}" 2>&1 | grep -v '^Created symlink' || true
     if [ "$builds_ok" = 1 ] && [ -f "$UNITS/ownpanel-build.service" ]; then
-      systemctl start ownpanel-build-setup.service ownpanel-build.service 2>/dev/null || true
+      systemctl start ownpanel-build-setup.service ownpanel-build.service ownpanel-build-resolvers.path 2>/dev/null || true
     fi
     wait_ready
     print_result
